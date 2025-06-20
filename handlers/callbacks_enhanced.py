@@ -11,13 +11,13 @@ from telegram.constants import ParseMode
 
 from config.constants import *
 from utils.helpers import initialize_chat_data
-from dashboard.generator_enhanced import build_mobile_dashboard_text
-from dashboard.generator import fetch_all_trades_status, generate_comprehensive_help
-from dashboard.keyboards import (
+from dashboard.generator_analytics_compact import build_mobile_dashboard_text
+# Removed old imports that don't exist anymore
+from dashboard.keyboards_analytics import (
     build_settings_keyboard, build_stats_keyboard,
     build_position_management_keyboard, build_help_keyboard
 )
-from dashboard.keyboards import build_enhanced_dashboard_keyboard
+from dashboard.keyboards_analytics import build_enhanced_dashboard_keyboard
 from handlers.analytics_callbacks import handle_analytics_callbacks
 from shared import msg_manager
 
@@ -53,8 +53,15 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
             context.chat_data[LAST_UI_MESSAGE_ID] = None
             
             # Load fresh data with enhanced v5.0 generator
-            dashboard_text = await build_mobile_dashboard_text(context.chat_data, context.application.bot_data)
-            keyboard = build_enhanced_dashboard_keyboard()
+            dashboard_text = await build_mobile_dashboard_text(query.message.chat.id, context)
+            
+            # Get position count for keyboard
+            from clients.bybit_client import get_all_positions
+            positions = await get_all_positions()
+            active_positions = len([p for p in positions if float(p.get('size', 0)) > 0])
+            has_monitors = context.chat_data.get('ACTIVE_MONITOR_TASK', {}) != {}
+            
+            keyboard = build_enhanced_dashboard_keyboard(query.message.chat.id, context, active_positions, has_monitors)
             
             # Send new message with ultra feature-rich UI
             try:
@@ -123,7 +130,7 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
         
         elif query.data == "trade_settings":
             # Beautiful settings display
-            from dashboard.generator import create_beautiful_header, create_info_line, create_elegant_divider
+            from dashboard.generator_analytics_compact import create_beautiful_header, create_info_line, create_elegant_divider
             
             settings_text = f"""╔═══════════════════════════════╗
 ║      ⚙️ <b>TRADING CONFIGURATION</b>      ║
@@ -190,7 +197,7 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
 
 async def show_detailed_stats(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show detailed trading statistics"""
-    from dashboard.generator import generate_enhanced_performance_stats_text
+    from dashboard.generator_analytics_compact import generate_enhanced_performance_stats_text
     
     stats_text = await generate_enhanced_performance_stats_text(context.application.bot_data)
     keyboard = build_stats_keyboard()
@@ -241,7 +248,7 @@ async def handle_quick_trade_callbacks(update: Update, context: ContextTypes.DEF
     
     if query.data.startswith("quick_buy") or query.data.startswith("quick_sell"):
         # Show quick trade options
-        from dashboard.keyboards_v2 import build_quick_trade_keyboard
+        from dashboard.keyboards_analytics import build_quick_trade_keyboard
         
         side = "Buy" if "buy" in query.data else "Sell"
         symbol = "BTCUSDT"  # Default, can be made configurable

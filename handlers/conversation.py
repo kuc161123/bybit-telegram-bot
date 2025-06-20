@@ -22,7 +22,7 @@ from utils.formatters import get_emoji, format_decimal_or_na, format_price, crea
 from utils.helpers import initialize_chat_data, get_field_emoji_and_name, safe_decimal_conversion
 from utils.cache import get_instrument_info_cached, get_usdt_wallet_balance_cached
 from risk.calculations import calculate_risk_reward_ratio
-from dashboard.keyboards import *
+from dashboard.keyboards_analytics import *
 from shared import msg_manager
 from clients.bybit_helpers import protect_symbol_from_cleanup, protect_trade_group_from_cleanup  # ENHANCED: Import protection functions
 
@@ -947,7 +947,7 @@ async def handle_ggshot_callbacks(update: Update, context: ContextTypes.DEFAULT_
             f"🛡️ Maximum for {symbol}: {max_leverage}x"
         )
         
-        from dashboard.keyboards import build_leverage_selection_keyboard
+        from dashboard.keyboards_analytics import build_leverage_selection_keyboard
         leverage_keyboard = build_leverage_selection_keyboard(max_leverage)
         
         await edit_last_message(context, query.message.chat.id, leverage_msg, leverage_keyboard)
@@ -1002,7 +1002,7 @@ async def handle_ggshot_callbacks(update: Update, context: ContextTypes.DEFAULT_
             f"🚨 <b>WARNING:</b> Proceeding with unvalidated parameters!"
         )
         
-        from dashboard.keyboards import build_leverage_selection_keyboard
+        from dashboard.keyboards_analytics import build_leverage_selection_keyboard
         leverage_keyboard = build_leverage_selection_keyboard(max_leverage)
         
         await edit_last_message(context, query.message.chat.id, override_msg, leverage_keyboard)

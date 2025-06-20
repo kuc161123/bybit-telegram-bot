@@ -11,7 +11,7 @@ from decimal import Decimal
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from dashboard.generator_v4 import build_mobile_dashboard_text
+from dashboard.generator_analytics_compact import build_mobile_dashboard_text
 from config.constants import *
 
 async def test_dashboard():
@@ -48,8 +48,14 @@ async def test_dashboard():
         print("\n" + "="*50)
         
         # Test keyboard generation
-        from dashboard.keyboards_v2 import build_ultra_dashboard_keyboard
-        keyboard = build_ultra_dashboard_keyboard()
+        from dashboard.keyboards_analytics import build_analytics_dashboard_keyboard
+        # Create dummy chat ID and context for keyboard function
+        chat_id = 12345
+        class DummyContext:
+            chat_data = {}
+            bot_data = {}
+        context = DummyContext()
+        keyboard = build_analytics_dashboard_keyboard(chat_id, context, active_positions=3, has_monitors=True)
         
         print("\nKEYBOARD STRUCTURE:")
         print("="*50)
@@ -64,7 +70,8 @@ async def test_dashboard():
 
 async def test_analytics():
     """Test analytics features"""
-    from dashboard.generator_v4 import (
+    # Analytics functions in generator_analytics_compact.py
+    from dashboard.generator_analytics_compact import (
         calculate_portfolio_metrics,
         generate_portfolio_heatmap,
         calculate_sharpe_ratio,

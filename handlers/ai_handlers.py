@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from config.constants import *
 from utils.formatters import get_emoji
-from dashboard.keyboards import build_margin_type_keyboard, build_order_strategy_keyboard
+from dashboard.keyboards_analytics import build_margin_type_keyboard, build_order_strategy_keyboard
 from .conversation import ask_next_field_in_conversation
 
 logger = logging.getLogger(__name__)

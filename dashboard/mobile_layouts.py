@@ -322,28 +322,28 @@ def build_mobile_margin_selection_keyboard():
     return InlineKeyboardMarkup([
         # Small amounts
         [
-            InlineKeyboardButton("💰 $25", callback_data="select_margin_25"),
-            InlineKeyboardButton("💰 $50", callback_data="select_margin_50"),
-            InlineKeyboardButton("💰 $100", callback_data="select_margin_100")
+            InlineKeyboardButton("💰 $25", callback_data="conv_margin:25"),
+            InlineKeyboardButton("💰 $50", callback_data="conv_margin:50"),
+            InlineKeyboardButton("💰 $100", callback_data="conv_margin:100")
         ],
         
         # Medium amounts
         [
-            InlineKeyboardButton("💰 $200", callback_data="select_margin_200"),
-            InlineKeyboardButton("💰 $500", callback_data="select_margin_500"),
-            InlineKeyboardButton("💰 $1000", callback_data="select_margin_1000")
+            InlineKeyboardButton("💰 $200", callback_data="conv_margin:200"),
+            InlineKeyboardButton("💰 $500", callback_data="conv_margin:500"),
+            InlineKeyboardButton("💰 $1000", callback_data="conv_margin:1000")
         ],
         
         # Large amounts
         [
-            InlineKeyboardButton("💰 $2000", callback_data="select_margin_2000"),
-            InlineKeyboardButton("💰 $5000", callback_data="select_margin_5000")
+            InlineKeyboardButton("💰 $2000", callback_data="conv_margin:2000"),
+            InlineKeyboardButton("💰 $5000", callback_data="conv_margin:5000")
         ],
         
         # Custom & percentage
         [
-            InlineKeyboardButton("📝 Custom Amount", callback_data="custom_margin"),
-            InlineKeyboardButton("📊 Percentage", callback_data="percentage_margin")
+            InlineKeyboardButton("📝 Custom Amount", callback_data="conv_margin:custom"),
+            InlineKeyboardButton("📊 Percentage", callback_data="conv_margin:percentage")
         ],
         
         # Navigation

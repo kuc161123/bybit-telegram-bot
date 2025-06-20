@@ -8,57 +8,31 @@ from typing import Optional, List
 def build_analytics_dashboard_keyboard(chat_id: int, context: any, 
                                      active_positions: int = 0,
                                      has_monitors: bool = False) -> InlineKeyboardMarkup:
-    """Build keyboard for analytics dashboard with advanced features"""
+    """Build simplified keyboard for analytics dashboard"""
     
     # First row - Main actions
     first_row = [
-        InlineKeyboardButton("📊 Trade Setup", callback_data="start_conversation"),
+        InlineKeyboardButton("📊 New Trade", callback_data="start_conversation"),
         InlineKeyboardButton("🔄 Refresh", callback_data="refresh_dashboard")
     ]
     
-    # Second row - Analytics views
-    second_row = [
-        InlineKeyboardButton("📈 Performance", callback_data="view_performance_analytics"),
-        InlineKeyboardButton("🎯 Risk Metrics", callback_data="view_risk_analytics"),
-        InlineKeyboardButton("📊 Statistics", callback_data="show_statistics")
-    ]
-    
-    # Third row - Advanced analytics
-    third_row = [
-        InlineKeyboardButton("🕐 Time Analysis", callback_data="view_time_analysis"),
-        InlineKeyboardButton("🔗 Correlations", callback_data="view_correlations"),
-        InlineKeyboardButton("🎲 Predictions", callback_data="view_predictions")
-    ]
-    
-    # Fourth row - Reports and insights
-    fourth_row = [
-        InlineKeyboardButton("📑 Full Report", callback_data="generate_full_report"),
-        InlineKeyboardButton("💡 AI Insights", callback_data="view_ai_insights"),
-        InlineKeyboardButton("📊 Export Data", callback_data="export_analytics_data")
-    ]
-    
-    # Fifth row - Position management (if has positions)
+    # Second row - Core functions
+    second_row = []
     if active_positions > 0:
-        fifth_row = [
-            InlineKeyboardButton(f"📋 Positions ({active_positions})", callback_data="list_positions"),
-            InlineKeyboardButton("🛡️ Risk Check", callback_data="check_risk_status"),
-            InlineKeyboardButton("⚖️ Rebalance", callback_data="suggest_rebalance")
-        ]
-    else:
-        fifth_row = []
+        second_row.append(InlineKeyboardButton(f"📋 Positions ({active_positions})", callback_data="list_positions"))
+    second_row.append(InlineKeyboardButton("📊 Statistics", callback_data="show_statistics"))
     
-    # Sixth row - Settings and modes
-    sixth_row = [
+    # Third row - Settings and help
+    third_row = [
         InlineKeyboardButton("⚙️ Settings", callback_data="show_settings"),
-        InlineKeyboardButton("🎯 Position Mode", callback_data="check_position_mode"),
         InlineKeyboardButton("❓ Help", callback_data="show_help")
     ]
     
     # Build keyboard
-    keyboard = [first_row, second_row, third_row, fourth_row]
-    if fifth_row:
-        keyboard.append(fifth_row)
-    keyboard.append(sixth_row)
+    keyboard = [first_row]
+    if second_row:
+        keyboard.append(second_row)
+    keyboard.append(third_row)
     
     return InlineKeyboardMarkup(keyboard)
 
@@ -123,3 +97,172 @@ def build_time_analysis_keyboard() -> InlineKeyboardMarkup:
 
 # Alias for compatibility
 build_enhanced_dashboard_keyboard = build_analytics_dashboard_keyboard
+
+def build_settings_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for settings menu"""
+    keyboard = [
+        [
+            InlineKeyboardButton("🎯 Trade Settings", callback_data="trade_settings"),
+            InlineKeyboardButton("🔔 Notifications", callback_data="notification_settings")
+        ],
+        [
+            InlineKeyboardButton("📊 Display Options", callback_data="display_settings"),
+            InlineKeyboardButton("🔗 API Settings", callback_data="api_settings")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="refresh_dashboard")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def build_stats_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for statistics menu"""
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Overall Stats", callback_data="detailed_stats"),
+            InlineKeyboardButton("📈 Performance", callback_data="performance_chart")
+        ],
+        [
+            InlineKeyboardButton("⚡ Fast Approach", callback_data="fast_approach_stats"),
+            InlineKeyboardButton("🛡️ Conservative", callback_data="conservative_approach_stats")
+        ],
+        [
+            InlineKeyboardButton("💾 Export Stats", callback_data="export_stats"),
+            InlineKeyboardButton("🔙 Back", callback_data="refresh_dashboard")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def build_position_management_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for position management"""
+    keyboard = [
+        [
+            InlineKeyboardButton("📋 View All", callback_data="list_positions"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="refresh_positions")
+        ],
+        [
+            InlineKeyboardButton("⚖️ Hedge Mode", callback_data="set_hedge_mode"),
+            InlineKeyboardButton("➡️ One Way Mode", callback_data="set_one_way_mode")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="refresh_dashboard")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def build_help_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for help menu"""
+    keyboard = [
+        [
+            InlineKeyboardButton("📚 User Guide", callback_data="show_user_guide"),
+            InlineKeyboardButton("🎯 Trading Tips", callback_data="show_trading_tips")
+        ],
+        [
+            InlineKeyboardButton("❓ FAQ", callback_data="show_faq"),
+            InlineKeyboardButton("💬 Support", callback_data="contact_support")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="refresh_dashboard")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def build_analytics_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for analytics menu"""
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Portfolio Analysis", callback_data="portfolio_analysis"),
+            InlineKeyboardButton("🧠 Market Intelligence", callback_data="market_intelligence")
+        ],
+        [
+            InlineKeyboardButton("📈 Performance Metrics", callback_data="performance_metrics"),
+            InlineKeyboardButton("🔥 Position Heatmap", callback_data="position_heatmap")
+        ],
+        [
+            InlineKeyboardButton("💡 Trading Insights", callback_data="trading_insights"),
+            InlineKeyboardButton("🛡️ Risk Analysis", callback_data="risk_analysis")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="refresh_dashboard")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def build_portfolio_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for portfolio analysis"""
+    keyboard = [
+        [
+            InlineKeyboardButton("🔥 Position Heatmap", callback_data="position_heatmap"),
+            InlineKeyboardButton("🔗 Correlations", callback_data="correlation_matrix")
+        ],
+        [
+            InlineKeyboardButton("📈 Projections", callback_data="portfolio_projections"),
+            InlineKeyboardButton("⚖️ Rebalance", callback_data="suggest_rebalance")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="show_analytics")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def build_market_intelligence_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for market intelligence"""
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Volume Analysis", callback_data="volume_analysis"),
+            InlineKeyboardButton("💭 Sentiment Score", callback_data="sentiment_analysis")
+        ],
+        [
+            InlineKeyboardButton("📈 Trend Detection", callback_data="trend_analysis"),
+            InlineKeyboardButton("⚡ Momentum", callback_data="momentum_analysis")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="show_analytics")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def build_performance_keyboard() -> InlineKeyboardMarkup:
+    """Keyboard for performance metrics"""
+    keyboard = [
+        [
+            InlineKeyboardButton("📈 Equity Curve", callback_data="equity_curve"),
+            InlineKeyboardButton("⏰ Best Hours", callback_data="best_trading_hours")
+        ],
+        [
+            InlineKeyboardButton("🎯 Win Streaks", callback_data="win_streaks"),
+            InlineKeyboardButton("📊 Trade Analysis", callback_data="trade_analysis")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="show_analytics")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def build_leverage_selection_keyboard(max_leverage: int) -> InlineKeyboardMarkup:
+    """Build keyboard for leverage selection"""
+    # Create leverage options based on max leverage
+    leverage_options = []
+    
+    # Common leverage options, filtered by max leverage
+    common_leverages = [5, 10, 15, 20, 25, 30, 50, 75, 100]
+    available_leverages = [lev for lev in common_leverages if lev <= max_leverage]
+    
+    # Build rows of 3 buttons each
+    rows = []
+    for i in range(0, len(available_leverages), 3):
+        row = []
+        for j in range(3):
+            if i + j < len(available_leverages):
+                leverage = available_leverages[i + j]
+                row.append(InlineKeyboardButton(f"{leverage}x", callback_data=f"conv_leverage:{leverage}"))
+        if row:
+            rows.append(row)
+    
+    # Add custom input option
+    rows.append([InlineKeyboardButton("✏️ Custom Leverage", callback_data="conv_leverage:custom")])
+    
+    # Add back button - using state 4 which is LEVERAGE state
+    rows.append([InlineKeyboardButton("🔙 Back", callback_data="conv_back:4")])
+    
+    return InlineKeyboardMarkup(rows)

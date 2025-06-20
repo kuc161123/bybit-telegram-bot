@@ -16,15 +16,16 @@ from telegram.constants import ParseMode
 
 from config.constants import *
 from utils.formatters import format_decimal_or_na, get_emoji, format_mobile_currency
-from dashboard.keyboards_v2 import (
+from dashboard.keyboards_analytics import (
     build_analytics_keyboard, build_portfolio_keyboard,
     build_market_intelligence_keyboard, build_performance_keyboard
 )
-from dashboard.generator_v4 import (
-    generate_portfolio_heatmap, calculate_portfolio_metrics,
-    calculate_sharpe_ratio, calculate_max_drawdown
+# Import analytics functions from the compact generator
+from dashboard.generator_analytics_compact import (
+    calculate_portfolio_metrics, calculate_sharpe_ratio,
+    calculate_max_drawdown, generate_portfolio_heatmap
 )
-from clients.bybit_helpers import get_all_positions
+from clients.bybit_client import get_all_positions
 from utils.cache import get_ticker_price_cached
 from utils.cache import get_usdt_wallet_balance_cached
 

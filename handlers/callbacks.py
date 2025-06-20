@@ -11,9 +11,9 @@ from telegram.constants import ParseMode
 
 from config.constants import *
 from utils.helpers import initialize_chat_data
-from dashboard.generator_enhanced import build_mobile_dashboard_text as build_dashboard_text_async
-from dashboard.generator import fetch_all_trades_status, generate_comprehensive_help
-from dashboard.keyboards import (
+from dashboard.generator_analytics_compact import build_mobile_dashboard_text as build_dashboard_text_async
+# Removed old imports that don't exist anymore
+from dashboard.keyboards_analytics import (
     build_enhanced_dashboard_keyboard, build_settings_keyboard,
     build_stats_keyboard, build_position_management_keyboard,
     build_help_keyboard
@@ -53,7 +53,14 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
             
             # Load fresh data
             dashboard_text = await build_dashboard_text_async(context.chat_data, context.application.bot_data)
-            keyboard = build_enhanced_dashboard_keyboard()
+            
+            # Get position count for keyboard
+            from clients.bybit_client import get_all_positions
+            positions = await get_all_positions()
+            active_positions = len([p for p in positions if float(p.get('size', 0)) > 0])
+            has_monitors = context.chat_data.get('ACTIVE_MONITOR_TASK', {}) != {}
+            
+            keyboard = build_enhanced_dashboard_keyboard(query.message.chat.id, context, active_positions, has_monitors)
             
             # Send new message with enhanced UI
             try:
@@ -94,7 +101,7 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
         
         elif query.data == "trade_settings":
             # Beautiful settings display
-            from dashboard.generator import create_beautiful_header, create_info_line, create_elegant_divider
+            from dashboard.generator_analytics_compact import create_beautiful_header, create_info_line, create_elegant_divider
             
             settings_text = f"""╔═══════════════════════════════╗
 ║      ⚙️ <b>TRADING CONFIGURATION</b>      ║
@@ -125,7 +132,7 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
         
         elif query.data == "view_stats":
             # Beautiful statistics display
-            from dashboard.generator import create_beautiful_header, create_status_line, create_info_line, create_elegant_divider
+            from dashboard.generator_analytics_compact import create_beautiful_header, create_status_line, create_info_line, create_elegant_divider
             
             # Get current stats
             total_trades = context.application.bot_data.get(STATS_TOTAL_TRADES, 0)

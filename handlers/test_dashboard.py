@@ -5,8 +5,8 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
-from dashboard.generator_v3 import build_mobile_dashboard_text
-from dashboard.keyboards import build_enhanced_dashboard_keyboard
+from dashboard.generator_analytics_compact import build_mobile_dashboard_text
+from dashboard.keyboards_analytics import build_enhanced_dashboard_keyboard
 from utils.helpers import initialize_chat_data
 
 logger = logging.getLogger(__name__)

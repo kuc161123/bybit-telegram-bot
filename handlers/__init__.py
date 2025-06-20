@@ -85,6 +85,7 @@ def setup_enhanced_conversation_handlers(app):
                 ],
                 LEVERAGE: [
                     CallbackQueryHandler(handle_leverage_callback, pattern="^conv_leverage:"),
+                    CallbackQueryHandler(handle_back_callback, pattern="^conv_back:"),
                     MessageHandler(filters.TEXT & ~filters.COMMAND, leverage_handler)
                 ],
                 MARGIN: [
@@ -127,10 +128,46 @@ def setup_callback_handlers(app):
             handle_position_callbacks
         )
         
+        # Import all missing callback handlers
+        from .missing_callbacks import (
+            # Performance Analytics
+            perf_daily_pnl, perf_weekly_pnl, perf_monthly_pnl,
+            perf_win_rate, perf_profit_factor, perf_sharpe,
+            download_performance_report,
+            # Risk Analytics
+            risk_var, risk_drawdown, risk_stress_test,
+            risk_correlation, risk_beta, risk_liquidity,
+            set_risk_limits,
+            # Time Analysis
+            time_hourly, time_daily, time_weekly,
+            time_best_hours, time_patterns, time_seasonality,
+            # Settings
+            trade_settings, notification_settings,
+            display_settings, api_settings,
+            # Position Management
+            refresh_positions, set_hedge_mode, set_one_way_mode,
+            # Help Menu
+            show_user_guide, show_trading_tips,
+            show_faq, contact_support,
+            # Analytics
+            performance_metrics, suggest_rebalance,
+            # Market Intelligence
+            volume_analysis, sentiment_analysis,
+            trend_analysis, momentum_analysis,
+            # Performance
+            win_streaks, trade_analysis
+        )
+        
+        # Import position and stats handlers
+        from .position_stats_handlers import list_positions, show_statistics, show_settings, show_help
+        
         # Dashboard callbacks
         app.add_handler(CallbackQueryHandler(handle_dashboard_callbacks, pattern="^refresh_dashboard$"))
         app.add_handler(CallbackQueryHandler(handle_dashboard_callbacks, pattern="^view_positions$"))
-        app.add_handler(CallbackQueryHandler(handle_dashboard_callbacks, pattern="^trade_settings$"))
+        app.add_handler(CallbackQueryHandler(list_positions, pattern="^list_positions$"))
+        app.add_handler(CallbackQueryHandler(show_statistics, pattern="^show_statistics$"))
+        app.add_handler(CallbackQueryHandler(show_settings, pattern="^show_settings$"))
+        app.add_handler(CallbackQueryHandler(show_help, pattern="^show_help$"))
         app.add_handler(CallbackQueryHandler(handle_dashboard_callbacks, pattern="^view_stats$"))
         app.add_handler(CallbackQueryHandler(handle_dashboard_callbacks, pattern="^back_to_dashboard$"))
         
@@ -185,10 +222,67 @@ def setup_callback_handlers(app):
         app.add_handler(CallbackQueryHandler(handle_position_mode_callbacks, pattern="^enable_one_way_mode$"))
         app.add_handler(CallbackQueryHandler(handle_position_mode_callbacks, pattern="^check_position_mode$"))
         
+        # Performance Analytics callbacks
+        app.add_handler(CallbackQueryHandler(perf_daily_pnl, pattern="^perf_daily_pnl$"))
+        app.add_handler(CallbackQueryHandler(perf_weekly_pnl, pattern="^perf_weekly_pnl$"))
+        app.add_handler(CallbackQueryHandler(perf_monthly_pnl, pattern="^perf_monthly_pnl$"))
+        app.add_handler(CallbackQueryHandler(perf_win_rate, pattern="^perf_win_rate$"))
+        app.add_handler(CallbackQueryHandler(perf_profit_factor, pattern="^perf_profit_factor$"))
+        app.add_handler(CallbackQueryHandler(perf_sharpe, pattern="^perf_sharpe$"))
+        app.add_handler(CallbackQueryHandler(download_performance_report, pattern="^download_performance_report$"))
+        
+        # Risk Analytics callbacks
+        app.add_handler(CallbackQueryHandler(risk_var, pattern="^risk_var$"))
+        app.add_handler(CallbackQueryHandler(risk_drawdown, pattern="^risk_drawdown$"))
+        app.add_handler(CallbackQueryHandler(risk_stress_test, pattern="^risk_stress_test$"))
+        app.add_handler(CallbackQueryHandler(risk_correlation, pattern="^risk_correlation$"))
+        app.add_handler(CallbackQueryHandler(risk_beta, pattern="^risk_beta$"))
+        app.add_handler(CallbackQueryHandler(risk_liquidity, pattern="^risk_liquidity$"))
+        app.add_handler(CallbackQueryHandler(set_risk_limits, pattern="^set_risk_limits$"))
+        
+        # Time Analysis callbacks
+        app.add_handler(CallbackQueryHandler(time_hourly, pattern="^time_hourly$"))
+        app.add_handler(CallbackQueryHandler(time_daily, pattern="^time_daily$"))
+        app.add_handler(CallbackQueryHandler(time_weekly, pattern="^time_weekly$"))
+        app.add_handler(CallbackQueryHandler(time_best_hours, pattern="^time_best_hours$"))
+        app.add_handler(CallbackQueryHandler(time_patterns, pattern="^time_patterns$"))
+        app.add_handler(CallbackQueryHandler(time_seasonality, pattern="^time_seasonality$"))
+        
+        # Settings callbacks
+        app.add_handler(CallbackQueryHandler(trade_settings, pattern="^trade_settings$"))
+        app.add_handler(CallbackQueryHandler(notification_settings, pattern="^notification_settings$"))
+        app.add_handler(CallbackQueryHandler(display_settings, pattern="^display_settings$"))
+        app.add_handler(CallbackQueryHandler(api_settings, pattern="^api_settings$"))
+        
+        # Position Management callbacks
+        app.add_handler(CallbackQueryHandler(refresh_positions, pattern="^refresh_positions$"))
+        app.add_handler(CallbackQueryHandler(set_hedge_mode, pattern="^set_hedge_mode$"))
+        app.add_handler(CallbackQueryHandler(set_one_way_mode, pattern="^set_one_way_mode$"))
+        
+        # Help Menu callbacks
+        app.add_handler(CallbackQueryHandler(show_user_guide, pattern="^show_user_guide$"))
+        app.add_handler(CallbackQueryHandler(show_trading_tips, pattern="^show_trading_tips$"))
+        app.add_handler(CallbackQueryHandler(show_faq, pattern="^show_faq$"))
+        app.add_handler(CallbackQueryHandler(contact_support, pattern="^contact_support$"))
+        
+        # Analytics Menu callbacks
+        app.add_handler(CallbackQueryHandler(performance_metrics, pattern="^performance_metrics$"))
+        app.add_handler(CallbackQueryHandler(suggest_rebalance, pattern="^suggest_rebalance$"))
+        
+        # Market Intelligence callbacks
+        app.add_handler(CallbackQueryHandler(volume_analysis, pattern="^volume_analysis$"))
+        app.add_handler(CallbackQueryHandler(sentiment_analysis, pattern="^sentiment_analysis$"))
+        app.add_handler(CallbackQueryHandler(trend_analysis, pattern="^trend_analysis$"))
+        app.add_handler(CallbackQueryHandler(momentum_analysis, pattern="^momentum_analysis$"))
+        
+        # Performance Menu callbacks
+        app.add_handler(CallbackQueryHandler(win_streaks, pattern="^win_streaks$"))
+        app.add_handler(CallbackQueryHandler(trade_analysis, pattern="^trade_analysis$"))
         
         logger.info("✅ Enhanced callback handlers loaded!")
         logger.info("📊 Conservative approach callbacks active")
         logger.info("🎯 Position mode management callbacks registered")
+        logger.info("✅ All dashboard button callbacks registered")
         
     except Exception as e:
         logger.error(f"❌ Error loading enhanced callback handlers: {e}")
