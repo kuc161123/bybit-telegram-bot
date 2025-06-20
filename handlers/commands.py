@@ -12,20 +12,34 @@ from telegram.constants import ParseMode
 
 from config.constants import *
 from utils.helpers import initialize_chat_data
-from dashboard.generator_v3 import build_mobile_dashboard_text
-from dashboard.keyboards import build_enhanced_dashboard_keyboard
+from dashboard.generator_analytics_compact import build_mobile_dashboard_text as build_dashboard_text_async
+from dashboard.keyboards_analytics import build_enhanced_dashboard_keyboard
 from shared import msg_manager
 from utils.formatters import get_emoji
 from utils.position_modes import (
     enable_hedge_mode, enable_one_way_mode, get_current_position_mode,
     format_position_mode_help, get_position_mode_commands
 )
+from clients.bybit_helpers import get_all_positions
 
 logger = logging.getLogger(__name__)
 
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Enhanced dashboard command with mobile optimization"""
     logger.info("📱 Dashboard command called - showing ENHANCED UI")
+    
+    # Clear any cached data to ensure fresh UI
+    from utils.cache import invalidate_all_caches
+    invalidate_all_caches()
+    
+    # Delete the command message if it exists to keep chat clean
+    if update.message:
+        try:
+            await update.message.delete()
+            logger.debug("Deleted command message")
+        except Exception as e:
+            logger.debug(f"Could not delete command message: {e}")
+    
     # Force new message to show enhanced UI
     await _send_or_edit_dashboard_message(update, context, new_msg=True)
 
@@ -47,27 +61,44 @@ async def _send_or_edit_dashboard_message(upd_or_cid, ctx: ContextTypes.DEFAULT_
         ctx.chat_data = {}
     initialize_chat_data(ctx.chat_data)
     
-    # Build enhanced dashboard
+    # Build dashboard
     try:
-        dashboard_text = await build_mobile_dashboard_text(ctx.chat_data, ctx.application.bot_data)
-        keyboard = build_enhanced_dashboard_keyboard()
+        dashboard_text = await build_dashboard_text_async(c_id, ctx)
         
-        # Send or edit message with enhanced error handling
-        if new_msg or not ctx.chat_data.get(LAST_UI_MESSAGE_ID):
+        # Get active positions count for keyboard
+        positions = await get_all_positions()
+        active_positions = len([p for p in positions if float(p.get('size', 0)) > 0])
+        has_monitors = ctx.chat_data.get('ACTIVE_MONITOR_TASK', {}) != {}
+        
+        keyboard = build_enhanced_dashboard_keyboard(c_id, ctx, active_positions, has_monitors)
+        
+        # ALWAYS delete previous dashboard message if it exists
+        old_msg_id = ctx.chat_data.get(LAST_UI_MESSAGE_ID)
+        if old_msg_id:
             try:
-                sent = await ctx.bot.send_message(
-                    c_id, 
-                    dashboard_text, 
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard
-                )
-                if sent:
-                    ctx.chat_data[LAST_UI_MESSAGE_ID] = sent.message_id
+                await ctx.bot.delete_message(chat_id=c_id, message_id=old_msg_id)
+                logger.debug(f"Deleted previous dashboard message {old_msg_id}")
             except Exception as e:
-                logger.error(f"Error sending dashboard message: {e}")
-        else:
-            msg_id = ctx.chat_data.get(LAST_UI_MESSAGE_ID)
-            await msg_manager.smart_edit_message(ctx, c_id, msg_id, dashboard_text, keyboard)
+                logger.debug(f"Could not delete old dashboard message: {e}")
+            # Clear the stored ID since we deleted it
+            ctx.chat_data[LAST_UI_MESSAGE_ID] = None
+        
+        # Force new_msg to True to ensure we always send a fresh message
+        new_msg = True
+        
+        # Always send new message (since we deleted the old one)
+        try:
+            sent = await ctx.bot.send_message(
+                c_id, 
+                dashboard_text, 
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard
+            )
+            if sent:
+                ctx.chat_data[LAST_UI_MESSAGE_ID] = sent.message_id
+                logger.debug(f"Sent new dashboard message {sent.message_id}")
+        except Exception as e:
+            logger.error(f"Error sending dashboard message: {e}")
             
     except Exception as e:
         logger.error(f"Error in dashboard generation: {e}", exc_info=True)
@@ -381,6 +412,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 • Quick selection buttons
 • Mobile-first dashboard design
 • Streamlined UX for touch devices
+• Responsive layout for all screen sizes
 
 📝 <b>MANUAL TRADING:</b>
 • /start - Access main dashboard
@@ -391,6 +423,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 • /hedge_mode - Enable hedge mode (both directions)
 • /one_way_mode - Enable one-way mode (single direction)
 • /check_mode - Check current position mode
+
 
 ⚙️ <b>QUICK ACTIONS:</b>
 • Use buttons for faster navigation

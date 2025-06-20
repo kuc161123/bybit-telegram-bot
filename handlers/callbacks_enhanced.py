@@ -11,7 +11,7 @@ from telegram.constants import ParseMode
 
 from config.constants import *
 from utils.helpers import initialize_chat_data
-from dashboard.generator_v3 import build_mobile_dashboard_text
+from dashboard.generator_enhanced import build_mobile_dashboard_text
 from dashboard.generator import fetch_all_trades_status, generate_comprehensive_help
 from dashboard.keyboards import (
     build_settings_keyboard, build_stats_keyboard,
@@ -38,13 +38,21 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
                 context.chat_data = {}
             initialize_chat_data(context.chat_data)
             
-            # Delete old message to force fresh UI
+            # Clear any cached data to ensure fresh UI
+            from utils.cache import invalidate_all_caches
+            invalidate_all_caches()
+            
+            # Delete the current message (which is the old dashboard)
             try:
                 await query.message.delete()
-            except:
-                pass
+                logger.debug("Deleted old dashboard message via enhanced refresh")
+            except Exception as e:
+                logger.debug(f"Could not delete message: {e}")
             
-            # Load fresh data with v3 generator
+            # Clear stored message ID since we deleted it
+            context.chat_data[LAST_UI_MESSAGE_ID] = None
+            
+            # Load fresh data with enhanced v5.0 generator
             dashboard_text = await build_mobile_dashboard_text(context.chat_data, context.application.bot_data)
             keyboard = build_enhanced_dashboard_keyboard()
             
@@ -56,8 +64,9 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
                     parse_mode=ParseMode.HTML,
                     reply_markup=keyboard
                 )
-                # Store message ID for future updates
+                # Store new message ID
                 context.chat_data[LAST_UI_MESSAGE_ID] = sent.message_id
+                logger.debug(f"Sent new dashboard message {sent.message_id}")
                     
                 logger.info(f"Ultra dashboard loaded for chat {query.message.chat.id}")
             except Exception as e:

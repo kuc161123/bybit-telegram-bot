@@ -18,7 +18,7 @@ import uuid
 
 from config.constants import *
 from config.settings import LLM_PROVIDER
-from utils.formatters import get_emoji, format_decimal_or_na, create_risk_meter, progress_bar
+from utils.formatters import get_emoji, format_decimal_or_na, format_price, create_risk_meter, progress_bar
 from utils.helpers import initialize_chat_data, get_field_emoji_and_name, safe_decimal_conversion
 from utils.cache import get_instrument_info_cached, get_usdt_wallet_balance_cached
 from risk.calculations import calculate_risk_reward_ratio
@@ -579,14 +579,36 @@ async def screenshot_upload_handler(update: Update, context: ContextTypes.DEFAUL
             context.chat_data["screenshot_file_id"] = photo.file_id
             context.chat_data["screenshot_file_path"] = photo_file.file_path
             
-            # Real AI analysis using OpenAI Vision API
-            from utils.screenshot_analyzer import analyze_trading_screenshot
+            # Real AI analysis using Enhanced OpenAI Vision API with multiple accuracy checks
+            from utils.screenshot_analyzer_enhanced import EnhancedGGShotAnalyzer
             
             symbol = context.chat_data.get(SYMBOL, "BTCUSDT")
             side = context.chat_data.get(SIDE, "Buy")
             
-            # Analyze screenshot with OpenAI Vision API
-            extracted_data = await analyze_trading_screenshot(photo_file.file_path, symbol, side)
+            # Initialize enhanced analyzer
+            analyzer = EnhancedGGShotAnalyzer()
+            
+            # Show analyzing message
+            analyzing_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text="🔍 <b>Analyzing Screenshot...</b>\n\n"
+                     "Running multiple accuracy checks:\n"
+                     "• Cross-validation ⏳\n"
+                     "• Logical consistency ⏳\n"
+                     "• Price relationships ⏳\n"
+                     "• Risk/Reward validation ⏳\n"
+                     "• Market context ⏳",
+                parse_mode=ParseMode.HTML
+            )
+            
+            # Analyze screenshot with enhanced accuracy checks
+            extracted_data = await analyzer.analyze_screenshot(photo_file.file_path, symbol, side)
+            
+            # Delete analyzing message
+            try:
+                await analyzing_msg.delete()
+            except:
+                pass
             
             if extracted_data.get("success"):
                 # Store extracted parameters
@@ -687,6 +709,10 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
     strategy_type = extracted_data.get("strategy_type", "fast")
     params = extracted_data.get("parameters", {})
     validation_errors = extracted_data.get("validation_errors", [])
+    quality_report = extracted_data.get("quality_report", {})
+    
+    # Get accuracy check results if available
+    accuracy_checks = extracted_data.get("accuracy_checks", {})
     
     # Check if validation failed
     if validation_errors:
@@ -732,6 +758,64 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
         context.chat_data[TRADING_APPROACH] = "fast"
         context.chat_data[ORDER_STRATEGY] = STRATEGY_MARKET_ONLY
     
+    # Build quality feedback message
+    quality_msg = ""
+    extraction_method = extracted_data.get("extraction_method", "standard extraction")
+    
+    if quality_report:
+        if quality_report.get("is_blurry"):
+            quality_msg += "⚠️ <i>Image appears blurry - results may be less accurate</i>\n"
+        if quality_report.get("is_low_res"):
+            res = quality_report.get("resolution", "unknown")
+            quality_msg += f"⚠️ <i>Low resolution detected ({res}) - consider higher quality screenshot</i>\n"
+        if quality_report.get("brightness", {}).get("is_dark"):
+            brightness = quality_report.get("brightness", {}).get("mean", "N/A")
+            quality_msg += f"🌙 <i>Dark image detected (brightness: {brightness}) - enhancement applied</i>\n"
+        if quality_report.get("brightness", {}).get("has_low_contrast"):
+            quality_msg += "✅ <i>Low contrast detected - enhancement applied</i>\n"
+        
+        # Add extraction method if not standard
+        if extraction_method != "standard extraction":
+            quality_msg += f"🔬 <i>Enhanced using: {extraction_method}</i>\n"
+            
+        if quality_msg:
+            quality_msg = f"\n📷 <b>Image Quality:</b>\n{quality_msg}"
+    
+    # Build accuracy check results message
+    accuracy_msg = ""
+    if accuracy_checks:
+        overall_confidence = accuracy_checks.get("overall_confidence", 0)
+        verification_notes = accuracy_checks.get("verification_notes", [])
+        individual_scores = accuracy_checks.get("individual_scores", {})
+        
+        # Overall confidence emoji
+        if overall_confidence >= 0.9:
+            conf_emoji = "🟢"
+            conf_text = "Excellent"
+        elif overall_confidence >= 0.7:
+            conf_emoji = "🟡"
+            conf_text = "Good"
+        else:
+            conf_emoji = "🔴"
+            conf_text = "Low"
+        
+        accuracy_msg = f"\n🔍 <b>Accuracy Verification:</b>\n"
+        accuracy_msg += f"{conf_emoji} Overall Confidence: <b>{overall_confidence:.0%}</b> ({conf_text})\n"
+        
+        # Show individual check results
+        if individual_scores:
+            accuracy_msg += "\n<b>Accuracy Checks:</b>\n"
+            for check_name, score in individual_scores.items():
+                check_emoji = "✅" if score >= 0.8 else "✓" if score >= 0.6 else "⚠️"
+                display_name = check_name.replace("_", " ").title()
+                accuracy_msg += f"{check_emoji} {display_name}: {score:.0%}\n"
+        
+        # Add verification notes if confidence is low
+        if overall_confidence < 0.8 and verification_notes:
+            accuracy_msg += "\n<b>Verification Notes:</b>\n"
+            for note in verification_notes[:3]:  # Show top 3 notes
+                accuracy_msg += f"• {note}\n"
+    
     # Build confirmation message based on detected strategy
     if strategy_type == "conservative":
         confirmation_msg = (
@@ -740,7 +824,9 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
             f"✅ <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
             f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
             f"✅ <b>Detected Strategy:</b> 🛡️ Conservative Limits\n"
-            f"✅ <b>AI Confidence:</b> {confidence:.0%}\n\n"
+            f"✅ <b>AI Confidence:</b> {confidence:.0%}\n"
+            f"{quality_msg}"
+            f"{accuracy_msg}\n"
             f"📊 <b>EXTRACTED PARAMETERS:</b>\n\n"
             f"🔹 <b>Limit Orders:</b>\n"
             f"• Entry #1: <code>{format_decimal_or_na(params.get(LIMIT_ENTRY_1_PRICE))}</code>\n"
@@ -762,7 +848,9 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
             f"✅ <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
             f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
             f"✅ <b>Detected Strategy:</b> ⚡ Fast Market\n"
-            f"✅ <b>AI Confidence:</b> {confidence:.0%}\n\n"
+            f"✅ <b>AI Confidence:</b> {confidence:.0%}\n"
+            f"{quality_msg}"
+            f"{accuracy_msg}\n"
             f"📊 <b>EXTRACTED PARAMETERS:</b>\n\n"
             f"💰 <b>Entry Price:</b> <code>{format_decimal_or_na(params.get(PRIMARY_ENTRY_PRICE))}</code>\n"
             f"🎯 <b>Take Profit:</b> <code>{format_decimal_or_na(params.get(TP1_PRICE))}</code> (100%)\n"
@@ -771,12 +859,25 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
             f"❓ <b>Accept AI prices and continue?</b>"
         )
     
-    confirmation_keyboard = InlineKeyboardMarkup([
+    # Add enhancement option if image quality is poor
+    keyboard_buttons = [
         [InlineKeyboardButton("✅ Accept Prices & Continue", callback_data="ggshot_confirm_ai")],
-        [InlineKeyboardButton("✏️ Manual Override", callback_data="ggshot_manual_override")],
+        [InlineKeyboardButton("✏️ Manual Override", callback_data="ggshot_manual_override")]
+    ]
+    
+    # Add advanced enhancement option if image quality issues detected
+    # Only show advanced enhancement button if we haven't already used aggressive enhancement
+    if quality_report and (quality_report.get("is_blurry") or quality_report.get("is_low_res")) and extraction_method != "aggressive processing":
+        keyboard_buttons.append(
+            [InlineKeyboardButton("🔬 Try Advanced Enhancement", callback_data="ggshot_advanced_enhance")]
+        )
+    
+    keyboard_buttons.extend([
         [InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{APPROACH_SELECTION}")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation")]
     ])
+    
+    confirmation_keyboard = InlineKeyboardMarkup(keyboard_buttons)
     
     await edit_last_message(context, chat_id, confirmation_msg, confirmation_keyboard)
     return CONFIRMATION
@@ -791,12 +892,14 @@ async def handle_screenshot_analysis_failure(context: ContextTypes.DEFAULT_TYPE,
         f"Error: {safe_error_msg}\n\n"
         f"🔄 <b>Options:</b>\n"
         f"• Try uploading a clearer screenshot\n"
+        f"• Try advanced image enhancement\n"
         f"• Switch to manual entry\n\n"
         f"What would you like to do?"
     )
     
     failure_keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📸 Upload Again", callback_data="ggshot_retry_upload")],
+        [InlineKeyboardButton("🔬 Try Advanced Enhancement", callback_data="ggshot_advanced_enhance")],
         [InlineKeyboardButton("✏️ Manual Entry", callback_data="ggshot_manual_entry")],
         [InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{APPROACH_SELECTION}")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation")]
@@ -868,6 +971,10 @@ async def handle_ggshot_callbacks(update: Update, context: ContextTypes.DEFAULT_
     elif query.data == "ggshot_manual_entry":
         # User wants to switch to manual entry - ask which approach
         return await offer_manual_approach_selection(context, query.message.chat.id)
+    
+    elif query.data == "ggshot_advanced_enhance":
+        # User wants to try advanced enhancement
+        return await handle_advanced_enhancement_request(context, query.message.chat.id)
     
     elif query.data == "ggshot_override_validation":
         # User wants to override validation errors and continue
@@ -962,6 +1069,84 @@ async def offer_manual_approach_selection(context: ContextTypes.DEFAULT_TYPE, ch
     await edit_last_message(context, chat_id, manual_msg, manual_keyboard)
     return APPROACH_SELECTION
 
+async def handle_advanced_enhancement_request(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
+    """Handle request for advanced image enhancement"""
+    # Check if we have a stored screenshot
+    screenshot_path = context.chat_data.get("screenshot_file_path")
+    if not screenshot_path:
+        await edit_last_message(
+            context, chat_id,
+            "❌ <b>No screenshot found</b>\n\nPlease upload a new screenshot:",
+            None
+        )
+        return await retry_screenshot_upload(context, chat_id)
+    
+    # Show processing message
+    await edit_last_message(
+        context, chat_id,
+        f"{get_emoji('loading')} <b>Advanced Image Enhancement</b>\n\n"
+        f"🔬 Applying advanced enhancement algorithms...\n"
+        f"📊 Optimizing for OCR accuracy...\n"
+        f"🤖 Re-analyzing with enhanced image...\n"
+        f"⏳ This may take 5-10 seconds...",
+        None
+    )
+    
+    try:
+        # Update analyzer to use advanced enhancement
+        from utils.screenshot_analyzer import screenshot_analyzer
+        original_level = screenshot_analyzer.enhancement_level
+        screenshot_analyzer.enhancement_level = "advanced"
+        
+        symbol = context.chat_data.get(SYMBOL, "BTCUSDT")
+        side = context.chat_data.get(SIDE, "Buy")
+        
+        # Re-analyze with advanced enhancement
+        extracted_data = await screenshot_analyzer.analyze_trading_screenshot(
+            screenshot_path, symbol, side
+        )
+        
+        # Restore original enhancement level
+        screenshot_analyzer.enhancement_level = original_level
+        
+        if extracted_data.get("success"):
+            # Store extracted parameters
+            context.chat_data.update(extracted_data["parameters"])
+            
+            # Show extracted parameters for confirmation
+            return await show_extracted_parameters_confirmation(context, chat_id, extracted_data)
+        else:
+            # Advanced enhancement still failed
+            enhanced_error_msg = (
+                f"❌ <b>Advanced Analysis Failed</b>\n\n"
+                f"Even with advanced enhancement, we couldn't extract the parameters.\n\n"
+                f"<b>Possible reasons:</b>\n"
+                f"• Image quality is too poor\n"
+                f"• Price levels not clearly visible\n"
+                f"• Screenshot doesn't show trading setup\n\n"
+                f"<b>Recommendations:</b>\n"
+                f"• Take a clearer screenshot\n"
+                f"• Ensure all price levels are visible\n"
+                f"• Use manual entry instead"
+            )
+            
+            enhanced_failure_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📸 Upload New Screenshot", callback_data="ggshot_retry_upload")],
+                [InlineKeyboardButton("✏️ Manual Entry", callback_data="ggshot_manual_entry")],
+                [InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{APPROACH_SELECTION}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation")]
+            ])
+            
+            await edit_last_message(context, chat_id, enhanced_error_msg, enhanced_failure_keyboard)
+            return SCREENSHOT_UPLOAD
+            
+    except Exception as e:
+        logger.error(f"Error in advanced enhancement: {e}")
+        return await handle_screenshot_analysis_failure(
+            context, chat_id, 
+            f"Advanced enhancement error: {escape(str(e))}"
+        )
+
 # =============================================
 # PRIMARY ENTRY HANDLER (Fast Approach)
 # =============================================
@@ -1051,7 +1236,7 @@ async def limit_entries_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
                 f"✅ <b>Approach:</b> 🛡️ Conservative Limits\n"
                 f"✅ <b>Trade Group:</b> {trade_group_id} 🛡️\n"
-                f"✅ <b>Limit #1:</b> <code>{format_decimal_or_na(price)}</code>\n\n"
+                f"✅ <b>Limit #1:</b> <code>{format_price(price)}</code>\n\n"
                 f"📊 <b>Step 4 of 7: Limit Order Prices</b>\n\n"
                 f"Enter <b>Limit Order #2</b> price:"
             )
@@ -1081,8 +1266,8 @@ async def limit_entries_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
                 f"✅ <b>Approach:</b> 🛡️ Conservative Limits\n"
                 f"✅ <b>Trade Group:</b> {trade_group_id} 🛡️\n"
-                f"✅ <b>Limit #1:</b> <code>{format_decimal_or_na(limit1_price)}</code>\n"
-                f"✅ <b>Limit #2:</b> <code>{format_decimal_or_na(price)}</code>\n\n"
+                f"✅ <b>Limit #1:</b> <code>{format_price(limit1_price)}</code>\n"
+                f"✅ <b>Limit #2:</b> <code>{format_price(price)}</code>\n\n"
                 f"📊 <b>Step 4 of 7: Limit Order Prices</b>\n\n"
                 f"Enter <b>Limit Order #3</b> price:"
             )
@@ -1127,7 +1312,7 @@ async def ask_for_fast_take_profit(context: ContextTypes.DEFAULT_TYPE, chat_id: 
         f"✅ <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
         f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
         f"✅ <b>Approach:</b> ⚡ Fast Market\n"
-        f"✅ <b>Entry Price:</b> <code>{format_decimal_or_na(entry_price)}</code>\n\n"
+        f"✅ <b>Entry Price:</b> <code>{format_price(entry_price)}</code>\n\n"
         f"🎯 <b>Step 5 of 7: Take Profit</b>\n\n"
         f"Enter your take profit price:\n"
         f"💡 This will close 100% of your position\n"
@@ -1159,7 +1344,7 @@ async def ask_for_conservative_take_profits(context: ContextTypes.DEFAULT_TYPE, 
         f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
         f"✅ <b>Approach:</b> 🛡️ Conservative Limits\n"
         f"✅ <b>Trade Group:</b> {trade_group_id} 🛡️\n"
-        f"✅ <b>Limits:</b> {format_decimal_or_na(limit1_price)}, {format_decimal_or_na(limit2_price)}, {format_decimal_or_na(limit3_price)}\n\n"
+        f"✅ <b>Limits:</b> {format_price(limit1_price)}, {format_price(limit2_price)}, {format_price(limit3_price)}\n\n"
         f"🎯 <b>Step 5 of 7: Take Profit Prices</b>\n\n"
         f"Enter 4 take profit prices (one per message):\n"
         f"💡 TP1: 70% | TP2: 10% | TP3: 10% | TP4: 10%\n"
@@ -1221,7 +1406,7 @@ async def take_profits_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 
                 # Ask for TP2
                 tp2_msg = (
-                    f"✅ <b>TP1 (70%):</b> <code>{format_decimal_or_na(price)}</code> 🛡️\n\n"
+                    f"✅ <b>TP1 (70%):</b> <code>{format_price(price)}</code> 🛡️\n\n"
                     f"🎯 <b>Step 5 of 7: Take Profit Prices</b>\n\n"
                     f"Enter <b>Take Profit #2</b> price (10% close):"
                 )
@@ -1240,8 +1425,8 @@ async def take_profits_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 # Ask for TP3
                 tp1_price = context.chat_data.get(TP1_PRICE)
                 tp3_msg = (
-                    f"✅ <b>TP1 (70%):</b> <code>{format_decimal_or_na(tp1_price)}</code> 🛡️\n"
-                    f"✅ <b>TP2 (10%):</b> <code>{format_decimal_or_na(price)}</code> 🛡️\n\n"
+                    f"✅ <b>TP1 (70%):</b> <code>{format_price(tp1_price)}</code> 🛡️\n"
+                    f"✅ <b>TP2 (10%):</b> <code>{format_price(price)}</code> 🛡️\n\n"
                     f"🎯 <b>Step 5 of 7: Take Profit Prices</b>\n\n"
                     f"Enter <b>Take Profit #3</b> price (10% close):"
                 )
@@ -1261,9 +1446,9 @@ async def take_profits_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 tp1_price = context.chat_data.get(TP1_PRICE)
                 tp2_price = context.chat_data.get(TP2_PRICE)
                 tp4_msg = (
-                    f"✅ <b>TP1 (70%):</b> <code>{format_decimal_or_na(tp1_price)}</code> 🛡️\n"
-                    f"✅ <b>TP2 (10%):</b> <code>{format_decimal_or_na(tp2_price)}</code> 🛡️\n"
-                    f"✅ <b>TP3 (10%):</b> <code>{format_decimal_or_na(price)}</code> 🛡️\n\n"
+                    f"✅ <b>TP1 (70%):</b> <code>{format_price(tp1_price)}</code> 🛡️\n"
+                    f"✅ <b>TP2 (10%):</b> <code>{format_price(tp2_price)}</code> 🛡️\n"
+                    f"✅ <b>TP3 (10%):</b> <code>{format_price(price)}</code> 🛡️\n\n"
                     f"🎯 <b>Step 5 of 7: Take Profit Prices</b>\n\n"
                     f"Enter <b>Take Profit #4</b> price (10% close):"
                 )
@@ -1314,8 +1499,8 @@ async def ask_for_stop_loss(context: ContextTypes.DEFAULT_TYPE, chat_id: int) ->
             f"✅ <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
             f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
             f"✅ <b>Approach:</b> {approach_emoji} {approach_text}\n"
-            f"✅ <b>Entry Price:</b> <code>{format_decimal_or_na(entry_price)}</code>\n"
-            f"✅ <b>Take Profit:</b> <code>{format_decimal_or_na(tp_price)}</code> 🛡️\n\n"
+            f"✅ <b>Entry Price:</b> <code>{format_price(entry_price)}</code>\n"
+            f"✅ <b>Take Profit:</b> <code>{format_price(tp_price)}</code> 🛡️\n\n"
             f"🛡️ <b>Step 6 of 7: Stop Loss</b>\n\n"
             f"Enter your stop loss price:\n"
             f"💡 This protects you from large losses\n"
@@ -1337,8 +1522,8 @@ async def ask_for_stop_loss(context: ContextTypes.DEFAULT_TYPE, chat_id: int) ->
             f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
             f"✅ <b>Approach:</b> {approach_emoji} {approach_text}\n"
             f"✅ <b>Trade Group:</b> {trade_group_id} 🛡️\n"
-            f"✅ <b>Limits:</b> {format_decimal_or_na(limit1_price)}, {format_decimal_or_na(limit2_price)}, {format_decimal_or_na(limit3_price)}\n"
-            f"✅ <b>TPs:</b> {format_decimal_or_na(tp1_price)}, {format_decimal_or_na(tp2_price)}, {format_decimal_or_na(tp3_price)}, {format_decimal_or_na(tp4_price)} 🛡️\n\n"
+            f"✅ <b>Limits:</b> {format_price(limit1_price)}, {format_price(limit2_price)}, {format_price(limit3_price)}\n"
+            f"✅ <b>TPs:</b> {format_price(tp1_price)}, {format_price(tp2_price)}, {format_price(tp3_price)}, {format_price(tp4_price)} 🛡️\n\n"
             f"🛡️ <b>Step 6 of 7: Stop Loss</b>\n\n"
             f"Enter your stop loss price:\n"
             f"💡 This will cancel all remaining orders if hit\n"
@@ -1541,33 +1726,52 @@ async def leverage_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 # =============================================
 
 async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_id: int, query: CallbackQuery = None) -> int:
-    """Ask for margin with quick selection buttons"""
+    """Ask for margin with quick selection buttons - NOW USING PERCENTAGE OF ACCOUNT"""
     leverage = context.chat_data.get(LEVERAGE, 10)
     
+    # Get current account balance for percentage calculation
+    from utils.cache import get_usdt_wallet_balance_cached
+    try:
+        total_balance, available_balance = await get_usdt_wallet_balance_cached()
+        balance_display = f"Available Balance: ${format_decimal_or_na(available_balance, 2)}"
+    except:
+        available_balance = Decimal("0")
+        balance_display = "Unable to fetch balance"
+    
     margin_msg = (
-        f"⚡ <b>Leverage Set: {leverage}x</b>\n\n"
-        f"💰 <b>Step 7b: Select Margin Amount</b>\n\n"
-        f"Choose your margin amount in USDT:\n"
-        f"💡 Select a quick option or choose Custom for your own amount"
+        f"⚡ <b>Leverage Set: {leverage}x</b>\n"
+        f"💰 <b>{balance_display}</b>\n\n"
+        f"📊 <b>Step 7b: Select Margin Percentage</b>\n\n"
+        f"Choose what percentage of your account to use:\n"
+        f"💡 Select a quick option or choose Custom for your own percentage"
     )
     
-    # Build margin selection keyboard with common options
-    common_margins = [25, 50, 100, 200]
+    # Build margin selection keyboard with percentage options
+    common_percentages = [1, 2, 5, 10]  # Percentage values
     keyboard = []
     
-    # Add common margin buttons (2 per row)
-    for i in range(0, len(common_margins), 2):
+    # Add common percentage buttons (2 per row)
+    for i in range(0, len(common_percentages), 2):
         row = []
         for j in range(2):
-            if i + j < len(common_margins):
-                margin = common_margins[i + j]
-                row.append(InlineKeyboardButton(f"{margin} USDT", callback_data=f"conv_margin:{margin}"))
+            if i + j < len(common_percentages):
+                percentage = common_percentages[i + j]
+                # Calculate USDT amount for display
+                if available_balance > 0:
+                    usdt_amount = (available_balance * percentage) / 100
+                    button_text = f"{percentage}% (≈${format_decimal_or_na(usdt_amount, 2)})"
+                else:
+                    button_text = f"{percentage}%"
+                row.append(InlineKeyboardButton(button_text, callback_data=f"conv_margin_pct:{percentage}"))
         if row:
             keyboard.append(row)
     
-    # Add custom and cancel buttons
+    # Add custom, back, and cancel buttons
     keyboard.append([
-        InlineKeyboardButton(f"✏️ Custom", callback_data="conv_margin:custom"),
+        InlineKeyboardButton(f"✏️ Custom %", callback_data="conv_margin_pct:custom")
+    ])
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{LEVERAGE}"),
         InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation")
     ])
     
@@ -1590,66 +1794,135 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
     return MARGIN
 
 async def handle_margin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle margin selection callback"""
+    """Handle margin selection callback - NOW HANDLES PERCENTAGE"""
     query = update.callback_query
     try:
         await query.answer()
     except:
         pass
     
-    if not query.data.startswith("conv_margin:"):
-        return MARGIN
-    
-    margin_value = query.data.split(":")[1]
-    
-    if margin_value == "custom":
-        # Show custom margin input
-        custom_margin_msg = (
-            f"💰 <b>Custom Margin Amount</b>\n\n"
-            f"Enter your custom margin amount in USDT:\n"
-            f"💡 Example: 75"
-        )
+    # Handle both old and new callback formats
+    if query.data.startswith("conv_margin_pct:"):
+        # New percentage-based callback
+        value = query.data.split(":")[1]
         
-        cancel_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_conversation")]
-        ])
-        
-        try:
-            await query.edit_message_text(
-                custom_margin_msg,
-                parse_mode=ParseMode.HTML,
-                reply_markup=cancel_keyboard
+        if value == "custom":
+            # Show custom percentage input
+            custom_margin_msg = (
+                f"📊 <b>Custom Margin Percentage</b>\n\n"
+                f"Enter your custom percentage (without % sign):\n"
+                f"💡 Example: 3.5 (for 3.5% of account)\n"
+                f"⚠️ Maximum: 100%"
             )
-        except Exception as e:
-            logger.error(f"Error editing message for custom margin: {e}")
-        
-        return MARGIN  # Stay in MARGIN state for text input
-    else:
-        # Handle quick selection
-        try:
-            margin = Decimal(margin_value)
             
-            if margin <= 0:
-                await query.answer("❌ Margin must be greater than 0", show_alert=True)
-                return MARGIN
+            cancel_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{LEVERAGE}")],
+                [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_conversation")]
+            ])
             
-            # Store margin with multiple key formats
-            context.chat_data["margin_amount_usdt"] = margin
-            context.chat_data["margin_amount"] = margin
-            context.chat_data[MARGIN_AMOUNT] = margin
-            context.chat_data["MARGIN_AMOUNT"] = margin
+            try:
+                await query.edit_message_text(
+                    custom_margin_msg,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=cancel_keyboard
+                )
+            except Exception as e:
+                logger.error(f"Error editing message for custom margin percentage: {e}")
             
-            logger.info(f"Quick margin selected: {margin}")
-            
-            # Show final confirmation
-            return await show_final_confirmation(context, query.message.chat.id)
-            
-        except (ValueError, InvalidOperation):
-            await query.answer("❌ Invalid margin value", show_alert=True)
+            # Set flag to indicate we're expecting percentage input
+            context.chat_data["expecting_percentage_input"] = True
             return MARGIN
+        else:
+            # Handle quick percentage selection
+            try:
+                percentage = Decimal(value)
+                
+                if percentage <= 0 or percentage > 100:
+                    await query.answer("❌ Percentage must be between 0 and 100", show_alert=True)
+                    return MARGIN
+                
+                # Get account balance to calculate USDT amount
+                from utils.cache import get_usdt_wallet_balance_cached
+                try:
+                    total_balance, available_balance = await get_usdt_wallet_balance_cached()
+                except:
+                    await query.answer("❌ Unable to fetch account balance", show_alert=True)
+                    return MARGIN
+                
+                # Calculate USDT amount from percentage
+                margin_usdt = (available_balance * percentage) / 100
+                
+                # Store margin with multiple key formats
+                context.chat_data["margin_amount_usdt"] = margin_usdt
+                context.chat_data["margin_amount"] = margin_usdt
+                context.chat_data[MARGIN_AMOUNT] = margin_usdt
+                context.chat_data["MARGIN_AMOUNT"] = margin_usdt
+                context.chat_data["margin_percentage"] = percentage  # Store percentage for reference
+                
+                logger.info(f"Margin selected: {percentage}% = {margin_usdt} USDT")
+                
+                # Show final confirmation
+                return await show_final_confirmation(context, query.message.chat.id)
+                
+            except (ValueError, InvalidOperation):
+                await query.answer("❌ Invalid percentage value", show_alert=True)
+                return MARGIN
+    
+    elif query.data.startswith("conv_margin:"):
+        # Handle old USDT-based callbacks (backwards compatibility)
+        margin_value = query.data.split(":")[1]
+        
+        if margin_value == "custom":
+            # Show custom margin input (OLD - USDT based)
+            custom_margin_msg = (
+                f"💰 <b>Custom Margin Amount</b>\n\n"
+                f"Enter your custom margin amount in USDT:\n"
+                f"💡 Example: 75"
+            )
+        
+            
+            cancel_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_conversation")]
+            ])
+            
+            try:
+                await query.edit_message_text(
+                    custom_margin_msg,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=cancel_keyboard
+                )
+            except Exception as e:
+                logger.error(f"Error editing message for custom margin: {e}")
+            
+            return MARGIN  # Stay in MARGIN state for text input
+        else:
+            # Handle quick selection (OLD - USDT based)
+            try:
+                margin = Decimal(margin_value)
+                
+                if margin <= 0:
+                    await query.answer("❌ Margin must be greater than 0", show_alert=True)
+                    return MARGIN
+                
+                # Store margin with multiple key formats
+                context.chat_data["margin_amount_usdt"] = margin
+                context.chat_data["margin_amount"] = margin
+                context.chat_data[MARGIN_AMOUNT] = margin
+                context.chat_data["MARGIN_AMOUNT"] = margin
+                
+                logger.info(f"Quick margin selected: {margin}")
+                
+                # Show final confirmation
+                return await show_final_confirmation(context, query.message.chat.id)
+                
+            except (ValueError, InvalidOperation):
+                await query.answer("❌ Invalid margin value", show_alert=True)
+                return MARGIN
+    
+    return MARGIN
 
 async def margin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle custom margin amount text input"""
+    """Handle custom margin amount text input - NOW HANDLES PERCENTAGE INPUT"""
     if not update.message or not update.message.text:
         return MARGIN
     
@@ -1661,35 +1934,84 @@ async def margin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except:
         pass
     
+    # Check if we're expecting percentage input
+    expecting_percentage = context.chat_data.get("expecting_percentage_input", False)
+    
     try:
-        margin_text = update.message.text.strip()
-        margin = Decimal(margin_text)
+        input_text = update.message.text.strip().replace('%', '')  # Remove % sign if included
+        input_value = Decimal(input_text)
         
-        if margin <= 0:
-            await send_error_and_retry(
-                context, chat_id,
-                "Margin amount must be greater than 0. Please enter a valid amount:",
-                MARGIN
-            )
-            return MARGIN
-        
-        # Store margin with multiple key formats
-        context.chat_data["margin_amount_usdt"] = margin
-        context.chat_data["margin_amount"] = margin
-        context.chat_data[MARGIN_AMOUNT] = margin
-        context.chat_data["MARGIN_AMOUNT"] = margin
-        
-        logger.info(f"Custom margin entered: {margin}")
+        if expecting_percentage:
+            # Handle percentage input
+            if input_value <= 0 or input_value > 100:
+                await send_error_and_retry(
+                    context, chat_id,
+                    "Percentage must be between 0 and 100. Please enter a valid percentage:",
+                    MARGIN
+                )
+                return MARGIN
+            
+            # Get account balance to calculate USDT amount
+            from utils.cache import get_usdt_wallet_balance_cached
+            try:
+                total_balance, available_balance = await get_usdt_wallet_balance_cached()
+            except:
+                await send_error_and_retry(
+                    context, chat_id,
+                    "Unable to fetch account balance. Please try again:",
+                    MARGIN
+                )
+                return MARGIN
+            
+            # Calculate USDT amount from percentage
+            margin_usdt = (available_balance * input_value) / 100
+            
+            # Store margin with multiple key formats
+            context.chat_data["margin_amount_usdt"] = margin_usdt
+            context.chat_data["margin_amount"] = margin_usdt
+            context.chat_data[MARGIN_AMOUNT] = margin_usdt
+            context.chat_data["MARGIN_AMOUNT"] = margin_usdt
+            context.chat_data["margin_percentage"] = input_value  # Store percentage for reference
+            
+            logger.info(f"Custom margin percentage entered: {input_value}% = {margin_usdt} USDT")
+            
+            # Clear the flag
+            context.chat_data["expecting_percentage_input"] = False
+            
+        else:
+            # Handle USDT input (backwards compatibility)
+            if input_value <= 0:
+                await send_error_and_retry(
+                    context, chat_id,
+                    "Margin amount must be greater than 0. Please enter a valid amount:",
+                    MARGIN
+                )
+                return MARGIN
+            
+            # Store margin with multiple key formats
+            context.chat_data["margin_amount_usdt"] = input_value
+            context.chat_data["margin_amount"] = input_value
+            context.chat_data[MARGIN_AMOUNT] = input_value
+            context.chat_data["MARGIN_AMOUNT"] = input_value
+            
+            logger.info(f"Custom margin entered: {input_value} USDT")
         
         # Show final confirmation
         return await show_final_confirmation(context, chat_id)
         
     except (ValueError, InvalidOperation):
-        await send_error_and_retry(
-            context, chat_id,
-            "Please enter a valid number for the margin amount (e.g., 50):",
-            MARGIN
-        )
+        if expecting_percentage:
+            await send_error_and_retry(
+                context, chat_id,
+                "Please enter a valid percentage (e.g., 3.5 for 3.5%):",
+                MARGIN
+            )
+        else:
+            await send_error_and_retry(
+                context, chat_id,
+                "Please enter a valid number for the margin amount (e.g., 50):",
+                MARGIN
+            )
         return MARGIN
 
 # =============================================
@@ -1768,11 +2090,20 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
             f"📈 <b>Direction:</b> {direction_emoji} {direction_text}\n"
             f"⚡ <b>Approach:</b> {approach_emoji} {approach_text}\n"
             f"{ggshot_info}"
-            f"💰 <b>Entry:</b> <code>{format_decimal_or_na(entry_price)}</code>\n"
-            f"🎯 <b>Take Profit:</b> <code>{format_decimal_or_na(tp_price)}</code> (100%) 🛡️\n"
-            f"🛡️ <b>Stop Loss:</b> <code>{format_decimal_or_na(sl_price)}</code> 🛡️\n"
+            f"💰 <b>Entry:</b> <code>{format_price(entry_price)}</code>\n"
+            f"🎯 <b>Take Profit:</b> <code>{format_price(tp_price)}</code> (100%) 🛡️\n"
+            f"🛡️ <b>Stop Loss:</b> <code>{format_price(sl_price)}</code> 🛡️\n"
             f"⚡ <b>Leverage:</b> {leverage}x\n"
-            f"💰 <b>Margin:</b> {format_decimal_or_na(margin)} USDT{rr_info}\n"
+            f"💰 <b>Margin:</b> {format_decimal_or_na(margin)} USDT"
+        )
+        
+        # Add percentage info if available
+        if "margin_percentage" in context.chat_data:
+            percentage = context.chat_data["margin_percentage"]
+            confirmation_msg += f" ({percentage}%)"
+        
+        confirmation_msg += (
+            f"{rr_info}\n"
             f"{pnl_preview}\n"
             f"🛡️ <b>Protection:</b> All orders will be protected from cleanup\n\n"
             f"⚠️ <b>Ready to execute this trade?</b>"
@@ -1803,17 +2134,26 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
             f"{ggshot_info}"
             f"🛡️ <b>Trade Group:</b> <code>{trade_group_id}</code> 🛡️\n\n"
             f"📊 <b>LIMIT ORDERS (33.33% each):</b>\n"
-            f"• <b>Limit #1:</b> <code>{format_decimal_or_na(limit1_price)}</code> 🛡️\n"
-            f"• <b>Limit #2:</b> <code>{format_decimal_or_na(limit2_price)}</code> 🛡️\n"
-            f"• <b>Limit #3:</b> <code>{format_decimal_or_na(limit3_price)}</code> 🛡️\n\n"
+            f"• <b>Limit #1:</b> <code>{format_price(limit1_price)}</code> 🛡️\n"
+            f"• <b>Limit #2:</b> <code>{format_price(limit2_price)}</code> 🛡️\n"
+            f"• <b>Limit #3:</b> <code>{format_price(limit3_price)}</code> 🛡️\n\n"
             f"🎯 <b>TAKE PROFITS:</b>\n"
-            f"• <b>TP1 (70%):</b> <code>{format_decimal_or_na(tp1_price)}</code> 🛡️\n"
-            f"• <b>TP2 (10%):</b> <code>{format_decimal_or_na(tp2_price)}</code> 🛡️\n"
-            f"• <b>TP3 (10%):</b> <code>{format_decimal_or_na(tp3_price)}</code> 🛡️\n"
-            f"• <b>TP4 (10%):</b> <code>{format_decimal_or_na(tp4_price)}</code> 🛡️\n\n"
-            f"🛡️ <b>Stop Loss:</b> <code>{format_decimal_or_na(sl_price)}</code> 🛡️\n"
+            f"• <b>TP1 (70%):</b> <code>{format_price(tp1_price)}</code> 🛡️\n"
+            f"• <b>TP2 (10%):</b> <code>{format_price(tp2_price)}</code> 🛡️\n"
+            f"• <b>TP3 (10%):</b> <code>{format_price(tp3_price)}</code> 🛡️\n"
+            f"• <b>TP4 (10%):</b> <code>{format_price(tp4_price)}</code> 🛡️\n\n"
+            f"🛡️ <b>Stop Loss:</b> <code>{format_price(sl_price)}</code> 🛡️\n"
             f"⚡ <b>Leverage:</b> {leverage}x\n"
-            f"💰 <b>Total Margin:</b> {format_decimal_or_na(margin)} USDT\n\n"
+            f"💰 <b>Total Margin:</b> {format_decimal_or_na(margin)} USDT"
+        )
+        
+        # Add percentage info if available
+        if "margin_percentage" in context.chat_data:
+            percentage = context.chat_data["margin_percentage"]
+            confirmation_msg += f" ({percentage}%)"
+        
+        confirmation_msg += (
+            f"\n\n"
             f"🛡️ <b>Protection:</b> Trade group and all orders protected from cleanup\n\n"
             f"⚠️ <b>Special Rule:</b> If TP1 hits before limits fill,\n"
             f"all remaining orders will be cancelled.\n\n"
@@ -1960,7 +2300,7 @@ async def handle_execute_trade(update: Update, context: ContextTypes.DEFAULT_TYP
                         result_msg += f"• {order}\n"
                     
                     if approach == "fast" and result.get("entry_price"):
-                        result_msg += f"\n📈 <b>Entry Price:</b> {format_decimal_or_na(result.get('entry_price'))}"
+                        result_msg += f"\n📈 <b>Entry Price:</b> {format_price(result.get('entry_price'))}"
                         result_msg += f"\n📊 <b>Position Size:</b> {format_decimal_or_na(result.get('position_size'))}"
                     
                     result_msg += f"\n\n🔄 Automatic monitoring has been started"

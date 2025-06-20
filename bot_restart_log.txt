@@ -1,0 +1,9 @@
+✅ Loaded environment variables from .env file
+Traceback (most recent call last):
+  File "/Users/lualakol/bybit-telegram-bot/main.py", line 28, in <module>
+    from clients import bybit_client, openai_client
+  File "/Users/lualakol/bybit-telegram-bot/clients/__init__.py", line 3, in <module>
+    from .bybit_client import bybit_client, api_error_handler
+  File "/Users/lualakol/bybit-telegram-bot/clients/bybit_client.py", line 12, in <module>
+    import aiohttp
+ModuleNotFoundError: No module named 'aiohttp'
