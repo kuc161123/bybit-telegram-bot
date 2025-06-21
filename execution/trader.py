@@ -454,6 +454,10 @@ class TradeExecutor:
             chat_data["entry_price"] = str(avg_price)
             chat_data[PRIMARY_ENTRY_PRICE] = avg_price
             
+            # Mark that this position was created by the bot
+            chat_data["position_created"] = True
+            chat_data["position_created_time"] = time.time()
+            
             orders_placed.append(f"Market: {market_order_id[:8]}...")
             order_details["market"] = {
                 "id": market_order_id,
@@ -1660,6 +1664,10 @@ class TradeExecutor:
                 avg_price = safe_decimal_conversion(market_result.get("avgPrice", str(entry_price)))
                 chat_data[GGSHOT_ENTRY_ORDER_IDS] = [market_order_id]
                 orders_placed.append(f"Market Entry: {market_order_id[:8]}...")
+                
+                # Mark that this position was created by the bot
+                chat_data["position_created"] = True
+                chat_data["position_created_time"] = time.time()
                 order_details["market"] = {
                     "id": market_order_id,
                     "price": avg_price,
@@ -1919,6 +1927,10 @@ class TradeExecutor:
                 avg_price = safe_decimal_conversion(market_result.get("avgPrice", str(current_price)))
                 all_entry_order_ids.append(market_order_id)
                 orders_placed.append(f"Market Entry: {market_order_id[:8]}...")
+                
+                # Mark that this position was created by the bot
+                chat_data["position_created"] = True
+                chat_data["position_created_time"] = time.time()
                 order_details["market"] = {
                     "id": market_order_id,
                     "price": avg_price,

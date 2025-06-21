@@ -186,7 +186,10 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         bot_positions = []
         external_positions = []
         
+        # Get both bot_data and chat_data
         bot_data = context.get('application', {}).get('bot_data', {}) if isinstance(context, dict) else {}
+        # Also get the direct chat_data from persistence
+        all_chat_data = context.get('application', {}).get('chat_data', {}) if isinstance(context, dict) else {}
         
         # Calculate largest position percentage
         largest_position_pct = 0
@@ -196,34 +199,121 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
                 largest_margin = max(position_margins)
                 largest_position_pct = (largest_margin / float(total_balance) * 100)
         
+        # Get external positions dict for easy lookup
+        external_positions_dict = bot_data.get('external_positions', {})
+        external_symbols = set()
+        for ext_pos_data in external_positions_dict.values():
+            if isinstance(ext_pos_data, dict):
+                ext_symbol = ext_pos_data.get('symbol', '')
+                if ext_symbol:
+                    external_symbols.add(ext_symbol)
+        
+        # Debug logging for position classification
+        logger.debug(f"Dashboard: Found {len(external_symbols)} external symbols: {external_symbols}")
+        logger.debug(f"Dashboard: Processing {len(active_positions)} active positions")
+        
         for pos in active_positions:
             symbol = pos.get('symbol', '')
             # Check if position is tracked by bot
             is_bot_position = False
+            is_external = False
+            found_in = None
             
-            # Method 1: Check active monitors
-            for chat_id_str in bot_data:
-                if chat_id_str.startswith('chat_'):
-                    chat_data = bot_data.get(chat_id_str, {})
-                    monitor_info = chat_data.get(ACTIVE_MONITOR_TASK, {})
-                    if monitor_info and monitor_info.get('symbol') == symbol and monitor_info.get('active'):
-                        is_bot_position = True
-                        break
+            # First check if it's in the external positions dict
+            if symbol in external_symbols:
+                is_external = True
+                found_in = "external_positions dict"
+            else:
+                # Check active monitors in chat data
+                for key in bot_data:
+                    if key.startswith('chat_data_'):
+                        chat_data = bot_data.get(key, {})
+                        if isinstance(chat_data, dict):
+                            monitor_info = chat_data.get(ACTIVE_MONITOR_TASK, {})
+                            if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
+                                if monitor_info.get('active', False):
+                                    # Check if it's external monitoring
+                                    if monitor_info.get('external_position', False):
+                                        is_external = True
+                                        found_in = f"{key} (external monitor)"
+                                    else:
+                                        is_bot_position = True
+                                        found_in = f"{key} (bot monitor)"
+                                    break
             
-            # Method 2: Check if position was recently created by bot (fallback)
-            if not is_bot_position:
-                for chat_id_str in bot_data:
-                    if chat_id_str.startswith('chat_'):
-                        chat_data = bot_data.get(chat_id_str, {})
-                        if (chat_data.get(SYMBOL) == symbol and 
-                            chat_data.get('position_created', False)):
+            # Also check the individual chat data for this specific chat_id
+            if not is_bot_position and not is_external:
+                chat_data_key = f'chat_data_{chat_id}'
+                if chat_data_key in bot_data:
+                    chat_data = bot_data.get(chat_data_key, {})
+                    if isinstance(chat_data, dict):
+                        # Check if this chat has an active monitor for this symbol
+                        monitor_info = chat_data.get(ACTIVE_MONITOR_TASK, {})
+                        if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
+                            if monitor_info.get('active', False):
+                                if monitor_info.get('external_position', False):
+                                    is_external = True
+                                    found_in = f"current chat {chat_data_key} (external)"
+                                else:
+                                    is_bot_position = True
+                                    found_in = f"current chat {chat_data_key} (bot)"
+            
+            # ALSO check the direct chat_data (not prefixed with chat_data_)
+            if not is_bot_position and not is_external:
+                # Check if we have chat data for the current chat_id
+                if str(chat_id) in all_chat_data:
+                    direct_chat_data = all_chat_data.get(str(chat_id), {})
+                    if isinstance(direct_chat_data, dict):
+                        # Check if this chat has an active monitor for this symbol
+                        monitor_info = direct_chat_data.get(ACTIVE_MONITOR_TASK, {})
+                        if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
+                            if monitor_info.get('active', False):
+                                if monitor_info.get('external_position', False):
+                                    is_external = True
+                                    found_in = f"direct chat_data[{chat_id}] (external)"
+                                else:
+                                    is_bot_position = True
+                                    found_in = f"direct chat_data[{chat_id}] (bot)"
+            
+            # ALSO check the current context's chat_data directly
+            if not is_bot_position and not is_external and isinstance(context, dict):
+                # Get chat_data from the current context
+                current_chat_data = context.get('chat_data', {})
+                if current_chat_data:
+                    # Check if this chat has an active monitor for this symbol
+                    monitor_info = current_chat_data.get(ACTIVE_MONITOR_TASK, {})
+                    if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
+                        if monitor_info.get('active', False):
+                            if monitor_info.get('external_position', False):
+                                is_external = True
+                                found_in = f"current context chat_data (external)"
+                            else:
+                                is_bot_position = True
+                                found_in = f"current context chat_data (bot)"
+                    
+                    # Also check position_created flag
+                    if not is_bot_position and not is_external:
+                        if current_chat_data.get('symbol') == symbol and current_chat_data.get('position_created'):
                             is_bot_position = True
-                            break
+                            found_in = f"current context position_created flag"
             
-            if is_bot_position:
+            # Log classification
+            logger.debug(f"Position {symbol}: bot={is_bot_position}, external={is_external}, found_in={found_in}")
+            
+            if is_external:
+                external_positions.append(pos)
+            elif is_bot_position:
                 bot_positions.append(pos)
             else:
+                # If we can't determine, treat as external
+                logger.debug(f"Position {symbol}: Unable to determine origin, treating as external")
                 external_positions.append(pos)
+        
+        # Log final classification summary
+        logger.info(f"Dashboard position classification complete:")
+        logger.info(f"  Total active positions: {len(active_positions)}")
+        logger.info(f"  Bot positions: {len(bot_positions)} ({[p.get('symbol') for p in bot_positions]})")
+        logger.info(f"  External positions: {len(external_positions)} ({[p.get('symbol') for p in external_positions]})")
         
         # Calculate position metrics
         # Use positionIM (Initial Margin) for actual USDT used, not leveraged position value
@@ -373,6 +463,59 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         total_pnl = float(stats_data.get(STATS_TOTAL_PNL, 0))
         win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
         
+        # Update win/loss stats with current P&L if positions are closed
+        if total_unrealized_pnl != 0:
+            if total_unrealized_pnl > 0:
+                stats_data['stats_total_wins_pnl'] = stats_data.get('stats_total_wins_pnl', 0) + total_unrealized_pnl
+            else:
+                stats_data['stats_total_losses_pnl'] = stats_data.get('stats_total_losses_pnl', 0) + abs(total_unrealized_pnl)
+        
+        # Store overall win rate for other calculations
+        stats_data['overall_win_rate'] = win_rate
+        
+        # Initialize missing stats
+        if 'stats_total_wins_pnl' not in stats_data:
+            stats_data['stats_total_wins_pnl'] = 0
+        if 'stats_total_losses_pnl' not in stats_data:
+            stats_data['stats_total_losses_pnl'] = 0
+        if 'bot_start_time' not in stats_data:
+            stats_data['bot_start_time'] = datetime.now().timestamp()
+        if 'stats_max_drawdown' not in stats_data:
+            stats_data['stats_max_drawdown'] = 0
+        
+        # Get monitor tasks for counting
+        monitor_tasks = bot_data.get('monitor_tasks', {})
+        
+        # Count active monitors more accurately
+        active_monitor_count = 0
+        
+        # Count from monitor_tasks registry
+        for symbol_tasks in monitor_tasks.values():
+            if isinstance(symbol_tasks, dict):
+                for task_info in symbol_tasks.values():
+                    if isinstance(task_info, dict) and task_info.get('active', False):
+                        active_monitor_count += 1
+        
+        # Also count from chat data
+        for key in bot_data:
+            if key.startswith('chat_data_'):
+                chat_data = bot_data.get(key, {})
+                if isinstance(chat_data, dict):
+                    monitor_info = chat_data.get(ACTIVE_MONITOR_TASK, {})
+                    if isinstance(monitor_info, dict) and monitor_info.get('active', False):
+                        active_monitor_count += 1
+        
+        # Also check current context chat data
+        if isinstance(context, dict):
+            current_chat_data = context.get('chat_data', {})
+            if current_chat_data:
+                monitor_info = current_chat_data.get(ACTIVE_MONITOR_TASK, {})
+                if isinstance(monitor_info, dict) and monitor_info.get('active', False):
+                    # Only count if not already counted
+                    chat_key = f'chat_data_{chat_id}'
+                    if chat_key not in bot_data:
+                        active_monitor_count += 1
+        
         # Check if AI is enabled
         from config.settings import LLM_PROVIDER
         stats_data['ai_enabled'] = LLM_PROVIDER != 'stub'
@@ -451,44 +594,46 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
 └ Data Points: {len(active_positions)} positions
 
 🎯 <b>PREDICTIVE SIGNALS</b>
-├ Next Win Prob: {win_rate:.1f}% ±{(5.0 if win_rate > 60 else 8.0):.1f}%
-├ Expected 24h: {'+' if total_pnl >= 0 else ''}{format_number(total_pnl/max(1, total_trades) * min(5, total_trades))}
-├ Trend: {win_rate/100:.2f} {'▇' * int(win_rate/10)}{'░' * (10-int(win_rate/10))} {'Strong' if win_rate > 70 else 'Moderate' if win_rate > 50 else 'Weak'}
-├ Performance: {total_trades} trades | {win_rate:.0f}% wins
-└ Status: {'🟢 Active' if total_trades > 0 else '⚪ No data'}
+├ Win Rate: {win_rate:.1f}% over {total_trades} trades
+├ Win Streak: {stats_data.get(STATS_WIN_STREAK, 0)} | Loss Streak: {stats_data.get(STATS_LOSS_STREAK, 0)}
+├ Momentum: {'🔥 Hot' if stats_data.get(STATS_WIN_STREAK, 0) >= 3 else '✨ Warming' if stats_data.get(STATS_WIN_STREAK, 0) >= 2 else '❄️ Cold' if stats_data.get(STATS_LOSS_STREAK, 0) >= 2 else '⚖️ Neutral'}
+├ Next Trade Confidence: {min(95, win_rate + stats_data.get(STATS_WIN_STREAK, 0) * 2):.0f}%
+└ Trend: {'▲ Uptrend' if win_rate > 60 else '▼ Downtrend' if win_rate < 40 else '→ Sideways'}
 
 🧪 <b>STRESS SCENARIOS</b>
-├ Position Risk: {balance_used_pct:.1f}% capital deployed
-├ Max Exposure: ${format_number(total_margin_used)}
-├ Potential Loss: -${format_number(potential_loss_sl)}
-└ Risk Level: {health_emoji} {health_status.upper()}
+├ Current Risk: {balance_used_pct:.1f}% of capital at risk
+├ Max Position Loss: -${format_number(potential_loss_sl)}
+├ 20% Market Drop: -${format_number(total_margin_used * 0.2)}
+├ 50% Market Drop: -${format_number(total_margin_used * 0.5)}
+└ Risk Status: {health_emoji} {health_status} ({100-account_health:.0f}% risk utilization)
 
 ⚡ <b>LIVE MONITORING</b>
 ├ Active Positions: {len(active_positions)}
-├ Bot Monitoring: {len(bot_positions)} positions
-├ External Tracking: {len(external_positions)} positions
-├ Last Update: {now.strftime('%H:%M:%S')}
-└ Status: {'🟢 All systems active' if len(active_positions) > 0 else '⚪ No active positions'}
+├ Bot Created: {len(bot_positions)} positions
+├ External Adopted: {len(external_positions)} positions
+├ Active Monitors: {active_monitor_count}
+└ System Status: 🟢 All systems operational
 
 💡 <b>TRADING INSIGHTS</b>
-├ Win Rate: {win_rate:.1f}% over {total_trades} trades
-├ Best Performance: {'+' if float(stats_data.get(STATS_BEST_TRADE, 0)) > 0 else ''}${format_number(abs(float(stats_data.get(STATS_BEST_TRADE, 0))))}
-├ Risk Management: SL on all positions ✓
-├ Avg Trade Size: {(total_margin_used/len(active_positions) if len(active_positions) > 0 else 0):.0f} USDT
-└ {'🟢 AI insights available' if stats_data.get('ai_enabled', False) else '⚪ Configure OpenAI for insights'}
+├ Performance: {win_rate:.1f}% win rate ({wins}W/{losses}L)
+├ Best Trade: +${format_number(abs(float(stats_data.get(STATS_BEST_TRADE, 0))))}
+├ Worst Trade: -${format_number(abs(float(stats_data.get(STATS_WORST_TRADE, 0))))}
+├ Current Streak: {'🔥 ' + str(stats_data.get(STATS_WIN_STREAK, 0)) + ' wins' if stats_data.get(STATS_WIN_STREAK, 0) > 0 else '❄️ ' + str(stats_data.get(STATS_LOSS_STREAK, 0)) + ' losses' if stats_data.get(STATS_LOSS_STREAK, 0) > 0 else '⚖️ None'}
+└ {'🧠 AI analysis enabled' if stats_data.get('ai_enabled', False) else '💡 Enable AI for advanced insights'}
 
-📊 <b>PORTFOLIO DISTRIBUTION</b>
-├ Positions: {len(active_positions)} active symbols
-├ Largest Position: {largest_position_pct:.1f}% of capital
-├ Total Margin Used: ${format_number(total_margin_used)}
-├ Available Balance: ${format_number(available_balance)}
-└ Diversification: {'🟢 Good' if len(active_positions) >= 3 else '🟡 Moderate' if len(active_positions) >= 2 else '🔴 Low'}
+📊 <b>PORTFOLIO OPTIMIZATION</b>
+├ Positions: {len(active_positions)} symbols ({len(set(p.get('symbol', '') for p in active_positions))} unique)
+├ Largest Position: {largest_position_pct:.1f}% of portfolio
+├ Bot Positions: {len(bot_positions)} ({(len(bot_positions)/len(active_positions)*100 if len(active_positions) > 0 else 0):.0f}%)
+├ External Positions: {len(external_positions)} ({(len(external_positions)/len(active_positions)*100 if len(active_positions) > 0 else 0):.0f}%)
+└ Risk Distribution: {'⚠️ Concentrated' if largest_position_pct > 30 else '✅ Balanced' if largest_position_pct < 20 else '🟡 Moderate'}
 
 ⚖️ <b>ACTIVE MANAGEMENT</b>
-├ Positions: {len(active_positions)} | Monitored: {len(bot_positions)}
-├ Avg Position: {(total_margin_used/len(active_positions) if len(active_positions) > 0 else 0):.0f} USDT
-├ Capital Usage: {balance_used_pct:.1f}% ({health_emoji} {health_status})
-└ Risk/Reward: 1:{(potential_profit_tp1/potential_loss_sl if potential_loss_sl > 0 else 0):.1f}
+├ Active Monitors: {active_monitor_count}
+├ Conservative: {stats_data.get('stats_conservative_trades', 0)} | Fast: {stats_data.get('stats_fast_trades', 0)}
+├ Avg Position Size: ${(total_margin_used/len(active_positions) if len(active_positions) > 0 else 0):.0f}
+├ Open Orders: {len(all_orders)} active
+└ TP1 Cancellations: {stats_data.get('stats_conservative_tp1_cancellations', 0)}
 
 ═══════════════════════════════════
 """
