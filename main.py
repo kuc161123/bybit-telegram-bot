@@ -841,6 +841,20 @@ async def enhanced_post_init(application: Application) -> None:
     # except Exception as e:
     #     logger.error(f"📱 Error initializing social media sentiment: {e}")
     
+    # NEW: Initialize alert manager (store reference to it separately to avoid deepcopy issues)
+    try:
+        from alerts import AlertManager
+        alert_manager = AlertManager(application.bot)
+        # Don't store in bot_data to avoid deepcopy issues with Bot object
+        # Instead, we'll access it through a different mechanism
+        await alert_manager.start()
+        logger.info("✅ Alert Manager initialized and started")
+        
+        # Store a reference that can be accessed by handlers
+        application._alert_manager = alert_manager
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize Alert Manager: {e}")
+    
     # ENHANCED: Start background tasks (within async context)
     await start_background_tasks()
     
@@ -885,6 +899,16 @@ async def graceful_shutdown():
                     await task
                 except asyncio.CancelledError:
                     pass
+        
+        # Stop alert manager
+        if _global_app:
+            try:
+                alert_manager = getattr(_global_app, '_alert_manager', None)
+                if alert_manager:
+                    await alert_manager.stop()
+                    logger.info("✅ Alert manager stopped")
+            except Exception as e:
+                logger.error(f"Error stopping alert manager: {e}")
         
         # Stop all monitors
         if _global_app:

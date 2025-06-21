@@ -18,6 +18,9 @@ from .commands import (
     dashboard_command, error_handler, help_command,
     hedge_mode_command, one_way_mode_command, check_mode_command
 )
+from .alert_handlers import (
+    alerts_command, handle_alerts_callback, handle_alert_text_input, test_report_command
+)
 from .conversation import (
     start_conversation, symbol_handler, side_handler,
     primary_entry_handler, limit_entries_handler, take_profits_handler, 
@@ -381,6 +384,28 @@ def setup_position_mode_commands(app):
     except Exception as e:
         logger.error(f"❌ Error loading position mode command handlers: {e}")
 
+def setup_alert_handlers(app):
+    """Setup alert system handlers"""
+    try:
+        # Alert command handlers
+        app.add_handler(CommandHandler("alerts", alerts_command))
+        app.add_handler(CommandHandler("testreport", test_report_command))
+        
+        # Alert callback handlers
+        app.add_handler(CallbackQueryHandler(handle_alerts_callback, pattern="^alerts_"))
+        app.add_handler(CallbackQueryHandler(handle_alerts_callback, pattern="^alert_"))
+        app.add_handler(CallbackQueryHandler(handle_alerts_callback, pattern="^set_priority_"))
+        
+        # NOTE: Removed global text handler for alerts to prevent conflict with trade conversation
+        # Alert text input is now handled within alert-specific conversation states
+        
+        logger.info("✅ Alert system handlers loaded!")
+        logger.info("🔔 Smart alerts & notifications enabled")
+        logger.info("📊 Price, position, risk, and market alerts available")
+        
+    except Exception as e:
+        logger.error(f"❌ Error loading alert handlers: {e}")
+
 def setup_handlers(app: Application):
     """Setup all enhanced bot handlers with dual approach support"""
     logger.info("Setting up enhanced dual approach trading bot handlers...")
@@ -397,8 +422,12 @@ def setup_handlers(app: Application):
     # NEW: Position mode command handlers
     setup_position_mode_commands(app)
     
-    # ENHANCED: Dual approach conversation handlers (PRIORITY)
+    # ENHANCED: Dual approach conversation handlers (HIGH PRIORITY)
+    # Must be registered BEFORE alert handlers to ensure trade input works
     setup_enhanced_conversation_handlers(app)
+    
+    # NEW: Alert system handlers (after conversation handlers)
+    setup_alert_handlers(app)
     
     # Enhanced callback handlers
     setup_callback_handlers(app)
@@ -418,6 +447,13 @@ def setup_handlers(app: Application):
     # Enhanced statistics handlers
     setup_enhanced_stats_handlers(app)
     
+    # Alert text input handler (LOW PRIORITY - after conversation handlers)
+    # This ensures trade conversation gets text input first
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND, 
+        handle_alert_text_input
+    ), group=1)  # Lower priority group
+    
     # Error handler (last)
     app.add_error_handler(error_handler)
     
@@ -431,6 +467,7 @@ def setup_handlers(app: Application):
     logger.info("📈 Enhanced performance tracking for both approaches")
     logger.info("🧠 AI insights enabled for both trading strategies")
     logger.info("📱 Mobile-first design with improved workflows")
+    logger.info("🔔 Alert system with proper handler priority to avoid conflicts")
 
 # Export main setup function
 __all__ = ['setup_handlers']

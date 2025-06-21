@@ -424,6 +424,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 • /one_way_mode - Enable one-way mode (single direction)
 • /check_mode - Check current position mode
 
+🔔 <b>SMART ALERTS:</b>
+• /alerts - Manage price & position alerts
+• /testreport - Generate sample daily report
+• Price crossing & percentage change alerts
+• Position P&L thresholds
+• Risk warnings & market volatility
+• Daily trading summary reports
 
 ⚙️ <b>QUICK ACTIONS:</b>
 • Use buttons for faster navigation

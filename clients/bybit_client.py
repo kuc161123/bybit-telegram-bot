@@ -289,7 +289,15 @@ async def get_position_pnl(symbol: str) -> Dict:
         Dict with P&L information
     """
     try:
-        position = await get_position_info(symbol)
+        positions = await get_position_info(symbol)
+        position = None
+        
+        if positions:
+            # Find the position with non-zero size
+            for pos in positions:
+                if float(pos.get("size", 0)) > 0:
+                    position = pos
+                    break
         
         if not position:
             return {

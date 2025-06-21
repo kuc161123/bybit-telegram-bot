@@ -892,7 +892,12 @@ async def update_performance_stats_on_close(ctx_app, chat_data: dict, position_d
             "STATS_EXTERNAL_TRADES": 0,
             "STATS_EXTERNAL_PNL": Decimal("0"),
             "STATS_EXTERNAL_WINS": 0,
-            "STATS_EXTERNAL_LOSSES": 0
+            "STATS_EXTERNAL_LOSSES": 0,
+            # Additional stats for dashboard calculations
+            'stats_total_wins_pnl': Decimal("0"),
+            'stats_total_losses_pnl': Decimal("0"),
+            'stats_max_drawdown': Decimal("0"),
+            'bot_start_time': time.time()
         }
         
         # Initialize any missing stats
@@ -906,6 +911,8 @@ async def update_performance_stats_on_close(ctx_app, chat_data: dict, position_d
         bot_data[STATS_BEST_TRADE] = safe_decimal_conversion(bot_data.get(STATS_BEST_TRADE, Decimal("0")))
         bot_data[STATS_WORST_TRADE] = safe_decimal_conversion(bot_data.get(STATS_WORST_TRADE, Decimal("0")))
         bot_data["STATS_EXTERNAL_PNL"] = safe_decimal_conversion(bot_data.get("STATS_EXTERNAL_PNL", Decimal("0")))
+        bot_data['stats_total_wins_pnl'] = safe_decimal_conversion(bot_data.get('stats_total_wins_pnl', Decimal("0")))
+        bot_data['stats_total_losses_pnl'] = safe_decimal_conversion(bot_data.get('stats_total_losses_pnl', Decimal("0")))
         
         # Store trade details
         trade_details = {
@@ -983,6 +990,12 @@ async def update_performance_stats_on_close(ctx_app, chat_data: dict, position_d
             
             # Update PnL tracking
             bot_data[STATS_TOTAL_PNL] = bot_data[STATS_TOTAL_PNL] + pnl
+            
+            # Track wins and losses P&L separately for profit factor calculation
+            if pnl > 0:
+                bot_data['stats_total_wins_pnl'] = bot_data.get('stats_total_wins_pnl', Decimal("0")) + pnl
+            elif pnl < 0:
+                bot_data['stats_total_losses_pnl'] = bot_data.get('stats_total_losses_pnl', Decimal("0")) + pnl
             
             # Update best/worst trade
             if pnl > bot_data[STATS_BEST_TRADE]:
@@ -1174,8 +1187,16 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
     
     # Get initial position to establish baseline
     try:
-        initial_position = await get_position_info(symbol)
-        if initial_position and float(initial_position.get("size", 0)) > 0:
+        positions = await get_position_info(symbol)
+        initial_position = None
+        if positions:
+            # Find the position with non-zero size
+            for pos in positions:
+                if float(pos.get("size", 0)) > 0:
+                    initial_position = pos
+                    break
+        
+        if initial_position:
             last_position_size = safe_decimal_conversion(initial_position.get("size", "0"))
             last_position_data = initial_position.copy()
             chat_data[LAST_KNOWN_POSITION_SIZE] = last_position_size
@@ -1201,7 +1222,14 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                     break
                 
                 # PERFORMANCE: Smart position monitoring with change detection
-                position = await get_position_info(symbol)
+                positions = await get_position_info(symbol)
+                position = None
+                if positions:
+                    # Find the position with non-zero size
+                    for pos in positions:
+                        if float(pos.get("size", 0)) > 0:
+                            position = pos
+                            break
                 
                 if not position:
                     logger.warning(f"⚠️ No position data for {symbol} (cycle {monitoring_cycles})")

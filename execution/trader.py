@@ -11,6 +11,7 @@ ENHANCED: More informative and visually appealing execution messages
 import logging
 import time
 import asyncio
+import uuid
 from decimal import Decimal
 from typing import Optional, List, Dict, Any
 
@@ -20,7 +21,10 @@ from utils.formatters import (
     format_decimal_or_na, format_price, get_emoji, format_mobile_currency,
     format_mobile_percentage, create_mobile_separator
 )
-from clients.bybit_helpers import place_order_with_retry
+from clients.bybit_helpers import place_order_with_retry, add_trade_group_to_protection
+
+# Position merger for conservative and fast approaches
+from execution.position_merger import ConservativePositionMerger, FastPositionMerger
 
 # Mirror trading imports (added for second account support)
 try:
@@ -42,6 +46,8 @@ class TradeExecutor:
     
     def __init__(self):
         self.logger = logger
+        self.position_merger = ConservativePositionMerger()
+        self.fast_position_merger = FastPositionMerger()
     
     def _generate_unique_order_link_id(self, base_id: str) -> str:
         """Generate a unique order link ID by appending timestamp"""
@@ -368,6 +374,30 @@ class TradeExecutor:
             position_qty = position_size / entry_price
             position_qty = value_adjusted_to_step(position_qty, qty_step)
             
+            # Check if we should merge with existing position
+            from telegram.ext import Application
+            app = Application._instances[0] if hasattr(Application, '_instances') else None
+            bot_data = app.bot_data if app else {}
+            
+            should_merge, existing_data = await self.fast_position_merger.should_merge_positions(
+                symbol, side, "fast", bot_data
+            )
+            
+            if should_merge:
+                self.logger.info(f"🔄 MERGING with existing {side} position on {symbol}")
+                return await self._execute_fast_merge(
+                    application=app,
+                    chat_id=chat_id,
+                    chat_data=chat_data,
+                    existing_data=existing_data,
+                    margin_amount=margin_amount,
+                    leverage=leverage,
+                    position_qty=position_qty,
+                    tp_price=tp_price,
+                    sl_price=sl_price,
+                    entry_price=entry_price
+                )
+            
             # FIXED: Store properly rounded quantities for TP/SL orders
             tp_sl_qty = value_adjusted_to_step(position_qty, qty_step)
             
@@ -382,14 +412,22 @@ class TradeExecutor:
             order_details = {}
             errors = []
             
+            # Generate trade group ID for tracking
+            trade_group_id = str(uuid.uuid4())[:8]
+            chat_data["trade_group_id"] = trade_group_id
+            chat_data[TRADING_APPROACH] = "fast"  # Set approach for monitoring
+            
             # FIXED: Place market order with automatic position mode detection and proper quantity rounding
             self.logger.info(f"📈 Placing FAST market order for {position_qty} {symbol}")
             self.logger.info(f"🔧 Market order quantity: {position_qty} (step: {qty_step})")
+            
+            order_link_id = f"{trade_group_id}_FAST_MARKET"
             market_result = await place_order_with_retry(
                 symbol=symbol,
                 side=side,
                 order_type="Market",
                 qty=str(position_qty),
+                order_link_id=order_link_id
                 # REMOVED: position_idx=0 - now automatically detected
             )
             
@@ -461,12 +499,14 @@ class TradeExecutor:
             self.logger.info(f"🎯 Placing TP order at {tp_price}")
             self.logger.info(f"🔧 TP quantity adjusted: {position_qty} -> {tp_sl_qty} (step: {qty_step})")
             
+            tp_order_link_id = f"{trade_group_id}_FAST_TP"
             tp_result = await place_order_with_retry(
                 symbol=symbol,
                 side="Sell" if side == "Buy" else "Buy",
                 order_type="Market",
                 qty=str(tp_sl_qty),
                 trigger_price=str(tp_price),
+                order_link_id=tp_order_link_id,
                 # position_idx will be auto-detected by place_order_with_retry
                 reduce_only=True
             )
@@ -519,12 +559,14 @@ class TradeExecutor:
             self.logger.info(f"🛡️ Placing SL order at {sl_price}")
             self.logger.info(f"🔧 SL quantity adjusted: {position_qty} -> {tp_sl_qty} (step: {qty_step})")
             
+            sl_order_link_id = f"{trade_group_id}_FAST_SL"
             sl_result = await place_order_with_retry(
                 symbol=symbol,
                 side="Sell" if side == "Buy" else "Buy",
                 order_type="Market",
                 qty=str(tp_sl_qty),
                 trigger_price=str(sl_price),
+                order_link_id=sl_order_link_id,
                 # position_idx will be auto-detected by place_order_with_retry
                 reduce_only=True
             )
@@ -702,12 +744,299 @@ class TradeExecutor:
                 )
             }
     
+    async def _execute_fast_merge(self, application, chat_id: int, chat_data: dict,
+                                 existing_data: dict, margin_amount: Decimal,
+                                 leverage: int, position_qty: Decimal,
+                                 tp_price: Decimal, sl_price: Decimal,
+                                 entry_price: Decimal) -> dict:
+        """Execute position merge for fast approach"""
+        start_time = time.time()
+        
+        try:
+            # Extract parameters
+            symbol = chat_data.get(SYMBOL)
+            side = chat_data.get(SIDE)
+            tick_size = safe_decimal_conversion(chat_data.get(INSTRUMENT_TICK_SIZE, "0.01"))
+            qty_step = safe_decimal_conversion(chat_data.get(INSTRUMENT_QTY_STEP, "0.001"))
+            
+            # Generate unique trade group ID for tracking
+            trade_group_id = str(uuid.uuid4())[:8]
+            chat_data["trade_group_id"] = trade_group_id
+            chat_data[TRADING_APPROACH] = "fast"  # Set approach for monitoring
+            add_trade_group_to_protection(trade_group_id)
+            
+            # Prepare new position parameters
+            new_params = {
+                'symbol': symbol,
+                'side': side,
+                'position_size': position_qty,
+                'tp_price': tp_price,
+                'sl_price': sl_price,
+                'leverage': leverage,
+                'tick_size': tick_size,
+                'qty_step': qty_step
+            }
+            
+            # Calculate merged parameters
+            merged_params = self.fast_position_merger.calculate_merged_parameters(
+                existing_data, new_params, side
+            )
+            
+            # Validate merge parameters
+            if not await self.fast_position_merger.validate_merge(symbol, side, merged_params):
+                raise ValueError("Merge validation failed - invalid price levels")
+            
+            # Cancel existing orders
+            self.logger.info(f"🗑️ Cancelling existing orders for {symbol}...")
+            await self.fast_position_merger.cancel_existing_orders(existing_data['orders'])
+            
+            # Place the new position addition (market order)
+            self.logger.info(f"📦 Adding {new_params['position_size']} to existing position")
+            
+            # Place market order to add to position
+            add_qty = value_adjusted_to_step(new_params['position_size'], qty_step)
+            order_link_id = f"{trade_group_id}_FAST_MARKET"
+            
+            order_params = {
+                "symbol": symbol,
+                "side": side,
+                "order_type": "Market",
+                "qty": add_qty,
+                "order_link_id": order_link_id
+            }
+            
+            order_result = await place_order_with_retry(**order_params)
+            if not order_result or not order_result.get("orderId"):
+                raise ValueError(f"Failed to add to position: {order_result}")
+            
+            order_id = order_result.get("orderId")
+            fill_price = Decimal(str(order_result.get("avgPrice", entry_price)))
+            
+            # Store the addition for tracking
+            chat_data["market_order_id"] = order_id
+            chat_data["entry_price"] = str(fill_price)
+            chat_data["merged_position"] = True
+            chat_data["merge_details"] = {
+                "existing_size": str(merged_params['existing_size']),
+                "added_size": str(add_qty),
+                "total_size": str(merged_params['merged_size'])
+            }
+            
+            # Track order IDs
+            orders_placed = [f"Market: {order_id[:8]}..."]
+            order_details = {
+                "market": {
+                    "id": order_id,
+                    "price": fill_price,
+                    "qty": add_qty
+                }
+            }
+            errors = []
+            
+            # Place new TP order with merged parameters
+            tp_qty = value_adjusted_to_step(merged_params['merged_size'], qty_step)
+            tp_order_link_id = f"{trade_group_id}_FAST_TP"
+            
+            tp_order_params = {
+                "symbol": symbol,
+                "side": "Buy" if side == "Sell" else "Sell",
+                "order_type": "Market",
+                "qty": tp_qty,
+                "trigger_price": str(merged_params['tp_price']),
+                "reduce_only": True,
+                "order_link_id": tp_order_link_id
+            }
+            
+            tp_result = await place_order_with_retry(**tp_order_params)
+            tp_order_id = None
+            if tp_result and tp_result.get("orderId"):
+                tp_order_id = tp_result.get("orderId")
+                chat_data["tp_order_id"] = tp_order_id
+                chat_data[TP_ORDER_IDS] = [tp_order_id]
+                orders_placed.append(f"TP: {tp_order_id[:8]}...")
+                order_details["tp"] = {
+                    "id": tp_order_id,
+                    "price": merged_params['tp_price'],
+                    "qty": tp_qty
+                }
+                self.logger.info(f"✅ Placed TP at {merged_params['tp_price']} for {tp_qty} qty")
+            else:
+                errors.append("TP order placement failed")
+            
+            # Place new SL order with merged parameters
+            sl_qty = value_adjusted_to_step(merged_params['merged_size'], qty_step)
+            sl_order_link_id = f"{trade_group_id}_FAST_SL"
+            
+            sl_order_params = {
+                "symbol": symbol,
+                "side": "Buy" if side == "Sell" else "Sell",
+                "order_type": "Market",
+                "qty": sl_qty,
+                "trigger_price": str(merged_params['sl_price']),
+                "reduce_only": True,
+                "order_link_id": sl_order_link_id
+            }
+            
+            sl_result = await place_order_with_retry(**sl_order_params)
+            sl_order_id = None
+            if sl_result and sl_result.get("orderId"):
+                sl_order_id = sl_result.get("orderId")
+                chat_data["sl_order_id"] = sl_order_id
+                chat_data[SL_ORDER_ID] = sl_order_id
+                orders_placed.append(f"SL: {sl_order_id[:8]}...")
+                order_details["sl"] = {
+                    "id": sl_order_id,
+                    "price": merged_params['sl_price'],
+                    "qty": sl_qty
+                }
+                self.logger.info(f"✅ Placed SL at {merged_params['sl_price']} for {sl_qty} qty")
+            else:
+                errors.append("SL order placement failed")
+            
+            # Mirror trading for merge
+            mirror_results = {"market": None, "tp": None, "sl": None, "errors": []}
+            if MIRROR_TRADING_AVAILABLE and is_mirror_trading_enabled():
+                self.logger.info(f"🔄 Executing merge on mirror account...")
+                
+                # Mirror the market order addition
+                mirror_market = await mirror_market_order(
+                    symbol=symbol,
+                    side=side,
+                    qty=add_qty,
+                    position_idx=None  # Will auto-detect
+                )
+                if mirror_market:
+                    mirror_results["market"] = mirror_market
+                else:
+                    mirror_results["errors"].append("Market order mirror failed")
+                
+                # Mirror the new TP order
+                if tp_order_id:
+                    mirror_tp = await mirror_tp_sl_order(
+                        symbol=symbol,
+                        side="Buy" if side == "Sell" else "Sell",
+                        qty=tp_qty,
+                        trigger_price=str(merged_params['tp_price']),
+                        position_idx=None,  # Will auto-detect
+                        order_link_id=f"{tp_order_link_id}_MIRROR"
+                    )
+                    mirror_results["tp"] = mirror_tp
+                
+                # Mirror the new SL order
+                if sl_order_id:
+                    mirror_sl = await mirror_tp_sl_order(
+                        symbol=symbol,
+                        side="Buy" if side == "Sell" else "Sell",
+                        qty=sl_qty,
+                        trigger_price=str(merged_params['sl_price']),
+                        position_idx=None,  # Will auto-detect
+                        order_link_id=f"{sl_order_link_id}_MIRROR"
+                    )
+                    mirror_results["sl"] = mirror_sl
+            
+            # Start monitoring
+            monitor_started = False
+            try:
+                from execution.monitor import start_position_monitoring
+                monitor_started = await start_position_monitoring(
+                    application,
+                    chat_id,
+                    chat_data
+                )
+            except Exception as e:
+                self.logger.error(f"Monitor start error: {e}")
+            
+            # Calculate risk/reward
+            risk_amount = margin_amount
+            
+            # Calculate potential reward based on TP
+            if side == "Sell":  # SHORT
+                reward_amount = (fill_price - merged_params['tp_price']) * add_qty
+            else:  # LONG
+                reward_amount = (merged_params['tp_price'] - fill_price) * add_qty
+            
+            risk_reward_ratio = float(reward_amount / risk_amount) if risk_amount > 0 else 0
+            
+            # Format success message
+            execution_time = self._format_execution_time(start_time)
+            message = (
+                f"✅ <b>FAST POSITION MERGED SUCCESSFULLY</b> {execution_time}\n"
+                f"{create_mobile_separator()}\n"
+                f"🔄 <b>Merge Details:</b>\n"
+                f"Existing: {format_decimal_or_na(merged_params['existing_size'])} {symbol}\n"
+                f"Added: {format_decimal_or_na(add_qty)} @ {format_price(fill_price)}\n"
+                f"Total: {format_decimal_or_na(merged_params['merged_size'])} {symbol}\n\n"
+                f"🎯 <b>New Parameters:</b>\n"
+                f"TP: {format_price(merged_params['tp_price'])}\n"
+                f"SL: {format_price(merged_params['sl_price'])}\n\n"
+                f"📊 <b>Risk/Reward:</b>\n"
+                f"Risk: {format_mobile_currency(risk_amount)}\n"
+                f"Potential: {format_mobile_currency(reward_amount)}\n"
+                f"Ratio: 1:{risk_reward_ratio:.2f}\n"
+            )
+            
+            if monitor_started:
+                message += f"\n🔄 Monitoring active"
+            
+            # Add mirror results if available
+            if MIRROR_TRADING_AVAILABLE and is_mirror_trading_enabled():
+                if mirror_results["market"] and mirror_results["market"].get("orderId"):
+                    message += f"\n\n🔄 <b>MIRROR ACCOUNT MERGED</b>\n"
+                    message += f"Added: {add_qty} @ {mirror_results['market'].get('avgPrice', 'Market')}\n"
+                    
+                    if mirror_results["tp"] and mirror_results["tp"].get("orderId"):
+                        message += f"TP placed: ✅\n"
+                    else:
+                        message += f"TP placed: ❌\n"
+                        
+                    if mirror_results["sl"] and mirror_results["sl"].get("orderId"):
+                        message += f"SL placed: ✅\n"
+                    else:
+                        message += f"SL placed: ❌\n"
+                    
+                    if mirror_results["errors"]:
+                        message += f"\n⚠️ Mirror errors:\n"
+                        for error in mirror_results["errors"][:3]:
+                            message += f"• {error}\n"
+                elif mirror_results["enabled"]:
+                    message += f"\n\n⚠️ <b>MIRROR MERGE FAILED</b>\n"
+                    if mirror_results["errors"]:
+                        for error in mirror_results["errors"][:3]:
+                            message += f"• {error}\n"
+            
+            return {
+                "success": True,
+                "orders_placed": orders_placed,
+                "entry_price": fill_price,
+                "position_size": merged_params['merged_size'],
+                "market_order_id": order_id,
+                "tp_order_id": tp_order_id,
+                "sl_order_id": sl_order_id,
+                "message": message,
+                "errors": errors,
+                "risk_reward_ratio": risk_reward_ratio,
+                "risk_amount": risk_amount,
+                "reward_amount": reward_amount,
+                "merged": True
+            }
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error in fast merge: {e}", exc_info=True)
+            error_msg = f"Merge error: {str(e)}"
+            return {
+                "success": False,
+                "error": error_msg,
+                "orders_placed": [],
+                "message": f"❌ Trade execution failed: {error_msg}"
+            }
+    
     async def execute_conservative_approach(self, application, chat_id: int, chat_data: dict) -> dict:
         """
         Execute conservative approach: multiple limit orders + multiple TPs + SL
         REFINED: Enhanced tracking for complex order structure
         FIXED: Automatic position mode detection
         ENHANCED: More informative and visually appealing messages
+        NEW: Position merging for same symbol to bypass order limits
         """
         start_time = time.time()
         
@@ -720,6 +1049,13 @@ class TradeExecutor:
             tick_size = safe_decimal_conversion(chat_data.get(INSTRUMENT_TICK_SIZE, "0.01"))
             qty_step = safe_decimal_conversion(chat_data.get(INSTRUMENT_QTY_STEP, "0.001"))
             trade_group_id = chat_data.get(CONSERVATIVE_TRADE_GROUP_ID, "unknown")
+            
+            # Check if we should merge with existing position
+            # Pass bot_data to check if position belongs to bot
+            bot_data = application.bot_data if application else None
+            should_merge, existing_data = await self.position_merger.should_merge_positions(
+                symbol, side, "conservative", bot_data
+            )
             
             # Get all price levels
             limit_prices = []
@@ -737,6 +1073,15 @@ class TradeExecutor:
                     tp_prices.append(safe_decimal_conversion(price))
             
             sl_price = safe_decimal_conversion(chat_data.get(SL_PRICE))
+            
+            # If merging positions, handle the merge logic
+            if should_merge:
+                self.logger.info(f"🔄 MERGING with existing {side} position on {symbol}")
+                return await self._execute_conservative_merge(
+                    application, chat_id, chat_data, existing_data,
+                    limit_prices, tp_prices, sl_price, margin_amount, leverage,
+                    tick_size, qty_step, trade_group_id
+                )
             
             # Log trade initiation
             self.logger.info(f"🎯 CONSERVATIVE APPROACH TRADE INITIATED:")
@@ -1942,6 +2287,256 @@ class TradeExecutor:
                 )
             }
     
+    async def _execute_conservative_merge(self, application, chat_id: int, chat_data: dict,
+                                         existing_data: dict, limit_prices: list, tp_prices: list,
+                                         sl_price: Decimal, margin_amount: Decimal, leverage: int,
+                                         tick_size: Decimal, qty_step: Decimal, trade_group_id: str) -> dict:
+        """
+        Execute conservative position merge - combines new trade with existing position
+        """
+        start_time = time.time()
+        symbol = chat_data.get(SYMBOL)
+        side = chat_data.get(SIDE)
+        
+        try:
+            # Prepare new trade parameters
+            new_params = {
+                'symbol': symbol,
+                'side': side,
+                'leverage': leverage,
+                'position_size': margin_amount * leverage / (sum(limit_prices) / len(limit_prices)),
+                'limit_prices': limit_prices,
+                'sl_price': sl_price,
+                'tick_size': tick_size,
+                'qty_step': qty_step,
+                'take_profits': [
+                    {'price': tp_prices[0], 'percentage': 70},
+                    {'price': tp_prices[1], 'percentage': 10} if len(tp_prices) > 1 else None,
+                    {'price': tp_prices[2], 'percentage': 10} if len(tp_prices) > 2 else None,
+                    {'price': tp_prices[3], 'percentage': 10} if len(tp_prices) > 3 else None
+                ]
+            }
+            new_params['take_profits'] = [tp for tp in new_params['take_profits'] if tp]
+            
+            # Calculate merged parameters
+            merged_params = self.position_merger.calculate_merged_parameters(
+                existing_data, new_params, side
+            )
+            
+            # Validate merge parameters
+            if not await self.position_merger.validate_merge(symbol, side, merged_params):
+                raise ValueError("Merge validation failed - invalid price levels")
+            
+            # Cancel existing orders
+            self.logger.info(f"🗑️ Cancelling existing orders for {symbol}...")
+            await self.position_merger.cancel_existing_orders(existing_data['orders'])
+            
+            # Place the new position addition (market order)
+            self.logger.info(f"📦 Adding {new_params['position_size']} to existing position")
+            
+            # Place market order to add to position
+            add_qty = value_adjusted_to_step(new_params['position_size'], qty_step)
+            order_params = {
+                "symbol": symbol,
+                "side": side,
+                "order_type": "Market",
+                "qty": add_qty
+            }
+            
+            order_result = await place_order_with_retry(**order_params)
+            if not order_result or not order_result.get("orderId"):
+                raise ValueError(f"Failed to add to position: {order_result}")
+            
+            order_id = order_result.get("orderId")
+            fill_price = Decimal(str(order_result.get("avgPrice", limit_prices[0])))
+            
+            # Store the addition for tracking
+            chat_data[LIMIT_ORDER_IDS] = [order_id]
+            chat_data[CONSERVATIVE_LIMITS_FILLED] = [order_id]
+            chat_data["merged_position"] = True
+            chat_data["merge_details"] = {
+                "existing_size": str(merged_params['existing_size']),
+                "added_size": str(add_qty),
+                "total_size": str(merged_params['merged_size'])
+            }
+            
+            # Place new TP orders with merged parameters
+            tp_order_ids = []
+            for i, tp in enumerate(merged_params['take_profits'], 1):
+                tp_qty = value_adjusted_to_step(
+                    merged_params['merged_size'] * Decimal(tp['percentage']) / 100,
+                    qty_step
+                )
+                
+                if tp_qty > 0:
+                    tp_order_params = {
+                        "symbol": symbol,
+                        "side": "Buy" if side == "Sell" else "Sell",
+                        "order_type": "Market",
+                        "qty": tp_qty,
+                        "trigger_price": str(tp['price']),
+                        "reduce_only": True
+                    }
+                    
+                    tp_result = await place_order_with_retry(**tp_order_params)
+                    if tp_result and tp_result.get("orderId"):
+                        tp_order_ids.append(tp_result.get("orderId"))
+                        self.logger.info(f"✅ Placed TP{i} at {tp['price']} for {tp_qty} qty")
+            
+            chat_data[TP_ORDER_IDS] = tp_order_ids
+            
+            # Place new SL order with merged parameters
+            sl_qty = value_adjusted_to_step(merged_params['merged_size'], qty_step)
+            sl_order_params = {
+                "symbol": symbol,
+                "side": "Buy" if side == "Sell" else "Sell",
+                "order_type": "Market",
+                "qty": sl_qty,
+                "trigger_price": str(merged_params['sl_price']),
+                "reduce_only": True
+            }
+            
+            sl_result = await place_order_with_retry(**sl_order_params)
+            if sl_result and sl_result.get("orderId"):
+                chat_data[SL_ORDER_ID] = sl_result.get("orderId")
+                self.logger.info(f"✅ Placed SL at {merged_params['sl_price']} for {sl_qty} qty")
+            
+            # Mirror trading for merge
+            mirror_results = {"market": None, "tps": [], "sl": None, "errors": []}
+            if MIRROR_TRADING_AVAILABLE and is_mirror_trading_enabled():
+                self.logger.info(f"🔄 Executing merge on mirror account...")
+                
+                # Mirror the market order addition
+                mirror_market = await mirror_market_order(
+                    symbol=symbol,
+                    side=side,
+                    qty=add_qty,
+                    position_idx=None  # Will auto-detect
+                )
+                if mirror_market:
+                    mirror_results["market"] = mirror_market
+                else:
+                    mirror_results["errors"].append("Market order mirror failed")
+                
+                # Mirror the new TP orders
+                for i, tp in enumerate(merged_params['take_profits'], 1):
+                    tp_qty = value_adjusted_to_step(
+                        merged_params['merged_size'] * Decimal(tp['percentage']) / 100,
+                        qty_step
+                    )
+                    if tp_qty > 0:
+                        mirror_tp = await mirror_tp_sl_order(
+                            symbol=symbol,
+                            side="Buy" if side == "Sell" else "Sell",
+                            qty=tp_qty,
+                            trigger_price=str(tp['price']),
+                            position_idx=None,  # Will auto-detect
+                            order_link_id=f"TP{i}_{tp['percentage']}"
+                        )
+                        mirror_results["tps"].append(mirror_tp)
+                
+                # Mirror the new SL order
+                mirror_sl = await mirror_tp_sl_order(
+                    symbol=symbol,
+                    side="Buy" if side == "Sell" else "Sell",
+                    qty=sl_qty,
+                    trigger_price=str(merged_params['sl_price']),
+                    position_idx=None,  # Will auto-detect
+                    order_link_id=f"SL_{trade_group_id}"
+                )
+                mirror_results["sl"] = mirror_sl
+            
+            # Start monitoring
+            monitor_started = False
+            try:
+                from execution.monitor import start_position_monitoring
+                monitor_started = await start_position_monitoring(
+                    application,
+                    chat_id,
+                    chat_data
+                )
+            except Exception as e:
+                self.logger.error(f"Monitor start error: {e}")
+            
+            # Calculate risk/reward
+            risk_amount = margin_amount
+            max_reward = margin_amount * Decimal('3')  # Estimate
+            risk_reward_ratio = "3:1"
+            
+            # Format success message
+            execution_time = self._format_execution_time(start_time)
+            message = (
+                f"✅ <b>POSITION MERGED SUCCESSFULLY</b> {execution_time}\n"
+                f"{create_mobile_separator()}\n"
+                f"🔄 <b>Merge Details:</b>\n"
+                f"Existing: {format_decimal_or_na(merged_params['existing_size'])} {symbol}\n"
+                f"Added: {format_decimal_or_na(add_qty)} @ {format_price(fill_price)}\n"
+                f"Total: {format_decimal_or_na(merged_params['merged_size'])} {symbol}\n\n"
+                f"🎯 <b>New Parameters:</b>\n"
+                f"SL: {format_price(merged_params['sl_price'])}\n"
+            )
+            
+            for i, tp in enumerate(merged_params['take_profits'], 1):
+                message += f"TP{i}: {format_price(tp['price'])} ({tp['percentage']}%)\n"
+            
+            message += (
+                f"\n📊 <b>Risk/Reward:</b>\n"
+                f"Risk: {format_mobile_currency(risk_amount)}\n"
+                f"Max Reward: {format_mobile_currency(max_reward)}\n"
+                f"Ratio: {risk_reward_ratio}\n"
+            )
+            
+            if monitor_started:
+                message += f"\n🔄 Monitoring active"
+            
+            # Add mirror results if available
+            if MIRROR_TRADING_AVAILABLE and is_mirror_trading_enabled():
+                if mirror_results["market"] and mirror_results["market"].get("orderId"):
+                    message += f"\n\n🔄 <b>MIRROR ACCOUNT MERGED</b>\n"
+                    message += f"Added: {add_qty} @ {mirror_results['market'].get('avgPrice', 'Market')}\n"
+                    
+                    successful_tps = sum(1 for tp in mirror_results["tps"] if tp and tp.get("orderId"))
+                    message += f"TPs placed: {successful_tps}/{len(merged_params['take_profits'])}\n"
+                    
+                    if mirror_results["sl"] and mirror_results["sl"].get("orderId"):
+                        message += f"SL placed: ✅\n"
+                    else:
+                        message += f"SL placed: ❌\n"
+                    
+                    if mirror_results["errors"]:
+                        message += f"\n⚠️ Mirror errors:\n"
+                        for error in mirror_results["errors"][:3]:  # Show max 3 errors
+                            message += f"  • {error}\n"
+                else:
+                    message += f"\n\n❌ Mirror merge failed"
+            
+            return {
+                "success": True,
+                "orders_placed": [order_id] + tp_order_ids + ([chat_data.get(SL_ORDER_ID)] if chat_data.get(SL_ORDER_ID) else []),
+                "position_size": merged_params['merged_size'],
+                "trade_group_id": trade_group_id,
+                "message": message,
+                "avg_entry": fill_price,
+                "risk_reward_ratio": risk_reward_ratio,
+                "risk_amount": risk_amount,
+                "max_reward": max_reward,
+                "merged": True
+            }
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error in conservative merge: {e}", exc_info=True)
+            execution_time = self._format_execution_time(start_time)
+            return {
+                "success": False,
+                "error": f"Merge error: {str(e)}",
+                "orders_placed": [],
+                "message": (
+                    f"❌ <b>POSITION MERGE FAILED</b> {execution_time}\n"
+                    f"🚨 {str(e)}\n\n"
+                    f"The existing position remains unchanged."
+                )
+            }
+    
     async def execute_trade(self, application, chat_id: int, chat_data: dict) -> dict:
         """
         Main trade execution entry point
@@ -1958,6 +2553,7 @@ class TradeExecutor:
             # Mark trade as bot-initiated (not external)
             chat_data["external_position"] = False
             chat_data["read_only_monitoring"] = False
+            chat_data["position_created"] = True  # Flag to track bot-created positions
             
             if approach == "conservative":
                 result = await self.execute_conservative_approach(application, chat_id, chat_data)
@@ -1970,6 +2566,9 @@ class TradeExecutor:
             if result.get("success"):
                 self.logger.info(f"✅ Trade execution completed successfully with automatic position mode detection")
                 self.logger.info(f"   Orders placed: {len(result.get('orders_placed', []))}")
+                # Mark position as created by bot
+                chat_data["position_created"] = True
+                chat_data["position_created_time"] = time.time()
             else:
                 # Get error message - conservative approach uses 'errors' list, others use 'error'
                 error_msg = result.get('error') or ', '.join(result.get('errors', ['Unknown error']))

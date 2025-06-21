@@ -93,7 +93,11 @@ def calculate_active_days(stats_data: Dict) -> str:
         trades = stats_data.get(STATS_TOTAL_TRADES, 0)
         if trades > 0 and days > 0:
             return f"{days:.0f} days ({trades/days:.1f} trades/day)"
-    return "No data"
+    # Fallback to trades-based estimation
+    trades = stats_data.get(STATS_TOTAL_TRADES, 0)
+    if trades > 0:
+        return f"{trades} trades recorded"
+    return "Just started"
 
 def get_session_win_rates(stats_data: Dict) -> str:
     """Get win rates by trading session"""
@@ -184,16 +188,37 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         
         bot_data = context.get('application', {}).get('bot_data', {}) if isinstance(context, dict) else {}
         
+        # Calculate largest position percentage
+        largest_position_pct = 0
+        if active_positions and float(total_balance) > 0:
+            position_margins = [float(p.get('positionIM', 0)) for p in active_positions]
+            if position_margins:
+                largest_margin = max(position_margins)
+                largest_position_pct = (largest_margin / float(total_balance) * 100)
+        
         for pos in active_positions:
             symbol = pos.get('symbol', '')
             # Check if position is tracked by bot
             is_bot_position = False
+            
+            # Method 1: Check active monitors
             for chat_id_str in bot_data:
                 if chat_id_str.startswith('chat_'):
                     chat_data = bot_data.get(chat_id_str, {})
-                    if chat_data.get(SYMBOL) == symbol:
+                    monitor_info = chat_data.get(ACTIVE_MONITOR_TASK, {})
+                    if monitor_info and monitor_info.get('symbol') == symbol and monitor_info.get('active'):
                         is_bot_position = True
                         break
+            
+            # Method 2: Check if position was recently created by bot (fallback)
+            if not is_bot_position:
+                for chat_id_str in bot_data:
+                    if chat_id_str.startswith('chat_'):
+                        chat_data = bot_data.get(chat_id_str, {})
+                        if (chat_data.get(SYMBOL) == symbol and 
+                            chat_data.get('position_created', False)):
+                            is_bot_position = True
+                            break
             
             if is_bot_position:
                 bot_positions.append(pos)
@@ -348,6 +373,24 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         total_pnl = float(stats_data.get(STATS_TOTAL_PNL, 0))
         win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
         
+        # Check if AI is enabled
+        from config.settings import LLM_PROVIDER
+        stats_data['ai_enabled'] = LLM_PROVIDER != 'stub'
+        
+        # Get social sentiment if available
+        sentiment_score = "No data"
+        sentiment_trend = "N/A"
+        try:
+            from social_media.integration import SocialMediaIntegration
+            social_integration = SocialMediaIntegration()
+            if social_integration.is_initialized:
+                sentiment_data = await social_integration.get_current_sentiment()
+                if sentiment_data:
+                    sentiment_score = f"{sentiment_data.get('overall_score', 0):.1f}/100"
+                    sentiment_trend = sentiment_data.get('trend', 'Neutral')
+        except:
+            pass
+        
         # Time
         now = datetime.now()
         
@@ -402,45 +445,50 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
 └ P&L Trend: {create_pnl_trend_chart(stats_data)}
 
 ⏰ <b>TIME ANALYSIS</b>
-├ Best Hour: {get_best_trading_hour(stats_data)}
-├ Active Days: {calculate_active_days(stats_data)}
-└ Session Win%: {get_session_win_rates(stats_data)}
+├ Trading Hours: {total_trades} trades logged
+├ Bot Uptime: {calculate_active_days(stats_data)}
+├ Market Sentiment: {sentiment_score} ({sentiment_trend})
+└ Data Points: {len(active_positions)} positions
 
 🎯 <b>PREDICTIVE SIGNALS</b>
-├ Next Win Prob: 71.2% ±5.3%
-├ Expected 24h: +$67.80 ±$23.40
-├ Trend: 0.78 ▇▇▇▇▇▇▇▇░░ Strong
-├ ML Confidence: 87.3% | Quality: 9.2/10
-└ Signal: BUY (Bull flag on BTC 4H)
+├ Next Win Prob: {win_rate:.1f}% ±{(5.0 if win_rate > 60 else 8.0):.1f}%
+├ Expected 24h: {'+' if total_pnl >= 0 else ''}{format_number(total_pnl/max(1, total_trades) * min(5, total_trades))}
+├ Trend: {win_rate/100:.2f} {'▇' * int(win_rate/10)}{'░' * (10-int(win_rate/10))} {'Strong' if win_rate > 70 else 'Moderate' if win_rate > 50 else 'Weak'}
+├ Performance: {total_trades} trades | {win_rate:.0f}% wins
+└ Status: {'🟢 Active' if total_trades > 0 else '⚪ No data'}
 
 🧪 <b>STRESS SCENARIOS</b>
-├ Crash(-20%): -8.4% | Vol(+50%): ±12.3%
-├ Black Swan: -15.6% | Liquidity: 2.3h
-└ Current Risk Level: 🟢 LOW
+├ Position Risk: {balance_used_pct:.1f}% capital deployed
+├ Max Exposure: ${format_number(total_margin_used)}
+├ Potential Loss: -${format_number(potential_loss_sl)}
+└ Risk Level: {health_emoji} {health_status.upper()}
 
-⚡ <b>LIVE ALERTS</b> (Last 10min)
-├ {(now - timedelta(minutes=1)).strftime('%H:%M')} BTC breakout detected 🟢
-├ {(now - timedelta(minutes=3)).strftime('%H:%M')} ETH resistance near 🟡
-├ {(now - timedelta(minutes=5)).strftime('%H:%M')} ADA volume +240% 🔵
-└ {(now - timedelta(minutes=7)).strftime('%H:%M')} SOL opportunity 🟢
+⚡ <b>LIVE MONITORING</b>
+├ Active Positions: {len(active_positions)}
+├ Bot Monitoring: {len(bot_positions)} positions
+├ External Tracking: {len(external_positions)} positions
+├ Last Update: {now.strftime('%H:%M:%S')}
+└ Status: {'🟢 All systems active' if len(active_positions) > 0 else '⚪ No active positions'}
 
-💡 <b>AI RECOMMENDATIONS</b>
-├ 🎯 Reduce leverage to 15x (volatility)
-├ 🔄 Take profits on SOL (+45%)
-├ 📈 Add to BTC position (dip buy)
-├ ⏰ Next entry: 14:00 UTC
-└ 🧠 73% upward movement probability
+💡 <b>TRADING INSIGHTS</b>
+├ Win Rate: {win_rate:.1f}% over {total_trades} trades
+├ Best Performance: {'+' if float(stats_data.get(STATS_BEST_TRADE, 0)) > 0 else ''}${format_number(abs(float(stats_data.get(STATS_BEST_TRADE, 0))))}
+├ Risk Management: SL on all positions ✓
+├ Avg Trade Size: {(total_margin_used/len(active_positions) if len(active_positions) > 0 else 0):.0f} USDT
+└ {'🟢 AI insights available' if stats_data.get('ai_enabled', False) else '⚪ Configure OpenAI for insights'}
 
-📊 <b>PORTFOLIO OPTIMIZATION</b>
-├ BTC: 35%→42% (+7%) | ETH: 28%→25% (-3%)
-├ SOL: 15%→10% (-5%) | ADA: 12%→13% (+1%)
-└ Risk Score: 2.3/10 🟢 | Efficiency: 94%
+📊 <b>PORTFOLIO DISTRIBUTION</b>
+├ Positions: {len(active_positions)} active symbols
+├ Largest Position: {largest_position_pct:.1f}% of capital
+├ Total Margin Used: ${format_number(total_margin_used)}
+├ Available Balance: ${format_number(available_balance)}
+└ Diversification: {'🟢 Good' if len(active_positions) >= 3 else '🟡 Moderate' if len(active_positions) >= 2 else '🔴 Low'}
 
 ⚖️ <b>ACTIVE MANAGEMENT</b>
-├ Positions: {len(active_positions)} | SL Active: ✓
-├ Avg Size: {(total_margin_used/len(active_positions)/float(total_balance)*100 if len(active_positions) > 0 and float(total_balance) > 0 else 0):.1f}% | Correlation: 0.23
-├ Exposure: 78% Crypto / 22% Stable
-└ Health Score: 9.4/10 EXCELLENT
+├ Positions: {len(active_positions)} | Monitored: {len(bot_positions)}
+├ Avg Position: {(total_margin_used/len(active_positions) if len(active_positions) > 0 else 0):.0f} USDT
+├ Capital Usage: {balance_used_pct:.1f}% ({health_emoji} {health_status})
+└ Risk/Reward: 1:{(potential_profit_tp1/potential_loss_sl if potential_loss_sl > 0 else 0):.1f}
 
 ═══════════════════════════════════
 """

@@ -838,8 +838,8 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
             f"• TP3 (10%): <code>{format_decimal_or_na(params.get(TP3_PRICE))}</code>\n"
             f"• TP4 (10%): <code>{format_decimal_or_na(params.get(TP4_PRICE))}</code>\n\n"
             f"🛡️ <b>Stop Loss:</b> <code>{format_decimal_or_na(params.get(SL_PRICE))}</code>\n\n"
-            f"💡 <i>Next: You'll set your leverage and margin preferences</i>\n\n"
-            f"❓ <b>Accept AI prices and continue?</b>"
+            f"💡 <i>Next: Choose your trading approach</i>\n\n"
+            f"❓ <b>Accept these prices?</b>"
         )
     else:
         confirmation_msg = (
@@ -855,8 +855,8 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
             f"💰 <b>Entry Price:</b> <code>{format_decimal_or_na(params.get(PRIMARY_ENTRY_PRICE))}</code>\n"
             f"🎯 <b>Take Profit:</b> <code>{format_decimal_or_na(params.get(TP1_PRICE))}</code> (100%)\n"
             f"🛡️ <b>Stop Loss:</b> <code>{format_decimal_or_na(params.get(SL_PRICE))}</code>\n\n"
-            f"💡 <i>Next: You'll set your leverage and margin preferences</i>\n\n"
-            f"❓ <b>Accept AI prices and continue?</b>"
+            f"💡 <i>Next: Choose your trading approach</i>\n\n"
+            f"❓ <b>Accept these prices?</b>"
         )
     
     # Add enhancement option if image quality is poor
@@ -924,34 +924,43 @@ async def handle_ggshot_callbacks(update: Update, context: ContextTypes.DEFAULT_
         pass
     
     if query.data == "ggshot_confirm_ai":
-        # User confirmed AI extracted parameters - now ask for leverage
+        # User confirmed AI extracted parameters - now ask which approach to use
         symbol = context.chat_data.get(SYMBOL, "Unknown")
         side = context.chat_data.get(SIDE, "Buy")
         direction_emoji = "📈" if side == "Buy" else "📉"
         direction_text = "LONG" if side == "Buy" else "SHORT"
-        approach = context.chat_data.get(TRADING_APPROACH, "fast")
-        approach_emoji = "⚡" if approach == "fast" else "🛡️"
-        approach_text = "Fast Market" if approach == "fast" else "Conservative Limits"
         
-        # Get max leverage and show leverage selection
-        max_leverage = context.chat_data.get(MAX_LEVERAGE_FOR_SYMBOL, 100)
-        
-        leverage_msg = (
+        # Show approach selection
+        approach_msg = (
             f"✅ <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
             f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
-            f"✅ <b>Approach:</b> {approach_emoji} {approach_text}\n"
-            f"✅ <b>AI Prices:</b> 📸 Extracted\n\n"
-            f"⚡ <b>Step 5 of 7: Select Leverage</b>\n\n"
-            f"Choose your leverage for this trade:\n"
-            f"💡 Higher leverage = higher risk & reward\n"
-            f"🛡️ Maximum for {symbol}: {max_leverage}x"
+            f"✅ <b>AI Prices:</b> 📸 Extracted Successfully\n\n"
+            f"🎯 <b>Choose Trading Approach</b>\n\n"
+            f"Select how you want to execute this trade:\n\n"
+            f"⚡ <b>Fast Only</b>\n"
+            f"• Market order execution\n"
+            f"• Single TP (100%) + SL\n"
+            f"• Quick in/out trades\n\n"
+            f"🛡️ <b>Conservative Only</b>\n"
+            f"• 3 limit order entries\n"
+            f"• 4 TPs (70%/10%/10%/10%)\n"
+            f"• Gradual scaling strategy\n\n"
+            f"⚡+🛡️ <b>Both Approaches</b>\n"
+            f"• Opens 2 separate positions\n"
+            f"• Split margin between both\n"
+            f"• Best of both strategies"
         )
         
-        from dashboard.keyboards_analytics import build_leverage_selection_keyboard
-        leverage_keyboard = build_leverage_selection_keyboard(max_leverage)
+        approach_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚡ Fast Only", callback_data="ggshot_approach:fast")],
+            [InlineKeyboardButton("🛡️ Conservative Only", callback_data="ggshot_approach:conservative")],
+            [InlineKeyboardButton("⚡+🛡️ Both Approaches", callback_data="ggshot_approach:both")],
+            [InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{SCREENSHOT_UPLOAD}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation")]
+        ])
         
-        await edit_last_message(context, query.message.chat.id, leverage_msg, leverage_keyboard)
-        return LEVERAGE
+        await edit_last_message(context, query.message.chat.id, approach_msg, approach_keyboard)
+        return CONFIRMATION
     
     elif query.data == "ggshot_manual_override":
         # User wants to manually override AI parameters
@@ -975,6 +984,64 @@ async def handle_ggshot_callbacks(update: Update, context: ContextTypes.DEFAULT_
     elif query.data == "ggshot_advanced_enhance":
         # User wants to try advanced enhancement
         return await handle_advanced_enhancement_request(context, query.message.chat.id)
+    
+    elif query.data.startswith("ggshot_approach:"):
+        # Handle approach selection after GGShot extraction
+        selected_approach = query.data.split(":")[1]
+        
+        if selected_approach == "both":
+            # Store that we want both approaches
+            context.chat_data["ggshot_both_trades"] = True
+            context.chat_data["ggshot_split_margin"] = True
+            # Start with fast approach
+            context.chat_data[TRADING_APPROACH] = "fast"
+            context.chat_data[ORDER_STRATEGY] = STRATEGY_MARKET_ONLY
+        else:
+            # Single approach selected
+            context.chat_data["ggshot_both_trades"] = False
+            context.chat_data[TRADING_APPROACH] = selected_approach
+            if selected_approach == "conservative":
+                context.chat_data[ORDER_STRATEGY] = STRATEGY_CONSERVATIVE_LIMITS
+                # Generate trade group ID for conservative approach
+                trade_group_id = str(uuid.uuid4())[:8]
+                context.chat_data[CONSERVATIVE_TRADE_GROUP_ID] = trade_group_id
+                try:
+                    protect_trade_group_from_cleanup(trade_group_id)
+                except Exception as e:
+                    logger.error(f"Error protecting trade group: {e}")
+            else:
+                context.chat_data[ORDER_STRATEGY] = STRATEGY_MARKET_ONLY
+        
+        # Now move to leverage selection
+        symbol = context.chat_data.get(SYMBOL, "Unknown")
+        side = context.chat_data.get(SIDE, "Buy")
+        direction_emoji = "📈" if side == "Buy" else "📉"
+        direction_text = "LONG" if side == "Buy" else "SHORT"
+        approach_emoji = "⚡" if selected_approach == "fast" else "🛡️" if selected_approach == "conservative" else "⚡+🛡️"
+        approach_text = "Fast Market" if selected_approach == "fast" else "Conservative Limits" if selected_approach == "conservative" else "Both Approaches"
+        
+        # Get max leverage and show leverage selection
+        max_leverage = context.chat_data.get(MAX_LEVERAGE_FOR_SYMBOL, 100)
+        
+        leverage_msg = (
+            f"✅ <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
+            f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
+            f"✅ <b>Approach:</b> {approach_emoji} {approach_text}\n"
+            f"✅ <b>AI Prices:</b> 📸 Extracted\n\n"
+            f"⚡ <b>Step 5 of 7: Select Leverage</b>\n\n"
+            f"Choose your leverage for this trade:\n"
+            f"💡 Higher leverage = higher risk & reward\n"
+            f"🛡️ Maximum for {symbol}: {max_leverage}x"
+        )
+        
+        if selected_approach == "both":
+            leverage_msg += "\n\n📊 <i>This leverage will apply to both trades</i>"
+        
+        from dashboard.keyboards_analytics import build_leverage_selection_keyboard
+        leverage_keyboard = build_leverage_selection_keyboard(max_leverage)
+        
+        await edit_last_message(context, query.message.chat.id, leverage_msg, leverage_keyboard)
+        return LEVERAGE
     
     elif query.data == "ggshot_override_validation":
         # User wants to override validation errors and continue
@@ -1738,6 +1805,9 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
         available_balance = Decimal("0")
         balance_display = "Unable to fetch balance"
     
+    # Check if we're doing both approaches
+    both_trades = context.chat_data.get("ggshot_both_trades", False)
+    
     margin_msg = (
         f"⚡ <b>Leverage Set: {leverage}x</b>\n"
         f"💰 <b>{balance_display}</b>\n\n"
@@ -1745,6 +1815,9 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
         f"Choose what percentage of your account to use:\n"
         f"💡 Select a quick option or choose Custom for your own percentage"
     )
+    
+    if both_trades:
+        margin_msg += "\n\n📊 <i>This margin will be split equally between both trades</i>"
     
     # Build margin selection keyboard with percentage options
     common_percentages = [1, 2, 5, 10]  # Percentage values
@@ -2025,6 +2098,7 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
     approach = context.chat_data.get(TRADING_APPROACH, "fast")
     leverage = context.chat_data.get(LEVERAGE, 10)
     margin = context.chat_data.get(MARGIN_AMOUNT, Decimal("0"))
+    both_trades = context.chat_data.get("ggshot_both_trades", False)
     
     direction_emoji = "📈" if side == "Buy" else "📉"
     direction_text = "LONG" if side == "Buy" else "SHORT"
@@ -2044,6 +2118,11 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
     
     # Build confirmation based on actual strategy (for GGShot, check order strategy)
     order_strategy = context.chat_data.get(ORDER_STRATEGY)
+    
+    # Check if we're doing both approaches
+    if both_trades:
+        # Show confirmation for both trades
+        return await show_both_trades_confirmation(context, chat_id)
     
     # Determine display strategy - for GGShot, use the detected strategy
     if approach == "ggshot":
@@ -2120,6 +2199,27 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         tp4_price = context.chat_data.get(TP4_PRICE, Decimal("0"))
         sl_price = context.chat_data.get(SL_PRICE, Decimal("0"))
         
+        # Check if merge will happen
+        merge_info = ""
+        from execution.position_merger import ConservativePositionMerger
+        merger = ConservativePositionMerger()
+        # Pass bot_data to check if position belongs to bot
+        bot_data = context.application.bot_data if context.application else None
+        should_merge, existing_data = await merger.should_merge_positions(symbol, side, "conservative", bot_data)
+        
+        if should_merge:
+            existing_pos = existing_data.get('position', {})
+            existing_size = existing_pos.get('size', 0)
+            existing_value = existing_pos.get('positionValue', 0)
+            merge_info = (
+                f"\n🔄 <b>POSITION MERGE DETECTED!</b>\n"
+                f"Existing {side} position: {existing_size} {symbol}\n"
+                f"Value: ${existing_value}\n"
+                f"\n⚠️ Orders will be merged to bypass limits\n"
+                f"SL: Will use the safer price\n"
+                f"TPs: Will use more aggressive prices\n"
+            )
+        
         # Add GGShot indicator if applicable
         ggshot_info = ""
         if approach == "ggshot":
@@ -2132,6 +2232,7 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
             f"📈 <b>Direction:</b> {direction_emoji} {direction_text}\n"
             f"🛡️ <b>Approach:</b> {approach_emoji} {approach_text}\n"
             f"{ggshot_info}"
+            f"{merge_info}"
             f"🛡️ <b>Trade Group:</b> <code>{trade_group_id}</code> 🛡️\n\n"
             f"📊 <b>LIMIT ORDERS (33.33% each):</b>\n"
             f"• <b>Limit #1:</b> <code>{format_price(limit1_price)}</code> 🛡️\n"
@@ -2171,6 +2272,100 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
     await edit_last_message(context, chat_id, confirmation_msg, confirmation_keyboard)
     return CONFIRMATION
 
+async def show_both_trades_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
+    """Show confirmation for both fast and conservative trades"""
+    symbol = context.chat_data.get(SYMBOL, "Unknown")
+    side = context.chat_data.get(SIDE, "Buy")
+    leverage = context.chat_data.get(LEVERAGE, 10)
+    total_margin = context.chat_data.get(MARGIN_AMOUNT, Decimal("0"))
+    
+    # Split margin between both trades
+    fast_margin = total_margin / 2
+    conservative_margin = total_margin / 2
+    
+    direction_emoji = "📈" if side == "Buy" else "📉"
+    direction_text = "LONG" if side == "Buy" else "SHORT"
+    
+    # Get all extracted prices
+    entry_price = context.chat_data.get(PRIMARY_ENTRY_PRICE, Decimal("0"))
+    tp1_price = context.chat_data.get(TP1_PRICE, Decimal("0"))
+    tp2_price = context.chat_data.get(TP2_PRICE, Decimal("0"))
+    tp3_price = context.chat_data.get(TP3_PRICE, Decimal("0"))
+    tp4_price = context.chat_data.get(TP4_PRICE, Decimal("0"))
+    sl_price = context.chat_data.get(SL_PRICE, Decimal("0"))
+    
+    # Conservative limit prices
+    limit1_price = context.chat_data.get(LIMIT_ENTRY_1_PRICE, Decimal("0"))
+    limit2_price = context.chat_data.get(LIMIT_ENTRY_2_PRICE, Decimal("0"))
+    limit3_price = context.chat_data.get(LIMIT_ENTRY_3_PRICE, Decimal("0"))
+    
+    # Calculate R:R for fast trade
+    rr_info = ""
+    try:
+        if entry_price and tp1_price and sl_price:
+            rr_result = calculate_risk_reward_ratio(entry_price, tp1_price, sl_price, side)
+            if rr_result and 'ratio' in rr_result:
+                ratio_raw = rr_result.get('ratio', '1:0')
+                rating = rr_result.get('rating', '⚪ UNKNOWN')
+                rr_info = f"⚖️ Risk:Reward: {ratio_raw} ({rating})"
+    except Exception as e:
+        logger.error(f"Error calculating R:R ratio: {e}")
+    
+    confirmation_msg = (
+        f"🚀 <b>DUAL TRADE CONFIRMATION</b> 🚀\n"
+        f"{'═' * 30}\n\n"
+        f"📊 <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
+        f"📈 <b>Direction:</b> {direction_emoji} {direction_text}\n"
+        f"⚡+🛡️ <b>Approach:</b> BOTH (Fast + Conservative)\n"
+        f"🤖 <b>AI Extracted:</b> Using GGShot prices\n"
+        f"⚡ <b>Leverage:</b> {leverage}x (for both)\n"
+        f"💰 <b>Total Margin:</b> {format_decimal_or_na(total_margin)} USDT"
+    )
+    
+    # Add percentage info if available
+    if "margin_percentage" in context.chat_data:
+        percentage = context.chat_data["margin_percentage"]
+        confirmation_msg += f" ({percentage}%)"
+    
+    confirmation_msg += (
+        f"\n\n"
+        f"{'─' * 30}\n"
+        f"⚡ <b>TRADE 1: FAST MARKET</b>\n"
+        f"💰 Margin: {format_decimal_or_na(fast_margin)} USDT (50%)\n"
+        f"📍 Entry: Market @ ~<code>{format_price(entry_price)}</code>\n"
+        f"🎯 TP: <code>{format_price(tp1_price)}</code> (100%)\n"
+        f"🛡️ SL: <code>{format_price(sl_price)}</code>\n"
+        f"{rr_info}\n\n"
+        f"{'─' * 30}\n"
+        f"🛡️ <b>TRADE 2: CONSERVATIVE</b>\n"
+        f"💰 Margin: {format_decimal_or_na(conservative_margin)} USDT (50%)\n"
+        f"📊 <b>Limit Orders:</b>\n"
+        f"  • L1: <code>{format_price(limit1_price)}</code> (33.33%)\n"
+        f"  • L2: <code>{format_price(limit2_price)}</code> (33.33%)\n"
+        f"  • L3: <code>{format_price(limit3_price)}</code> (33.33%)\n"
+        f"🎯 <b>Take Profits:</b>\n"
+        f"  • TP1: <code>{format_price(tp1_price)}</code> (70%)\n"
+        f"  • TP2: <code>{format_price(tp2_price)}</code> (10%)\n"
+        f"  • TP3: <code>{format_price(tp3_price)}</code> (10%)\n"
+        f"  • TP4: <code>{format_price(tp4_price)}</code> (10%)\n"
+        f"🛡️ SL: <code>{format_price(sl_price)}</code>\n\n"
+        f"{'─' * 30}\n"
+        f"🛡️ <b>Protection:</b> Both trades protected from cleanup\n"
+        f"📊 <b>Monitoring:</b> Independent for each trade\n\n"
+        f"⚠️ <b>Ready to execute BOTH trades?</b>"
+    )
+    
+    confirmation_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 EXECUTE BOTH TRADES", callback_data="confirm_execute_trade")],
+        [
+            InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation"),
+            InlineKeyboardButton("🔧 Modify", callback_data="modify_trade")
+        ]
+    ])
+    
+    await edit_last_message(context, chat_id, confirmation_msg, confirmation_keyboard)
+    return CONFIRMATION
+
 async def confirmation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle final confirmation"""
     # This should be handled by callback queries
@@ -2193,6 +2388,12 @@ async def handle_execute_trade(update: Update, context: ContextTypes.DEFAULT_TYP
     chat_id = query.message.chat.id
     approach = context.chat_data.get(TRADING_APPROACH, "fast")
     symbol = context.chat_data.get(SYMBOL, "Unknown")
+    both_trades = context.chat_data.get("ggshot_both_trades", False)
+    
+    # Check if we need to execute both trades
+    if both_trades:
+        # Execute both fast and conservative trades
+        return await execute_both_trades(update, context)
     
     # Show execution message
     if approach == "fast":
@@ -2325,6 +2526,204 @@ async def handle_execute_trade(update: Update, context: ContextTypes.DEFAULT_TYP
         await context.bot.send_message(
             chat_id,
             f"{get_emoji('error')} <b>Execution Failed</b>\n\n{escape(str(e))}\n\nPlease try again.",
+            parse_mode=ParseMode.HTML
+        )
+    
+    # Return to dashboard
+    try:
+        from handlers.commands import _send_or_edit_dashboard_message
+        await _send_or_edit_dashboard_message(chat_id, context, new_msg=True)
+    except:
+        pass
+    
+    return ConversationHandler.END
+
+async def execute_both_trades(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Execute both fast and conservative trades"""
+    query = update.callback_query
+    chat_id = query.message.chat.id
+    
+    # Show execution message
+    execution_msg = (
+        f"⚡+🛡️ <b>EXECUTING BOTH TRADES...</b>\n\n"
+        f"{get_emoji('loading')} Preparing dual trade execution\n"
+        f"📊 This will open 2 separate positions\n"
+        f"💰 Margin will be split equally\n\n"
+        f"Please wait while we execute both strategies..."
+    )
+    
+    try:
+        await query.edit_message_text(
+            execution_msg,
+            parse_mode=ParseMode.HTML
+        )
+    except:
+        pass
+    
+    # Get shared parameters
+    symbol = context.chat_data.get(SYMBOL, "Unknown")
+    side = context.chat_data.get(SIDE, "Buy")
+    leverage = context.chat_data.get(LEVERAGE, 10)
+    total_margin = context.chat_data.get(MARGIN_AMOUNT, Decimal("0"))
+    
+    # Split margin
+    fast_margin = total_margin / 2
+    conservative_margin = total_margin / 2
+    
+    # Store original margin
+    original_margin = total_margin
+    
+    try:
+        from execution.trader import execute_trade_logic
+        
+        # Results storage
+        fast_result = None
+        conservative_result = None
+        
+        # === EXECUTE FAST TRADE FIRST ===
+        await context.bot.send_message(
+            chat_id,
+            f"⚡ <b>Executing Trade 1: FAST MARKET</b>\n"
+            f"💰 Margin: {format_decimal_or_na(fast_margin)} USDT",
+            parse_mode=ParseMode.HTML
+        )
+        
+        # Setup for fast trade
+        context.chat_data[TRADING_APPROACH] = "fast"
+        context.chat_data[ORDER_STRATEGY] = STRATEGY_MARKET_ONLY
+        context.chat_data[MARGIN_AMOUNT] = fast_margin
+        context.chat_data["margin_amount"] = fast_margin
+        context.chat_data["margin_amount_usdt"] = fast_margin
+        
+        # Create config for fast trade
+        fast_cfg = context.chat_data.copy()
+        fast_cfg["_temp_chat_id"] = chat_id
+        fast_cfg["_execution_source"] = "ggshot_both_trades_fast"
+        
+        # Execute fast trade
+        try:
+            fast_result = await execute_trade_logic(context.application, chat_id, fast_cfg)
+            
+            # Show fast trade result
+            if isinstance(fast_result, dict) and fast_result.get("message"):
+                await context.bot.send_message(
+                    chat_id,
+                    fast_result["message"],
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                # Fallback message
+                if isinstance(fast_result, dict) and fast_result.get("success"):
+                    await context.bot.send_message(
+                        chat_id,
+                        "✅ Fast trade executed successfully!",
+                        parse_mode=ParseMode.HTML
+                    )
+        except Exception as e:
+            logger.error(f"Error executing fast trade: {e}")
+            await context.bot.send_message(
+                chat_id,
+                f"❌ Fast trade failed: {escape(str(e))}",
+                parse_mode=ParseMode.HTML
+            )
+        
+        # === EXECUTE CONSERVATIVE TRADE SECOND ===
+        await context.bot.send_message(
+            chat_id,
+            f"\n🛡️ <b>Executing Trade 2: CONSERVATIVE LIMITS</b>\n"
+            f"💰 Margin: {format_decimal_or_na(conservative_margin)} USDT",
+            parse_mode=ParseMode.HTML
+        )
+        
+        # Setup for conservative trade
+        context.chat_data[TRADING_APPROACH] = "conservative"
+        context.chat_data[ORDER_STRATEGY] = STRATEGY_CONSERVATIVE_LIMITS
+        context.chat_data[MARGIN_AMOUNT] = conservative_margin
+        context.chat_data["margin_amount"] = conservative_margin
+        context.chat_data["margin_amount_usdt"] = conservative_margin
+        
+        # Generate new trade group ID for conservative
+        trade_group_id = str(uuid.uuid4())[:8]
+        context.chat_data[CONSERVATIVE_TRADE_GROUP_ID] = trade_group_id
+        try:
+            protect_trade_group_from_cleanup(trade_group_id)
+        except Exception as e:
+            logger.error(f"Error protecting trade group: {e}")
+        
+        # Create config for conservative trade
+        conservative_cfg = context.chat_data.copy()
+        conservative_cfg["_temp_chat_id"] = chat_id
+        conservative_cfg["_execution_source"] = "ggshot_both_trades_conservative"
+        
+        # Execute conservative trade
+        try:
+            conservative_result = await execute_trade_logic(context.application, chat_id, conservative_cfg)
+            
+            # Show conservative trade result
+            if isinstance(conservative_result, dict) and conservative_result.get("message"):
+                await context.bot.send_message(
+                    chat_id,
+                    conservative_result["message"],
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                # Fallback message
+                if isinstance(conservative_result, dict) and conservative_result.get("success"):
+                    await context.bot.send_message(
+                        chat_id,
+                        "✅ Conservative trade executed successfully!",
+                        parse_mode=ParseMode.HTML
+                    )
+        except Exception as e:
+            logger.error(f"Error executing conservative trade: {e}")
+            await context.bot.send_message(
+                chat_id,
+                f"❌ Conservative trade failed: {escape(str(e))}",
+                parse_mode=ParseMode.HTML
+            )
+        
+        # === FINAL SUMMARY ===
+        summary_msg = (
+            f"\n{'═' * 30}\n"
+            f"⚡+🛡️ <b>DUAL TRADE EXECUTION COMPLETE</b>\n"
+            f"{'═' * 30}\n\n"
+        )
+        
+        # Fast trade summary
+        if fast_result and isinstance(fast_result, dict) and fast_result.get("success"):
+            summary_msg += f"⚡ <b>Fast Trade:</b> ✅ Success\n"
+        else:
+            summary_msg += f"⚡ <b>Fast Trade:</b> ❌ Failed\n"
+        
+        # Conservative trade summary
+        if conservative_result and isinstance(conservative_result, dict) and conservative_result.get("success"):
+            summary_msg += f"🛡️ <b>Conservative Trade:</b> ✅ Success\n"
+        else:
+            summary_msg += f"🛡️ <b>Conservative Trade:</b> ❌ Failed\n"
+        
+        summary_msg += (
+            f"\n📊 <b>Total Margin Used:</b> {format_decimal_or_na(original_margin)} USDT\n"
+            f"🔄 <b>Monitoring:</b> Active for both positions\n"
+            f"🛡️ <b>Protection:</b> All orders protected from cleanup\n\n"
+            f"📱 Returning to dashboard..."
+        )
+        
+        await context.bot.send_message(
+            chat_id,
+            summary_msg,
+            parse_mode=ParseMode.HTML
+        )
+        
+        # Restore original margin
+        context.chat_data[MARGIN_AMOUNT] = original_margin
+        context.chat_data["margin_amount"] = original_margin
+        context.chat_data["margin_amount_usdt"] = original_margin
+        
+    except Exception as e:
+        logger.error(f"Error in dual trade execution: {e}", exc_info=True)
+        await context.bot.send_message(
+            chat_id,
+            f"❌ <b>Dual Trade Execution Error</b>\n\n{escape(str(e))}",
             parse_mode=ParseMode.HTML
         )
     

@@ -22,9 +22,14 @@ def build_analytics_dashboard_keyboard(chat_id: int, context: any,
         second_row.append(InlineKeyboardButton(f"📋 Positions ({active_positions})", callback_data="list_positions"))
     second_row.append(InlineKeyboardButton("📊 Statistics", callback_data="show_statistics"))
     
-    # Third row - Settings and help
+    # Third row - Alerts and Settings
     third_row = [
-        InlineKeyboardButton("⚙️ Settings", callback_data="show_settings"),
+        InlineKeyboardButton("🔔 Alerts", callback_data="alerts_list"),
+        InlineKeyboardButton("⚙️ Settings", callback_data="show_settings")
+    ]
+    
+    # Fourth row - Help
+    fourth_row = [
         InlineKeyboardButton("❓ Help", callback_data="show_help")
     ]
     
@@ -33,6 +38,7 @@ def build_analytics_dashboard_keyboard(chat_id: int, context: any,
     if second_row:
         keyboard.append(second_row)
     keyboard.append(third_row)
+    keyboard.append(fourth_row)
     
     return InlineKeyboardMarkup(keyboard)
 

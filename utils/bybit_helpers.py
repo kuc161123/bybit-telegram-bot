@@ -14,40 +14,8 @@ from clients.bybit_client import bybit_client
 
 logger = logging.getLogger(__name__)
 
-async def get_position_info(symbol: str) -> Optional[Dict]:
-    """Get position information for a specific symbol."""
-    try:
-        # Run synchronous call in thread pool
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: bybit_client.get_positions(
-                category="linear",
-                symbol=symbol
-            )
-        )
-        
-        if response and response.get("retCode") == 0:
-            positions = response.get("result", {}).get("list", [])
-            if positions:
-                return positions[0]
-            else:
-                # Return empty position structure if no position found
-                return {
-                    "symbol": symbol,
-                    "side": "",
-                    "size": "0",
-                    "avgPrice": "0",
-                    "markPrice": "0",
-                    "unrealisedPnl": "0",
-                    "positionIM": "0",
-                    "positionMM": "0",
-                    "positionStatus": "Normal"
-                }
-        return None
-    except Exception as e:
-        logger.error(f"Error fetching position info for {symbol}: {e}")
-        return None
+# REMOVED: get_position_info - Use the one from clients.bybit_helpers instead
+# This avoids duplication and confusion about return types
 
 async def get_all_positions() -> List[Dict]:
     """Get all open positions with enhanced error handling."""
@@ -327,8 +295,13 @@ def use_enhanced_client():
 
 # Legacy compatibility functions
 async def check_existing_position(symbol: str) -> Optional[Dict]:
-    """Legacy wrapper - use get_position_info instead"""
-    return await get_position_info(symbol)
+    """Legacy wrapper - use clients.bybit_helpers.get_position_info instead"""
+    from clients.bybit_helpers import get_position_info
+    positions = await get_position_info(symbol)
+    # Return first position for backward compatibility
+    if positions and len(positions) > 0:
+        return positions[0]
+    return None
 
 async def get_active_positions() -> List[Dict]:
     """Get only active positions (size > 0)"""

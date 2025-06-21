@@ -374,8 +374,12 @@ async def check_existing_position(symbol: str) -> Optional[Dict]:
         logger.error(f"Error checking existing position: {e}")
         return None
 
-async def get_position_info(symbol: str) -> Optional[Dict]:
-    """Get position information for a specific symbol with enhanced error handling"""
+async def get_position_info(symbol: str) -> Optional[List[Dict]]:
+    """Get position information for a specific symbol with enhanced error handling
+    
+    Returns:
+        List of position dictionaries for the symbol, or empty list if none found
+    """
     try:
         response = await api_call_with_retry(
             lambda: bybit_client.get_positions(
@@ -388,26 +392,13 @@ async def get_position_info(symbol: str) -> Optional[Dict]:
         if response and response.get("retCode") == 0:
             result = response.get("result", {})
             positions = result.get("list", [])
-            if positions:
-                return positions[0]
-            else:
-                # Return empty position structure if no position found
-                return {
-                    "symbol": symbol,
-                    "side": "",
-                    "size": "0",
-                    "avgPrice": "0",
-                    "markPrice": "0",
-                    "unrealisedPnl": "0",
-                    "positionIM": "0",
-                    "positionMM": "0",
-                    "positionStatus": "Normal"
-                }
-        return None
+            return positions  # Return the full list of positions
+        
+        return []  # Return empty list instead of None
         
     except Exception as e:
         logger.error(f"Error fetching position info for {symbol}: {e}")
-        return None
+        return []  # Return empty list on error
 
 async def get_all_positions() -> List[Dict]:
     """
