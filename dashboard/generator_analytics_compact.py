@@ -186,10 +186,34 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         bot_positions = []
         external_positions = []
         
-        # Get both bot_data and chat_data
-        bot_data = context.get('application', {}).get('bot_data', {}) if isinstance(context, dict) else {}
-        # Also get the direct chat_data from persistence
-        all_chat_data = context.get('application', {}).get('chat_data', {}) if isinstance(context, dict) else {}
+        # Get both bot_data and chat_data from the telegram-python-bot context
+        bot_data = {}
+        all_chat_data = {}
+        current_chat_data = {}
+        
+        # Handle telegram-python-bot CallbackContext
+        if hasattr(context, 'bot_data'):
+            bot_data = context.bot_data or {}
+            logger.debug(f"Got bot_data from context.bot_data")
+        
+        if hasattr(context, 'chat_data'):
+            current_chat_data = context.chat_data or {}
+            logger.debug(f"Got current_chat_data from context.chat_data")
+        
+        # Try to get all chat data from application
+        if hasattr(context, 'application'):
+            if hasattr(context.application, 'chat_data'):
+                all_chat_data = dict(context.application.chat_data)
+                logger.debug(f"Got all_chat_data from context.application.chat_data with {len(all_chat_data)} chats")
+            if hasattr(context.application, 'bot_data') and not bot_data:
+                bot_data = context.application.bot_data or {}
+                logger.debug(f"Got bot_data from context.application.bot_data")
+        
+        # Fallback for dict context
+        if isinstance(context, dict):
+            bot_data = context.get('bot_data', bot_data)
+            all_chat_data = context.get('chat_data', all_chat_data)
+            current_chat_data = context.get('current_chat_data', current_chat_data)
         
         # Calculate largest position percentage
         largest_position_pct = 0
@@ -260,7 +284,7 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
             
             # ALSO check the direct chat_data (not prefixed with chat_data_)
             if not is_bot_position and not is_external:
-                # Check if we have chat data for the current chat_id
+                # Check if we have chat data for the current chat_id in all_chat_data
                 if str(chat_id) in all_chat_data:
                     direct_chat_data = all_chat_data.get(str(chat_id), {})
                     if isinstance(direct_chat_data, dict):
@@ -274,28 +298,40 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
                                 else:
                                     is_bot_position = True
                                     found_in = f"direct chat_data[{chat_id}] (bot)"
+                
+                # Also check integer chat_id key
+                if int(chat_id) in all_chat_data:
+                    direct_chat_data = all_chat_data.get(int(chat_id), {})
+                    if isinstance(direct_chat_data, dict):
+                        # Check if this chat has an active monitor for this symbol
+                        monitor_info = direct_chat_data.get(ACTIVE_MONITOR_TASK, {})
+                        if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
+                            if monitor_info.get('active', False):
+                                if monitor_info.get('external_position', False):
+                                    is_external = True
+                                    found_in = f"direct chat_data[{chat_id}] int key (external)"
+                                else:
+                                    is_bot_position = True
+                                    found_in = f"direct chat_data[{chat_id}] int key (bot)"
             
-            # ALSO check the current context's chat_data directly
-            if not is_bot_position and not is_external and isinstance(context, dict):
-                # Get chat_data from the current context
-                current_chat_data = context.get('chat_data', {})
-                if current_chat_data:
-                    # Check if this chat has an active monitor for this symbol
-                    monitor_info = current_chat_data.get(ACTIVE_MONITOR_TASK, {})
-                    if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
-                        if monitor_info.get('active', False):
-                            if monitor_info.get('external_position', False):
-                                is_external = True
-                                found_in = f"current context chat_data (external)"
-                            else:
-                                is_bot_position = True
-                                found_in = f"current context chat_data (bot)"
-                    
-                    # Also check position_created flag
-                    if not is_bot_position and not is_external:
-                        if current_chat_data.get('symbol') == symbol and current_chat_data.get('position_created'):
+            # ALSO check the current context's chat_data directly (from context object)
+            if not is_bot_position and not is_external and current_chat_data:
+                # Check if this chat has an active monitor for this symbol
+                monitor_info = current_chat_data.get(ACTIVE_MONITOR_TASK, {})
+                if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
+                    if monitor_info.get('active', False):
+                        if monitor_info.get('external_position', False):
+                            is_external = True
+                            found_in = f"current context chat_data (external)"
+                        else:
                             is_bot_position = True
-                            found_in = f"current context position_created flag"
+                            found_in = f"current context chat_data (bot)"
+                
+                # Also check position_created flag
+                if not is_bot_position and not is_external:
+                    if current_chat_data.get('symbol') == symbol and current_chat_data.get('position_created'):
+                        is_bot_position = True
+                        found_in = f"current context position_created flag"
             
             # Log classification
             logger.debug(f"Position {symbol}: bot={is_bot_position}, external={is_external}, found_in={found_in}")
