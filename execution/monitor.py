@@ -5,6 +5,7 @@ REFINED: Accurate P&L calculation, duplicate prevention, trade history
 ENHANCED: Separate tracking for bot vs external trades
 IMPROVED: Better error handling and validation
 FIXED: Force immediate persistence after stats update
+ADDED: Trade execution alerts for both approaches
 """
 import logging
 import asyncio
@@ -25,6 +26,7 @@ from clients.bybit_helpers import (
 )
 from utils.formatters import get_emoji, format_decimal_or_na
 from utils.helpers import value_adjusted_to_step, safe_decimal_conversion
+from utils.alert_helpers import send_trade_alert, send_position_closed_summary
 
 logger = logging.getLogger(__name__)
 
@@ -217,38 +219,63 @@ _task_registry = TaskRegistry()
 
 async def register_monitor_task(chat_id: int, symbol: str, task, metadata: Dict[str, Any] = None):
     """Register a monitor task for tracking"""
-    task_key = f"{chat_id}_{symbol}"
+    approach = metadata.get('approach', 'fast') if metadata else 'fast'
+    task_key = f"{chat_id}_{symbol}_{approach}"
     enhanced_metadata = {
         "chat_id": chat_id,
         "symbol": symbol,
+        "approach": approach,
         "type": "position_monitor",
         **(metadata or {})
     }
     _task_registry.register_task(task_key, task, enhanced_metadata)
-    logger.info(f"📋 Registered monitor task for {symbol} in chat {chat_id}")
+    logger.info(f"📋 Registered monitor task for {symbol} ({approach}) in chat {chat_id}")
+    
+    # Also store in bot_data for dashboard access
+    try:
+        # Get bot_data from the application context if available
+        from telegram.ext import Application
+        # This will be passed through context when needed
+        # For now, we'll rely on the calling function to update bot_data
+        pass
+    except:
+        pass
 
-async def unregister_monitor_task(chat_id: int, symbol: str):
+async def unregister_monitor_task(chat_id: int, symbol: str, approach: str = None):
     """Unregister a monitor task"""
-    task_key = f"{chat_id}_{symbol}"
-    _task_registry.unregister_task(task_key)
-    logger.info(f"📋 Unregistered monitor task for {symbol} in chat {chat_id}")
+    # If approach not specified, try to get it from chat_data or unregister both
+    if approach:
+        task_key = f"{chat_id}_{symbol}_{approach}"
+        _task_registry.unregister_task(task_key)
+        logger.info(f"📋 Unregistered monitor task for {symbol} ({approach}) in chat {chat_id}")
+    else:
+        # Try both approaches if not specified
+        for app in ['fast', 'conservative']:
+            task_key = f"{chat_id}_{symbol}_{app}"
+            if task_key in _task_registry._tasks:
+                _task_registry.unregister_task(task_key)
+                logger.info(f"📋 Unregistered monitor task for {symbol} ({app}) in chat {chat_id}")
 
-async def get_monitor_task_status(chat_id: int, symbol: str) -> Dict:
+async def get_monitor_task_status(chat_id: int, symbol: str, approach: str = None) -> Dict:
     """Get the status of a monitor task"""
-    task_key = f"{chat_id}_{symbol}"
-    return _task_registry.get_task_status(task_key)
-
-def is_read_only_monitoring(chat_data: dict) -> bool:
-    """Check if this is read-only monitoring for external position"""
-    return chat_data.get("read_only_monitoring", False) or chat_data.get("external_position", False)
+    if approach:
+        task_key = f"{chat_id}_{symbol}_{approach}"
+        return _task_registry.get_task_status(task_key)
+    
+    # If no approach specified, check both
+    for app in ['fast', 'conservative']:
+        task_key = f"{chat_id}_{symbol}_{app}"
+        status = _task_registry.get_task_status(task_key)
+        if status.get('exists') and status.get('running'):
+            return status
+    
+    # Return not found status
+    return {"exists": False, "running": False, "task_key": f"{chat_id}_{symbol}_unknown"}
 
 def get_monitoring_mode(chat_data: dict) -> str:
-    """Get the monitoring mode description"""
-    if is_read_only_monitoring(chat_data):
-        return "READ-ONLY"
-    else:
-        approach = chat_data.get(TRADING_APPROACH, "fast")
-        return f"FULL-{approach.upper()}"
+    """Get the monitoring mode description - all trades are bot trades now"""
+    approach = chat_data.get(TRADING_APPROACH, "fast")
+    return f"BOT-{approach.upper()}"
 
 # =============================================
 # ENHANCED: CONSERVATIVE APPROACH ORDER MANAGEMENT (ONLY FOR FULL MONITORING)
@@ -258,14 +285,8 @@ async def check_conservative_tp1_hit(chat_data: dict, symbol: str, current_price
     """
     Check if TP1 has been hit BEFORE any limit orders are filled
     This triggers full cancellation of all orders
-    
-    ENHANCED: Only for FULL monitoring, not read-only
     """
     try:
-        # SAFETY: Skip for read-only monitoring
-        if is_read_only_monitoring(chat_data):
-            return False
-        
         approach = chat_data.get(TRADING_APPROACH, "fast")
         if approach != "conservative":
             return False
@@ -306,14 +327,8 @@ async def check_conservative_tp1_hit_with_fills(chat_data: dict, symbol: str, cu
     """
     Check if TP1 has been hit after some limit orders were filled
     This handles the scenario where we want to cancel remaining limits but keep TP2-TP4 active
-    
-    ENHANCED: Only for FULL monitoring, not read-only
     """
     try:
-        # SAFETY: Skip for read-only monitoring
-        if is_read_only_monitoring(chat_data):
-            return False
-        
         approach = chat_data.get(TRADING_APPROACH, "fast")
         if approach != "conservative":
             return False
@@ -352,18 +367,13 @@ async def check_conservative_tp1_hit_with_fills(chat_data: dict, symbol: str, cu
         logger.error(f"Error checking conservative TP1 hit with fills: {e}")
         return False
 
-async def cancel_remaining_conservative_limits_only(chat_data: dict, symbol: str) -> List[str]:
+async def cancel_remaining_conservative_limits_only(chat_data: dict, symbol: str, ctx_app=None) -> List[str]:
     """
     Cancel only remaining unfilled limit orders when TP1 hits after some fills
     Keep TP2, TP3, TP4 active for the life of the trade
-    
-    ENHANCED: Only for FULL monitoring, not read-only
+    ADDED: Send alert for TP1 hit with fills scenario
     """
     try:
-        # SAFETY: Skip for read-only monitoring
-        if is_read_only_monitoring(chat_data):
-            logger.info("🛡️ READ-ONLY monitoring: Skipping order cancellation")
-            return []
         
         cancelled_orders = []
         
@@ -384,6 +394,30 @@ async def cancel_remaining_conservative_limits_only(chat_data: dict, symbol: str
                 else:
                     logger.warning(f"⚠️ Failed to cancel remaining limit order {limit_id}")
         
+        # Send alert for TP1 hit with fills
+        if ctx_app and hasattr(ctx_app, 'bot') and cancelled_orders:
+            chat_id = chat_data.get('chat_id') or chat_data.get('_chat_id')
+            side = chat_data.get(SIDE, "Unknown")
+            approach = chat_data.get(TRADING_APPROACH, "conservative")
+            if chat_id:
+                await send_trade_alert(
+                    bot=ctx_app.bot,
+                    chat_id=chat_id,
+                    alert_type="tp1_with_fills",
+                    symbol=symbol,
+                    side=side,
+                    approach=approach,
+                    pnl=Decimal("0"),
+                    entry_price=Decimal("0"),
+                    current_price=Decimal("0"),
+                    position_size=Decimal("0"),
+                    cancelled_orders=cancelled_orders,
+                    additional_info={
+                        "filled_count": len(limits_filled),
+                        "total_limits": len(limit_order_ids)
+                    }
+                )
+        
         # Mark as processed (different from the original TP1 cancellation)
         chat_data["conservative_tp1_hit_with_fills_processed"] = True
         
@@ -397,17 +431,14 @@ async def cancel_remaining_conservative_limits_only(chat_data: dict, symbol: str
         logger.error(f"❌ Error cancelling remaining conservative limits: {e}", exc_info=True)
         return []
 
-async def cancel_conservative_orders_on_tp1_hit(chat_data: dict, symbol: str) -> List[str]:
+async def cancel_conservative_orders_on_tp1_hit(chat_data: dict, symbol: str, ctx_app=None) -> List[str]:
     """
     Cancel all remaining conservative orders when TP1 hits before limits fill
+    ADDED: Send alert for TP1 early hit scenario
     
-    ENHANCED: Only for FULL monitoring, not read-only
+    All trades are bot trades now
     """
     try:
-        # SAFETY: Skip for read-only monitoring
-        if is_read_only_monitoring(chat_data):
-            logger.info("🛡️ READ-ONLY monitoring: Skipping order cancellation")
-            return []
         
         cancelled_orders = []
         
@@ -460,6 +491,26 @@ async def cancel_conservative_orders_on_tp1_hit(chat_data: dict, symbol: str) ->
                     error_msg = str(result) if isinstance(result, Exception) else "Unknown error"
                     logger.warning(f"⚠️ Failed to cancel {order_type} order {order_id}: {error_msg}")
         
+        # Send alert for TP1 early hit
+        if ctx_app and hasattr(ctx_app, 'bot') and cancelled_orders:
+            chat_id = chat_data.get('chat_id') or chat_data.get('_chat_id')
+            side = chat_data.get(SIDE, "Unknown")
+            approach = chat_data.get(TRADING_APPROACH, "conservative")
+            if chat_id:
+                await send_trade_alert(
+                    bot=ctx_app.bot,
+                    chat_id=chat_id,
+                    alert_type="tp1_early_hit",
+                    symbol=symbol,
+                    side=side,
+                    approach=approach,
+                    pnl=Decimal("0"),
+                    entry_price=Decimal("0"),
+                    current_price=Decimal("0"),
+                    position_size=Decimal("0"),
+                    cancelled_orders=cancelled_orders
+                )
+        
         # Mark as processed
         chat_data[CONSERVATIVE_TP1_HIT_BEFORE_LIMITS] = True
         chat_data[CONSERVATIVE_ORDERS_CANCELLED] = True
@@ -471,16 +522,14 @@ async def cancel_conservative_orders_on_tp1_hit(chat_data: dict, symbol: str) ->
         logger.error(f"❌ Error cancelling conservative orders on TP1 hit: {e}", exc_info=True)
         return []
 
-async def check_conservative_limit_fills(chat_data: dict, symbol: str) -> List[str]:
+async def check_conservative_limit_fills(chat_data: dict, symbol: str, ctx_app=None) -> List[str]:
     """
     Check which conservative limit orders have been filled
+    ADDED: Send alerts for newly filled limit orders
     
-    ENHANCED: Only for FULL monitoring, not read-only
+    All trades are bot trades now - no read-only monitoring
     """
     try:
-        # SAFETY: Skip for read-only monitoring
-        if is_read_only_monitoring(chat_data):
-            return []
         
         approach = chat_data.get(TRADING_APPROACH, "fast")
         if approach != "conservative":
@@ -491,7 +540,7 @@ async def check_conservative_limit_fills(chat_data: dict, symbol: str) -> List[s
         
         newly_filled = []
         
-        for order_id in limit_order_ids:
+        for i, order_id in enumerate(limit_order_ids):
             if order_id and order_id not in limits_filled:
                 # Check order status
                 order_info = await get_order_info(symbol, order_id)
@@ -501,6 +550,33 @@ async def check_conservative_limit_fills(chat_data: dict, symbol: str) -> List[s
                         newly_filled.append(order_id)
                         limits_filled.append(order_id)
                         logger.info(f"✅ Conservative limit order filled: {order_id[:8]}...")
+                        
+                        # Send alert for limit fill
+                        if ctx_app and hasattr(ctx_app, 'bot'):
+                            chat_id = chat_data.get('chat_id') or chat_data.get('_chat_id')
+                            side = chat_data.get(SIDE, "Unknown")
+                            if chat_id:
+                                fill_price = Decimal(str(order_info.get("avgPrice", 0)))
+                                fill_size = Decimal(str(order_info.get("cumExecQty", 0)))
+                                await send_trade_alert(
+                                    bot=ctx_app.bot,
+                                    chat_id=chat_id,
+                                    alert_type="limit_filled",
+                                    symbol=symbol,
+                                    side=side,
+                                    approach=approach,
+                                    pnl=Decimal("0"),  # No P&L for limit fill
+                                    entry_price=fill_price,
+                                    current_price=fill_price,
+                                    position_size=fill_size,
+                                    additional_info={
+                                        "limit_number": i + 1,
+                                        "total_limits": len(limit_order_ids),
+                                        "fill_price": fill_price,
+                                        "fill_size": fill_size,
+                                        "filled_count": len(limits_filled)
+                                    }
+                                )
         
         # Update chat data
         chat_data[CONSERVATIVE_LIMITS_FILLED] = limits_filled
@@ -515,16 +591,14 @@ async def check_conservative_limit_fills(chat_data: dict, symbol: str) -> List[s
 # FIXED: ENHANCED FAST APPROACH TP/SL ORDER MANAGEMENT
 # =============================================
 
-async def check_tp_hit_and_cancel_sl(chat_data: dict, symbol: str, current_price: Decimal, side: str) -> bool:
+async def check_tp_hit_and_cancel_sl(chat_data: dict, symbol: str, current_price: Decimal, side: str, ctx_app=None) -> bool:
     """
     FIXED: Check if TP is hit for fast approach and cancel SL order
+    ADDED: Send alert when TP is hit
     
     Returns True if TP was hit and SL was cancelled
     """
     try:
-        # SAFETY: Skip for read-only monitoring
-        if is_read_only_monitoring(chat_data):
-            return False
         
         approach = chat_data.get(TRADING_APPROACH, "fast")
         if approach != "fast":
@@ -552,19 +626,49 @@ async def check_tp_hit_and_cancel_sl(chat_data: dict, symbol: str, current_price
         if tp_triggered:
             logger.info(f"🎯 FAST APPROACH: TP HIT at {current_price} (target: {tp_price}) for {symbol}")
             
+            # Get position info for alert
+            entry_price = safe_decimal_conversion(chat_data.get(PRIMARY_ENTRY_PRICE, "0"))
+            position_size = safe_decimal_conversion(chat_data.get(LAST_KNOWN_POSITION_SIZE, "0"))
+            
+            # Calculate P&L
+            if side == "Buy":
+                pnl = (current_price - entry_price) * position_size
+            else:  # Sell
+                pnl = (entry_price - current_price) * position_size
+            
             # Cancel SL order
+            cancelled_orders = []
             sl_order_id = chat_data.get(SL_ORDER_ID) or chat_data.get("sl_order_id")
             if sl_order_id:
                 logger.info(f"🎯 TP hit - cancelling SL order {sl_order_id}")
                 success = await cancel_order_with_retry(symbol, sl_order_id)
                 if success:
                     logger.info(f"✅ SL order {sl_order_id} cancelled after TP hit")
+                    cancelled_orders.append(f"Stop Loss order {sl_order_id[:8]}...")
                     chat_data[SL_ORDER_ID] = None
                     chat_data["sl_order_id"] = None
                 else:
                     logger.warning(f"⚠️ Failed to cancel SL order {sl_order_id}")
             else:
                 logger.info(f"ℹ️ No SL order ID found to cancel")
+            
+            # Send alert if bot is available
+            if ctx_app and hasattr(ctx_app, 'bot'):
+                chat_id = chat_data.get('chat_id') or chat_data.get('_chat_id')
+                if chat_id:
+                    await send_trade_alert(
+                        bot=ctx_app.bot,
+                        chat_id=chat_id,
+                        alert_type="tp_hit",
+                        symbol=symbol,
+                        side=side,
+                        approach=approach,
+                        pnl=pnl,
+                        entry_price=entry_price,
+                        current_price=current_price,
+                        position_size=position_size,
+                        cancelled_orders=cancelled_orders
+                    )
             
             # Mark TP as processed
             chat_data["tp_hit_processed"] = True
@@ -576,16 +680,14 @@ async def check_tp_hit_and_cancel_sl(chat_data: dict, symbol: str, current_price
         logger.error(f"Error checking TP hit for fast approach: {e}")
         return False
 
-async def check_sl_hit_and_cancel_tp(chat_data: dict, symbol: str, current_price: Decimal, side: str) -> bool:
+async def check_sl_hit_and_cancel_tp(chat_data: dict, symbol: str, current_price: Decimal, side: str, ctx_app=None) -> bool:
     """
     FIXED: Check if SL is hit for fast approach and cancel TP order
+    ADDED: Send alert when SL is hit
     
     Returns True if SL was hit and TP was cancelled
     """
     try:
-        # SAFETY: Skip for read-only monitoring
-        if is_read_only_monitoring(chat_data):
-            return False
         
         approach = chat_data.get(TRADING_APPROACH, "fast")
         if approach != "fast":
@@ -613,7 +715,18 @@ async def check_sl_hit_and_cancel_tp(chat_data: dict, symbol: str, current_price
         if sl_triggered:
             logger.info(f"🛡️ FAST APPROACH: SL HIT at {current_price} (target: {sl_price}) for {symbol}")
             
+            # Get position info for alert
+            entry_price = safe_decimal_conversion(chat_data.get(PRIMARY_ENTRY_PRICE, "0"))
+            position_size = safe_decimal_conversion(chat_data.get(LAST_KNOWN_POSITION_SIZE, "0"))
+            
+            # Calculate P&L (negative for SL)
+            if side == "Buy":
+                pnl = (current_price - entry_price) * position_size
+            else:  # Sell
+                pnl = (entry_price - current_price) * position_size
+            
             # Cancel TP order
+            cancelled_orders = []
             tp_order_id = chat_data.get("tp_order_id")
             tp_order_ids = chat_data.get(TP_ORDER_IDS, [])
             
@@ -623,6 +736,7 @@ async def check_sl_hit_and_cancel_tp(chat_data: dict, symbol: str, current_price
                 success = await cancel_order_with_retry(symbol, tp_order_id)
                 if success:
                     logger.info(f"✅ TP order {tp_order_id} cancelled after SL hit")
+                    cancelled_orders.append(f"Take Profit order {tp_order_id[:8]}...")
                     chat_data["tp_order_id"] = None
                 else:
                     logger.warning(f"⚠️ Failed to cancel TP order {tp_order_id}")
@@ -634,8 +748,27 @@ async def check_sl_hit_and_cancel_tp(chat_data: dict, symbol: str, current_price
                     success = await cancel_order_with_retry(symbol, tp_id)
                     if success:
                         logger.info(f"✅ TP order {tp_id} cancelled after SL hit")
+                        cancelled_orders.append(f"Take Profit order {tp_id[:8]}...")
                     else:
                         logger.warning(f"⚠️ Failed to cancel TP order {tp_id}")
+            
+            # Send alert if bot is available
+            if ctx_app and hasattr(ctx_app, 'bot'):
+                chat_id = chat_data.get('chat_id') or chat_data.get('_chat_id')
+                if chat_id:
+                    await send_trade_alert(
+                        bot=ctx_app.bot,
+                        chat_id=chat_id,
+                        alert_type="sl_hit",
+                        symbol=symbol,
+                        side=side,
+                        approach=approach,
+                        pnl=pnl,
+                        entry_price=entry_price,
+                        current_price=current_price,
+                        position_size=position_size,
+                        cancelled_orders=cancelled_orders
+                    )
             
             # Clear TP orders from chat data
             chat_data[TP_ORDER_IDS] = []
@@ -655,13 +788,9 @@ async def cancel_remaining_orders(chat_data: dict, symbol: str, triggered_order_
     """
     ENHANCED: Cancel remaining orders when TP or SL is hit - with conservative approach support
     
-    ENHANCED: Only for FULL monitoring, not read-only
+    All trades are bot trades now
     """
     try:
-        # SAFETY: Skip for read-only monitoring
-        if is_read_only_monitoring(chat_data):
-            logger.info("🛡️ READ-ONLY monitoring: Skipping order cancellation")
-            return []
         
         orders_cancelled = []
         approach = chat_data.get(TRADING_APPROACH, "fast")
@@ -837,14 +966,14 @@ async def update_performance_stats_on_close(ctx_app, chat_data: dict, position_d
     REFINED: Update performance statistics with duplicate prevention and better accuracy
     FIXED: Force immediate persistence after stats update
     
-    ENHANCED: Separate tracking for bot vs external positions
+    All positions are bot trades now
     """
     try:
         # Get bot data
         bot_data = ctx_app.bot_data
         
         monitoring_mode = get_monitoring_mode(chat_data)
-        is_external = chat_data.get("external_position", False)
+        is_external = False  # All positions are bot trades now
         
         logger.info(f"🔄 Updating performance stats ({monitoring_mode}) - Reason: {close_reason}, PnL: {pnl}")
         
@@ -923,7 +1052,7 @@ async def update_performance_stats_on_close(ctx_app, chat_data: dict, position_d
             "pnl": str(pnl),
             "close_time": close_time,
             "monitoring_mode": monitoring_mode,
-            "is_external": is_external,
+            "is_external": False,  # All positions are bot trades now
             "approach": chat_data.get(TRADING_APPROACH, "fast")
         }
         
@@ -1083,7 +1212,7 @@ async def update_performance_stats_on_close(ctx_app, chat_data: dict, position_d
 
 async def start_position_monitoring(ctx_app, chat_id: int, chat_data: dict):
     """
-    ENHANCED: Start monitoring a position with conservative approach support and read-only external support
+    Start monitoring a position with conservative approach support
     """
     monitoring_mode = get_monitoring_mode(chat_data)
     logger.info(f"🔄 Starting {monitoring_mode} position monitoring for chat {chat_id}")
@@ -1095,14 +1224,13 @@ async def start_position_monitoring(ctx_app, chat_id: int, chat_data: dict):
         return
     
     approach = chat_data.get(TRADING_APPROACH, "fast")
-    is_external = chat_data.get("external_position", False)
     
-    logger.info(f"📊 Monitoring: {approach} approach, External: {is_external}, Mode: {monitoring_mode}")
+    logger.info(f"📊 Monitoring: {approach} approach, Mode: {monitoring_mode}")
     
-    # Check if monitor is already running
-    task_status = await get_monitor_task_status(chat_id, symbol)
+    # Check if monitor is already running for this approach
+    task_status = await get_monitor_task_status(chat_id, symbol, approach)
     if task_status.get("running", False):
-        logger.info(f"⚠️ {monitoring_mode} monitor already running for {symbol} in chat {chat_id}")
+        logger.info(f"⚠️ {monitoring_mode} monitor already running for {symbol} ({approach}) in chat {chat_id}")
         return
     
     # Store monitoring info WITHOUT the task object (to prevent pickle errors)
@@ -1112,8 +1240,7 @@ async def start_position_monitoring(ctx_app, chat_id: int, chat_data: dict):
         "approach": approach,
         "active": True,
         "started_at": time.time(),
-        "monitoring_mode": monitoring_mode,
-        "external_position": is_external
+        "monitoring_mode": monitoring_mode
     }
     
     if ACTIVE_MONITOR_TASK not in chat_data:
@@ -1125,7 +1252,6 @@ async def start_position_monitoring(ctx_app, chat_id: int, chat_data: dict):
     metadata = {
         "symbol": symbol,
         "approach": approach,
-        "is_external": is_external,
         "monitoring_mode": monitoring_mode
     }
     
@@ -1134,18 +1260,39 @@ async def start_position_monitoring(ctx_app, chat_id: int, chat_data: dict):
     # Register task in global registry with metadata
     await register_monitor_task(chat_id, symbol, monitor_task, metadata)
     
+    # Also store in bot_data for dashboard access
+    if ctx_app and hasattr(ctx_app, 'bot_data'):
+        bot_data = ctx_app.bot_data
+        if 'monitor_tasks' not in bot_data:
+            bot_data['monitor_tasks'] = {}
+        
+        # Store by approach type for easy counting
+        monitor_key = f"{chat_id}_{symbol}_{approach}"
+        bot_data['monitor_tasks'][monitor_key] = {
+            'chat_id': chat_id,
+            'symbol': symbol,
+            'approach': approach,
+            'monitoring_mode': monitoring_mode,
+            'started_at': time.time(),
+            'active': True
+        }
+        logger.info(f"📊 Added monitor to bot_data: {approach} approach for {symbol}")
+    
     logger.info(f"✅ {monitoring_mode} position monitoring started for {symbol} in chat {chat_id}")
 
 async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict):
     """
-    ENHANCED monitoring loop with conservative approach support, read-only external support, and FIXED fast approach TP/SL logic
+    ENHANCED monitoring loop with conservative approach support and FIXED fast approach TP/SL logic
     FIXED: Force immediate persistence after stats update
+    ADDED: Trade execution alerts
     """
     symbol = chat_data.get(SYMBOL)
     position_idx = chat_data.get(POSITION_IDX, 0)
     approach = chat_data.get(TRADING_APPROACH, "fast")
-    is_external = chat_data.get("external_position", False)
     monitoring_mode = get_monitoring_mode(chat_data)
+    
+    # Store chat_id in chat_data for easy access in alert functions
+    chat_data['_chat_id'] = chat_id
     
     if not symbol:
         logger.error(f"❌ No symbol found for monitoring in chat {chat_id}")
@@ -1171,19 +1318,16 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
     fast_tp_hit = False
     fast_sl_hit = False
     
-    # Get stored order IDs (only for FULL monitoring)
-    if not is_read_only_monitoring(chat_data):
-        if approach == "conservative":
-            limit_order_ids = chat_data.get(LIMIT_ORDER_IDS, [])
-            tp_order_ids = chat_data.get(CONSERVATIVE_TP_ORDER_IDS, [])
-            sl_order_id = chat_data.get(CONSERVATIVE_SL_ORDER_ID)
-            logger.info(f"📋 Conservative FULL monitoring - Limits: {len(limit_order_ids)}, TPs: {len(tp_order_ids)}, SL: {bool(sl_order_id)}")
-        else:
-            tp_order_id = chat_data.get("tp_order_id")
-            sl_order_id = chat_data.get(SL_ORDER_ID) or chat_data.get("sl_order_id")
-            logger.info(f"📋 Fast FULL monitoring - TP: {tp_order_id}, SL: {sl_order_id}")
+    # Get stored order IDs
+    if approach == "conservative":
+        limit_order_ids = chat_data.get(LIMIT_ORDER_IDS, [])
+        tp_order_ids = chat_data.get(CONSERVATIVE_TP_ORDER_IDS, [])
+        sl_order_id = chat_data.get(CONSERVATIVE_SL_ORDER_ID)
+        logger.info(f"📋 Conservative monitoring - Limits: {len(limit_order_ids)}, TPs: {len(tp_order_ids)}, SL: {bool(sl_order_id)}")
     else:
-        logger.info(f"🔍 READ-ONLY monitoring - No order management for external position")
+        tp_order_id = chat_data.get("tp_order_id")
+        sl_order_id = chat_data.get(SL_ORDER_ID) or chat_data.get("sl_order_id")
+        logger.info(f"📋 Fast monitoring - TP: {tp_order_id}, SL: {sl_order_id}")
     
     # Get initial position to establish baseline
     try:
@@ -1275,14 +1419,13 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                     last_known_pnl = unrealized_pnl
                     chat_data["last_known_pnl"] = str(last_known_pnl)  # Store for accurate calculation
                 
-                # ENHANCED: Conservative/GGShot approach monitoring with dual TP1 logic (ONLY for FULL monitoring)
-                if (not is_read_only_monitoring(chat_data) and 
-                    (approach == "conservative" or approach == "ggshot") and 
+                # ENHANCED: Conservative/GGShot approach monitoring with dual TP1 logic
+                if ((approach == "conservative" or approach == "ggshot") and 
                     current_size > 0 and 
                     not conservative_tp1_cancelled):
                     
                     # Check for limit order fills first
-                    newly_filled = await check_conservative_limit_fills(chat_data, symbol)
+                    newly_filled = await check_conservative_limit_fills(chat_data, symbol, ctx_app)
                     if newly_filled:
                         logger.info(f"✅ {approach.capitalize()} limit orders filled: {len(newly_filled)}")
                     
@@ -1292,7 +1435,7 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                     
                     if tp1_hit_before_any_limits:
                         logger.info(f"🚨 {approach.capitalize()} TP1 hit before ANY limits filled for {symbol} - cancelling ALL orders")
-                        cancelled_orders = await cancel_conservative_orders_on_tp1_hit(chat_data, symbol)
+                        cancelled_orders = await cancel_conservative_orders_on_tp1_hit(chat_data, symbol, ctx_app)
                         conservative_tp1_cancelled = True
                         
                         if cancelled_orders:
@@ -1304,20 +1447,18 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                         
                         if tp1_hit_with_fills:
                             logger.info(f"🎯 {approach.capitalize()} TP1 hit WITH some fills for {symbol} - cancelling remaining limits only")
-                            cancelled_limits = await cancel_remaining_conservative_limits_only(chat_data, symbol)
+                            cancelled_limits = await cancel_remaining_conservative_limits_only(chat_data, symbol, ctx_app)
                             
                             if cancelled_limits:
                                 logger.info(f"🎯 {approach.capitalize()} partial cancellation completed: {', '.join(cancelled_limits)}")
                                 logger.info(f"✅ TP2, TP3, TP4 remain ACTIVE for the life of the trade")
                 
-                # FIXED: Fast approach TP/SL monitoring with proper order cancellation (ONLY for FULL monitoring)
-                elif (not is_read_only_monitoring(chat_data) and 
-                      approach == "fast" and 
-                      current_size > 0):
+                # FIXED: Fast approach TP/SL monitoring with proper order cancellation
+                elif approach == "fast" and current_size > 0:
                     
                     # Check for TP hit and cancel SL
                     if not fast_tp_hit:
-                        tp_hit = await check_tp_hit_and_cancel_sl(chat_data, symbol, current_price, side)
+                        tp_hit = await check_tp_hit_and_cancel_sl(chat_data, symbol, current_price, side, ctx_app)
                         if tp_hit:
                             fast_tp_hit = True
                             tp1_hit = True  # For backward compatibility
@@ -1325,7 +1466,7 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                     
                     # Check for SL hit and cancel TP
                     if not fast_sl_hit:
-                        sl_hit = await check_sl_hit_and_cancel_tp(chat_data, symbol, current_price, side)
+                        sl_hit = await check_sl_hit_and_cancel_tp(chat_data, symbol, current_price, side, ctx_app)
                         if sl_hit:
                             fast_sl_hit = True
                             logger.info(f"🛡️ Fast approach SL hit for {symbol} - TP cancelled")
@@ -1342,30 +1483,59 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                         # REFINED: Better P&L calculation
                         final_pnl = await calculate_accurate_pnl(position, chat_data)
                         
-                        # Determine close reason based on approach and flags (only for FULL monitoring)
-                        if not is_read_only_monitoring(chat_data):
-                            if approach == "fast":
-                                if fast_tp_hit or tp1_hit:
-                                    close_reason = "TP_HIT"
-                                elif fast_sl_hit:
-                                    close_reason = "SL_HIT"
-                            elif approach == "conservative":
-                                if conservative_tp1_cancelled:
-                                    close_reason = "TP_HIT"
-                                # Could add SL logic for conservative here if needed
+                        # Determine close reason based on approach and flags
+                        if approach == "fast":
+                            if fast_tp_hit or tp1_hit:
+                                close_reason = "TP_HIT"
+                            elif fast_sl_hit:
+                                close_reason = "SL_HIT"
+                        elif approach == "conservative":
+                            if conservative_tp1_cancelled:
+                                close_reason = "TP_HIT"
+                            # Could add SL logic for conservative here if needed
                         
-                        # Cancel remaining orders automatically (ONLY for FULL monitoring)
+                        # Cancel remaining orders automatically
                         cancelled_orders = []
-                        if not is_read_only_monitoring(chat_data):
-                            if close_reason == "TP_HIT":
-                                cancelled_orders = await cancel_remaining_orders(chat_data, symbol, 'TP')
-                            elif close_reason == "SL_HIT":
-                                cancelled_orders = await cancel_remaining_orders(chat_data, symbol, 'SL')
+                        if close_reason == "TP_HIT":
+                            cancelled_orders = await cancel_remaining_orders(chat_data, symbol, 'TP')
+                        elif close_reason == "SL_HIT":
+                            cancelled_orders = await cancel_remaining_orders(chat_data, symbol, 'SL')
                         
                         # Update performance stats (for ALL monitoring types)
                         await update_performance_stats_on_close(
                             ctx_app, chat_data, last_position_data or position, close_reason, final_pnl
                         )
+                        
+                        # Send position closed summary alert
+                        if ctx_app and hasattr(ctx_app, 'bot'):
+                            chat_id = chat_data.get('chat_id') or chat_data.get('_chat_id')
+                            if chat_id:
+                                # Calculate duration
+                                position_created_time = chat_data.get("position_created_time", 0)
+                                trade_initiated_at = chat_data.get("trade_initiated_at", position_created_time)
+                                if trade_initiated_at:
+                                    duration_minutes = int((time.time() - trade_initiated_at) / 60)
+                                else:
+                                    duration_minutes = 0
+                                
+                                # Get final prices
+                                exit_price = safe_decimal_conversion(position.get("markPrice", "0"))
+                                if exit_price == 0:
+                                    exit_price = current_price
+                                
+                                await send_position_closed_summary(
+                                    bot=ctx_app.bot,
+                                    chat_id=chat_id,
+                                    symbol=symbol,
+                                    side=side,
+                                    approach=approach,
+                                    entry_price=entry_price,
+                                    exit_price=exit_price,
+                                    position_size=last_position_size,
+                                    pnl=final_pnl,
+                                    close_reason=close_reason,
+                                    duration_minutes=duration_minutes
+                                )
                         
                         position_closed = True
                         
@@ -1415,7 +1585,17 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
         chat_data[ACTIVE_MONITOR_TASK] = {}
         
         # Unregister task
-        await unregister_monitor_task(chat_id, symbol)
+        approach = chat_data.get(TRADING_APPROACH, 'fast')
+        await unregister_monitor_task(chat_id, symbol, approach)
+        
+        # Remove from bot_data if available
+        if ctx_app and hasattr(ctx_app, 'bot_data'):
+            bot_data = ctx_app.bot_data
+            approach = chat_data.get(TRADING_APPROACH, 'fast')
+            monitor_key = f"{chat_id}_{symbol}_{approach}"
+            if 'monitor_tasks' in bot_data and monitor_key in bot_data['monitor_tasks']:
+                del bot_data['monitor_tasks'][monitor_key]
+                logger.info(f"📊 Cleaned up monitor from bot_data: {symbol} ({approach})")
         
         # Clear local variables to help GC
         position_history.clear()
@@ -1430,14 +1610,8 @@ async def move_sl_to_breakeven(chat_data: dict, symbol: str, entry_price: Decima
                               side: str, position_idx: int):
     """
     Move stop loss to breakeven after TP1 hit
-    
-    ENHANCED: Only for FULL monitoring, not read-only
     """
     try:
-        # SAFETY: Skip for read-only monitoring
-        if is_read_only_monitoring(chat_data):
-            logger.info("🛡️ READ-ONLY monitoring: Skipping SL modification")
-            return
         
         sl_order_id = chat_data.get(SL_ORDER_ID) or chat_data.get("sl_order_id")
         if not sl_order_id:
@@ -1474,7 +1648,7 @@ async def move_sl_to_breakeven(chat_data: dict, symbol: str, entry_price: Decima
     except Exception as e:
         logger.error(f"❌ Error moving SL to breakeven: {e}", exc_info=True)
 
-async def stop_position_monitoring(chat_data: dict):
+async def stop_position_monitoring(chat_data: dict, ctx_app=None):
     """Stop monitoring for a position with enhanced cleanup"""
     if ACTIVE_MONITOR_TASK in chat_data:
         task_info = chat_data[ACTIVE_MONITOR_TASK]
@@ -1484,14 +1658,23 @@ async def stop_position_monitoring(chat_data: dict):
         symbol = task_info.get("symbol", "")
         chat_id = task_info.get("chat_id", 0)
         if symbol and chat_id:
-            await unregister_monitor_task(chat_id, symbol)
+            approach = task_info.get("approach", "fast")
+            await unregister_monitor_task(chat_id, symbol, approach)
+            
+            # Remove from bot_data monitor_tasks
+            if ctx_app and hasattr(ctx_app, 'bot_data'):
+                bot_data = ctx_app.bot_data
+                monitor_key = f"{chat_id}_{symbol}_{approach}"
+                if 'monitor_tasks' in bot_data and monitor_key in bot_data['monitor_tasks']:
+                    del bot_data['monitor_tasks'][monitor_key]
+                    logger.info(f"📊 Removed monitor from bot_data: {symbol} ({approach})")
         
         monitoring_mode = task_info.get("monitoring_mode", "UNKNOWN")
         chat_data[ACTIVE_MONITOR_TASK] = {}
         logger.info(f"🛑 {monitoring_mode} position monitoring stopped")
 
 def get_monitoring_status(chat_data: dict) -> dict:
-    """Get current monitoring status with enhanced mode information"""
+    """Get current monitoring status"""
     task_info = chat_data.get(ACTIVE_MONITOR_TASK, {})
     
     status = {
@@ -1501,8 +1684,7 @@ def get_monitoring_status(chat_data: dict) -> dict:
         "chat_id": task_info.get("chat_id", "None"),
         "started_at": task_info.get("started_at", 0),
         "running_time": time.time() - task_info.get("started_at", time.time()) if task_info.get("started_at") else 0,
-        "monitoring_mode": task_info.get("monitoring_mode", "UNKNOWN"),
-        "external_position": task_info.get("external_position", False)
+        "monitoring_mode": task_info.get("monitoring_mode", "UNKNOWN")
     }
     
     return status
@@ -1510,6 +1692,31 @@ def get_monitoring_status(chat_data: dict) -> dict:
 def get_monitor_registry_stats() -> Dict[str, Any]:
     """Get monitoring registry statistics for debugging"""
     return _task_registry.get_stats()
+
+def get_monitor_counts_by_approach(bot_data: Dict[str, Any]) -> Dict[str, int]:
+    """Get monitor counts by approach type"""
+    counts = {
+        'total': 0,
+        'fast': 0,
+        'conservative': 0,
+        'ggshot': 0
+    }
+    
+    # Count from monitor_tasks in bot_data
+    monitor_tasks = bot_data.get('monitor_tasks', {})
+    for monitor_key, task_info in monitor_tasks.items():
+        if isinstance(task_info, dict) and task_info.get('active', False):
+            counts['total'] += 1
+            
+            approach = task_info.get('approach', 'unknown')
+            if approach == 'fast':
+                counts['fast'] += 1
+            elif approach == 'conservative':
+                counts['conservative'] += 1
+            elif approach == 'ggshot':
+                counts['ggshot'] += 1
+    
+    return counts
 
 # REFINED: Get trade history for debugging
 def get_trade_history_summary() -> Dict[str, Any]:
@@ -1523,34 +1730,6 @@ def get_trade_history_summary() -> Dict[str, Any]:
 # =============================================
 # CONSERVATIVE APPROACH MONITORING FUNCTIONS
 # =============================================
-
-async def check_conservative_limit_fills(chat_data: dict, symbol: str) -> List[str]:
-    """
-    Check which conservative limit orders have been filled
-    Returns list of newly filled order IDs
-    """
-    try:
-        limit_order_ids = chat_data.get(LIMIT_ORDER_IDS, [])
-        filled_orders = chat_data.get(CONSERVATIVE_LIMITS_FILLED, [])
-        newly_filled = []
-        
-        for order_id in limit_order_ids:
-            if order_id not in filled_orders:
-                # Check order status
-                order_info = await get_order_info(symbol, order_id)
-                if order_info and order_info.get("orderStatus") == "Filled":
-                    filled_orders.append(order_id)
-                    newly_filled.append(order_id)
-                    logger.info(f"✅ Conservative limit order {order_id[:8]} filled")
-        
-        # Update chat data with filled orders
-        chat_data[CONSERVATIVE_LIMITS_FILLED] = filled_orders
-        
-        return newly_filled
-        
-    except Exception as e:
-        logger.error(f"Error checking conservative limit fills: {e}")
-        return []
 
 async def check_conservative_tp1_hit(chat_data: dict, symbol: str, current_price: Decimal, side: str) -> bool:
     """
@@ -1813,10 +1992,10 @@ __all__ = [
     'stop_position_monitoring', 
     'get_monitoring_status',
     'get_monitor_registry_stats',
+    'get_monitor_counts_by_approach',
     'register_monitor_task',
     'unregister_monitor_task',
     'get_monitor_task_status',
-    'is_read_only_monitoring',
     'get_monitoring_mode',
     'periodic_monitor_cleanup',
     'start_monitor_cleanup_task',

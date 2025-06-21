@@ -129,7 +129,7 @@ class BasePositionMerger(ABC):
                 if order_type in ['Market', 'Limit'] and order.get('reduceOnly', False):
                     logger.info(f"🗑️ Cancelling {order_type} order {order_id[:8]}... ({link_id})")
                     
-                    cancelled = await cancel_order(order_id, symbol)
+                    cancelled = await cancel_order(symbol, order_id)
                     if cancelled:
                         cancelled_count += 1
                         logger.info(f"✅ Cancelled order {order_id[:8]}...")
@@ -362,11 +362,24 @@ class ConservativePositionMerger(BasePositionMerger):
                 order_type = order.get('orderType', '')
                 link_id = order.get('orderLinkId', '')
                 
+                # Debug logging
+                logger.debug(f"Order data: orderId={order_id}, symbol={symbol}, type={order_type}, linkId={link_id}")
+                
+                # Validate order data
+                if not order_id or not symbol:
+                    logger.warning(f"Skipping order with missing data: orderId={order_id}, symbol={symbol}")
+                    continue
+                
+                # Check if orderId looks like a symbol (contains "USDT")
+                if "USDT" in str(order_id) and "USDT" not in str(symbol):
+                    logger.warning(f"Detected swapped order fields! Swapping back: orderId={order_id}, symbol={symbol}")
+                    order_id, symbol = symbol, order_id
+                
                 # Only cancel TP/SL orders
                 if (link_id.startswith('TP') or link_id.startswith('SL') or 
                     order_type in ['Market', 'Limit'] and order.get('stopOrderType')):
                     
-                    logger.info(f"🗑️ Cancelling {link_id or order_type} order {order_id}")
+                    logger.info(f"🗑️ Cancelling {link_id or order_type} order {order_id}... ({link_id})")
                     success = await cancel_order(symbol, order_id)
                     
                     if success:

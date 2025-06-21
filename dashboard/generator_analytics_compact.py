@@ -182,9 +182,8 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         positions = await get_all_positions()
         active_positions = [p for p in positions if float(p.get('size', 0)) > 0]
         
-        # Separate bot vs external positions
+        # All positions are bot positions
         bot_positions = []
-        external_positions = []
         
         # Get both bot_data and chat_data from the telegram-python-bot context
         bot_data = {}
@@ -223,133 +222,19 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
                 largest_margin = max(position_margins)
                 largest_position_pct = (largest_margin / float(total_balance) * 100)
         
-        # Get external positions dict for easy lookup
-        external_positions_dict = bot_data.get('external_positions', {})
-        external_symbols = set()
-        for ext_pos_data in external_positions_dict.values():
-            if isinstance(ext_pos_data, dict):
-                ext_symbol = ext_pos_data.get('symbol', '')
-                if ext_symbol:
-                    external_symbols.add(ext_symbol)
-        
         # Debug logging for position classification
-        logger.debug(f"Dashboard: Found {len(external_symbols)} external symbols: {external_symbols}")
         logger.debug(f"Dashboard: Processing {len(active_positions)} active positions")
         
         for pos in active_positions:
             symbol = pos.get('symbol', '')
-            # Check if position is tracked by bot
-            is_bot_position = False
-            is_external = False
-            found_in = None
-            
-            # First check if it's in the external positions dict
-            if symbol in external_symbols:
-                is_external = True
-                found_in = "external_positions dict"
-            else:
-                # Check active monitors in chat data
-                for key in bot_data:
-                    if key.startswith('chat_data_'):
-                        chat_data = bot_data.get(key, {})
-                        if isinstance(chat_data, dict):
-                            monitor_info = chat_data.get(ACTIVE_MONITOR_TASK, {})
-                            if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
-                                if monitor_info.get('active', False):
-                                    # Check if it's external monitoring
-                                    if monitor_info.get('external_position', False):
-                                        is_external = True
-                                        found_in = f"{key} (external monitor)"
-                                    else:
-                                        is_bot_position = True
-                                        found_in = f"{key} (bot monitor)"
-                                    break
-            
-            # Also check the individual chat data for this specific chat_id
-            if not is_bot_position and not is_external:
-                chat_data_key = f'chat_data_{chat_id}'
-                if chat_data_key in bot_data:
-                    chat_data = bot_data.get(chat_data_key, {})
-                    if isinstance(chat_data, dict):
-                        # Check if this chat has an active monitor for this symbol
-                        monitor_info = chat_data.get(ACTIVE_MONITOR_TASK, {})
-                        if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
-                            if monitor_info.get('active', False):
-                                if monitor_info.get('external_position', False):
-                                    is_external = True
-                                    found_in = f"current chat {chat_data_key} (external)"
-                                else:
-                                    is_bot_position = True
-                                    found_in = f"current chat {chat_data_key} (bot)"
-            
-            # ALSO check the direct chat_data (not prefixed with chat_data_)
-            if not is_bot_position and not is_external:
-                # Check if we have chat data for the current chat_id in all_chat_data
-                if str(chat_id) in all_chat_data:
-                    direct_chat_data = all_chat_data.get(str(chat_id), {})
-                    if isinstance(direct_chat_data, dict):
-                        # Check if this chat has an active monitor for this symbol
-                        monitor_info = direct_chat_data.get(ACTIVE_MONITOR_TASK, {})
-                        if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
-                            if monitor_info.get('active', False):
-                                if monitor_info.get('external_position', False):
-                                    is_external = True
-                                    found_in = f"direct chat_data[{chat_id}] (external)"
-                                else:
-                                    is_bot_position = True
-                                    found_in = f"direct chat_data[{chat_id}] (bot)"
-                
-                # Also check integer chat_id key
-                if int(chat_id) in all_chat_data:
-                    direct_chat_data = all_chat_data.get(int(chat_id), {})
-                    if isinstance(direct_chat_data, dict):
-                        # Check if this chat has an active monitor for this symbol
-                        monitor_info = direct_chat_data.get(ACTIVE_MONITOR_TASK, {})
-                        if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
-                            if monitor_info.get('active', False):
-                                if monitor_info.get('external_position', False):
-                                    is_external = True
-                                    found_in = f"direct chat_data[{chat_id}] int key (external)"
-                                else:
-                                    is_bot_position = True
-                                    found_in = f"direct chat_data[{chat_id}] int key (bot)"
-            
-            # ALSO check the current context's chat_data directly (from context object)
-            if not is_bot_position and not is_external and current_chat_data:
-                # Check if this chat has an active monitor for this symbol
-                monitor_info = current_chat_data.get(ACTIVE_MONITOR_TASK, {})
-                if isinstance(monitor_info, dict) and monitor_info.get('symbol') == symbol:
-                    if monitor_info.get('active', False):
-                        if monitor_info.get('external_position', False):
-                            is_external = True
-                            found_in = f"current context chat_data (external)"
-                        else:
-                            is_bot_position = True
-                            found_in = f"current context chat_data (bot)"
-                
-                # Also check position_created flag
-                if not is_bot_position and not is_external:
-                    if current_chat_data.get('symbol') == symbol and current_chat_data.get('position_created'):
-                        is_bot_position = True
-                        found_in = f"current context position_created flag"
-            
-            # Log classification
-            logger.debug(f"Position {symbol}: bot={is_bot_position}, external={is_external}, found_in={found_in}")
-            
-            if is_external:
-                external_positions.append(pos)
-            elif is_bot_position:
-                bot_positions.append(pos)
-            else:
-                # If we can't determine, treat as external
-                logger.debug(f"Position {symbol}: Unable to determine origin, treating as external")
-                external_positions.append(pos)
+            # All positions are bot positions now
+            bot_positions.append(pos)
+            logger.debug(f"Position {symbol}: Added as bot position")
         
         # Log final classification summary
         logger.info(f"Dashboard position classification complete:")
         logger.info(f"  Total active positions: {len(active_positions)}")
         logger.info(f"  Bot positions: {len(bot_positions)} ({[p.get('symbol') for p in bot_positions]})")
-        logger.info(f"  External positions: {len(external_positions)} ({[p.get('symbol') for p in external_positions]})")
         
         # Calculate position metrics
         # Use positionIM (Initial Margin) for actual USDT used, not leveraged position value
@@ -519,39 +404,73 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         if 'stats_max_drawdown' not in stats_data:
             stats_data['stats_max_drawdown'] = 0
         
-        # Get monitor tasks for counting
+        # Get monitor tasks for counting by approach
         monitor_tasks = bot_data.get('monitor_tasks', {})
         
-        # Count active monitors more accurately
+        # Count monitors by approach
+        fast_monitor_count = 0
+        conservative_monitor_count = 0
         active_monitor_count = 0
         
-        # Count from monitor_tasks registry
-        for symbol_tasks in monitor_tasks.values():
-            if isinstance(symbol_tasks, dict):
-                for task_info in symbol_tasks.values():
-                    if isinstance(task_info, dict) and task_info.get('active', False):
-                        active_monitor_count += 1
+        # Count from monitor_tasks registry (primary source)
+        for monitor_key, task_info in monitor_tasks.items():
+            if isinstance(task_info, dict) and task_info.get('active', False):
+                approach = task_info.get('approach', 'unknown')
+                
+                if approach == 'fast':
+                    fast_monitor_count += 1
+                elif approach == 'conservative':
+                    conservative_monitor_count += 1
+                elif approach == 'ggshot':
+                    conservative_monitor_count += 1  # GGShot uses conservative pattern
+                
+                active_monitor_count += 1
         
-        # Also count from chat data
+        # Also count from chat data (fallback for older monitors)
+        counted_keys = set()  # To avoid double counting
+        
         for key in bot_data:
             if key.startswith('chat_data_'):
                 chat_data = bot_data.get(key, {})
                 if isinstance(chat_data, dict):
                     monitor_info = chat_data.get(ACTIVE_MONITOR_TASK, {})
                     if isinstance(monitor_info, dict) and monitor_info.get('active', False):
-                        active_monitor_count += 1
+                        # Create unique key to check if already counted
+                        chat_id_from_key = monitor_info.get('chat_id', '')
+                        symbol = monitor_info.get('symbol', '')
+                        unique_key = f"{chat_id_from_key}_{symbol}"
+                        
+                        if unique_key not in monitor_tasks and unique_key not in counted_keys:
+                            counted_keys.add(unique_key)
+                            approach = monitor_info.get('approach', chat_data.get(TRADING_APPROACH, 'fast'))
+                            
+                            if approach == 'fast':
+                                fast_monitor_count += 1
+                            elif approach == 'conservative':
+                                conservative_monitor_count += 1
+                            elif approach == 'ggshot':
+                                conservative_monitor_count += 1
+                            
+                            active_monitor_count += 1
         
-        # Also check current context chat data
-        if isinstance(context, dict):
-            current_chat_data = context.get('chat_data', {})
-            if current_chat_data:
-                monitor_info = current_chat_data.get(ACTIVE_MONITOR_TASK, {})
-                # Handle single monitor stored directly
-                if isinstance(monitor_info, dict) and monitor_info.get('symbol') and monitor_info.get('active', False):
-                    # Only count if not already counted
-                    chat_key = f'chat_data_{chat_id}'
-                    if chat_key not in bot_data:
-                        active_monitor_count += 1
+        # Also check current context chat data (for the current chat's monitor)
+        if current_chat_data:
+            monitor_info = current_chat_data.get(ACTIVE_MONITOR_TASK, {})
+            if isinstance(monitor_info, dict) and monitor_info.get('active', False):
+                current_symbol = monitor_info.get('symbol', '')
+                unique_key = f"{chat_id}_{current_symbol}"
+                
+                if unique_key not in monitor_tasks and unique_key not in counted_keys:
+                    approach = monitor_info.get('approach', current_chat_data.get(TRADING_APPROACH, 'fast'))
+                    
+                    if approach == 'fast':
+                        fast_monitor_count += 1
+                    elif approach == 'conservative':
+                        conservative_monitor_count += 1
+                    elif approach == 'ggshot':
+                        conservative_monitor_count += 1
+                    
+                    active_monitor_count += 1
         
         # Check if AI is enabled
         from config.settings import LLM_PROVIDER
@@ -606,8 +525,7 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
 └ 📊 Risk:Reward = 1:{(potential_profit_tp1/potential_loss_sl if potential_loss_sl > 0 else 0):.1f}
 
 📊 <b>POSITIONS OVERVIEW</b> ({len(active_positions)} Active)
-├ 🤖 Bot Positions: {len(bot_positions)}
-├ 🌍 External: {len(external_positions)}
+├ 🤖 Total Positions: {len(bot_positions)}
 ├ 💵 Total Value: ${format_number(total_margin_used)}
 ├ 💸 Margin Used: ${format_number(total_margin_used)}
 └ 📈 Unrealized: ${format_number(total_unrealized_pnl)}
@@ -646,8 +564,6 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
 
 ⚡ <b>LIVE MONITORING</b>
 ├ Active Positions: {len(active_positions)}
-├ Bot Created: {len(bot_positions)} positions
-├ External Adopted: {len(external_positions)} positions
 ├ Active Monitors: {active_monitor_count}
 └ System Status: 🟢 All systems operational
 
@@ -661,16 +577,16 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
 📊 <b>PORTFOLIO OPTIMIZATION</b>
 ├ Positions: {len(active_positions)} symbols ({len(set(p.get('symbol', '') for p in active_positions))} unique)
 ├ Largest Position: {largest_position_pct:.1f}% of portfolio
-├ Bot Positions: {len(bot_positions)} ({(len(bot_positions)/len(active_positions)*100 if len(active_positions) > 0 else 0):.0f}%)
-├ External Positions: {len(external_positions)} ({(len(external_positions)/len(active_positions)*100 if len(active_positions) > 0 else 0):.0f}%)
 └ Risk Distribution: {'⚠️ Concentrated' if largest_position_pct > 30 else '✅ Balanced' if largest_position_pct < 20 else '🟡 Moderate'}
 
 ⚖️ <b>ACTIVE MANAGEMENT</b>
-├ Active Monitors: {active_monitor_count}
-├ Conservative: {stats_data.get('stats_conservative_trades', 0)} | Fast: {stats_data.get('stats_fast_trades', 0)}
-├ Avg Position Size: ${(total_margin_used/len(active_positions) if len(active_positions) > 0 else 0):.0f}
+├ Total Monitors: {active_monitor_count} running
+├ Fast Monitors: {fast_monitor_count} active
+├ Conservative: {conservative_monitor_count} active
+├ Trade History: C:{stats_data.get(STATS_CONSERVATIVE_TRADES, 0)} F:{stats_data.get(STATS_FAST_TRADES, 0)}
+├ Avg Position: ${(total_margin_used/len(active_positions) if len(active_positions) > 0 else 0):.0f}
 ├ Open Orders: {len(all_orders)} active
-└ TP1 Cancellations: {stats_data.get('stats_conservative_tp1_cancellations', 0)}
+└ TP1 Cancels: {stats_data.get(STATS_CONSERVATIVE_TP1_CANCELLATIONS, 0)}
 
 ═══════════════════════════════════
 """

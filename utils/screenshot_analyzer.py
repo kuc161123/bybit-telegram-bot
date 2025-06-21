@@ -9,7 +9,7 @@ import base64
 import io
 import numpy as np
 from decimal import Decimal, InvalidOperation
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 import requests
 from html import escape
@@ -59,7 +59,7 @@ class ScreenshotAnalyzer:
             from utils.image_enhancer import image_enhancer
             _, quality_report = image_enhancer.enhance_for_ocr(processed_image, "quick")
             
-            # Multi-pass extraction strategy
+            # Multi-pass extraction strategy with smart early termination
             extraction_attempts = [
                 ("standard", "standard extraction"),
                 ("advanced", "advanced enhancement"),
@@ -68,6 +68,8 @@ class ScreenshotAnalyzer:
             
             best_result = None
             best_confidence = 0.0
+            first_pass_result = None
+            first_pass_confidence = 0.0
             
             for i, (enhancement_level, attempt_name) in enumerate(extraction_attempts):
                 logger.info(f"Attempting {attempt_name} (pass {i + 1}/3)")
@@ -101,25 +103,79 @@ class ScreenshotAnalyzer:
                 else:
                     prompt_strategy = "numbers_only"
                 
+                # Log token usage for this strategy
+                max_tokens = self._get_max_tokens_for_strategy(prompt_strategy)
+                logger.info(f"Using {prompt_strategy} strategy with max_tokens={max_tokens}")
+                
                 # Analyze with OpenAI
                 analysis_result = await self._analyze_with_openai(base64_image, symbol, side, prompt_strategy)
                 
-                # Check if this is a better result
+                # Check if this is a valid result
                 if analysis_result.get("success"):
-                    confidence = analysis_result.get("confidence", 0.0)
-                    if confidence > best_confidence:
+                    # Calculate composite confidence score
+                    composite_confidence = await self._calculate_extraction_confidence(
+                        analysis_result, symbol, side
+                    )
+                    analysis_result["composite_confidence"] = composite_confidence
+                    
+                    # Store first pass result for potential reversion
+                    if i == 0:
+                        first_pass_result = analysis_result.copy()
+                        first_pass_confidence = composite_confidence
+                        logger.info(f"First pass confidence: {composite_confidence:.2f}")
+                        
+                        # Check if we should accept first pass immediately
+                        if composite_confidence >= 0.85:
+                            logger.info("✅ First pass confidence excellent (>=0.85), accepting results immediately")
+                            best_result = first_pass_result
+                            best_result["extraction_method"] = "first_pass_high_confidence"
+                            break
+                        elif composite_confidence >= 0.70:
+                            logger.info("⚠️ First pass confidence moderate (>=0.70), will try one more targeted pass")
+                            # Limit attempts to just one more
+                            extraction_attempts = extraction_attempts[:2]
+                    
+                    # Update best result if this is better
+                    if composite_confidence > best_confidence:
                         best_result = analysis_result
-                        best_confidence = confidence
+                        best_confidence = composite_confidence
                         best_result["extraction_method"] = attempt_name
                     
-                    # If we have high confidence, stop trying
-                    if confidence >= 0.8:
+                    # Early termination on high confidence
+                    if composite_confidence >= 0.85:
+                        logger.info(f"High confidence achieved ({composite_confidence:.2f}), stopping extraction")
                         break
+                
+                # For moderate first pass confidence, skip to targeted enhancement
+                if i == 0 and first_pass_confidence >= 0.70 and first_pass_confidence < 0.85:
+                    # Determine what's missing and adjust next attempt
+                    missing_fields = self._identify_missing_fields(first_pass_result)
+                    if missing_fields:
+                        logger.info(f"Targeting enhancement for missing fields: {missing_fields}")
+                        # Skip to advanced enhancement which often helps with missing fields
+                        continue
+            
+            # Check if we should revert to first pass
+            if best_result and first_pass_result and i > 0:
+                if first_pass_confidence > best_confidence:
+                    logger.warning(f"⚠️ Reverting to first pass result (confidence {first_pass_confidence:.2f} > {best_confidence:.2f})")
+                    best_result = first_pass_result
+                    best_result["extraction_method"] = "first_pass_reverted"
+                    best_confidence = first_pass_confidence
             
             # Use best result or try final fallback
             if best_result:
                 best_result["quality_report"] = quality_report
-                logger.info(f"Best extraction: {best_result.get('extraction_method')} with confidence {best_confidence}")
+                logger.info(f"Best extraction: {best_result.get('extraction_method')} with confidence {best_confidence:.2f}")
+                
+                # Add extraction statistics
+                best_result["extraction_stats"] = {
+                    "passes_attempted": i + 1,
+                    "first_pass_confidence": first_pass_confidence,
+                    "final_confidence": best_confidence,
+                    "method_used": best_result.get('extraction_method')
+                }
+                
                 return best_result
             else:
                 # Final fallback - try to get ANY numbers from the image
@@ -239,6 +295,21 @@ class ScreenshotAnalyzer:
             logger.error(f"Error converting image to base64: {e}")
             return None
     
+    def _get_max_tokens_for_strategy(self, prompt_strategy: str) -> int:
+        """Get optimal max_tokens based on prompt strategy for enhanced accuracy"""
+        if prompt_strategy == "detailed":
+            # Maximum tokens for comprehensive analysis with reasoning
+            return 4096
+        elif prompt_strategy == "simple":
+            # Moderate tokens for focused extraction
+            return 2000
+        elif prompt_strategy == "numbers_only":
+            # Lower tokens for quick number extraction
+            return 1500
+        else:
+            # Default fallback
+            return 1000
+    
     async def _analyze_with_openai(self, base64_image: str, symbol: str, side: str, prompt_strategy: str = "detailed") -> Dict[str, Any]:
         """Analyze image using OpenAI Vision API with different prompt strategies"""
         try:
@@ -284,7 +355,7 @@ class ScreenshotAnalyzer:
                         ]
                     }
                 ],
-                max_tokens=1000,
+                max_tokens=self._get_max_tokens_for_strategy(prompt_strategy),
                 temperature=0.1  # Low temperature for consistent extraction
             )
             
@@ -302,12 +373,20 @@ class ScreenshotAnalyzer:
             return self._error_result(f"OpenAI API error: {str(e)}")
     
     def _create_analysis_prompt(self, symbol: str, side: str) -> str:
-        """Create detailed analysis prompt for OpenAI Vision API"""
+        """Create detailed analysis prompt for OpenAI Vision API with enhanced reasoning"""
         direction = "LONG" if side == "Buy" else "SHORT"
         
         return f"""You are an expert trading analyst specialized in extracting parameters from TradingView mobile screenshots.
 
 TASK: Analyze this mobile trading screenshot and extract ALL visible trading parameters for a {direction} position on {symbol}.
+
+ANALYSIS APPROACH:
+1. First, describe in detail what you see in the screenshot (colors, boxes, text labels, price levels)
+2. Identify all colored boxes (red, grey) and their associated numbers
+3. Look for text labels that indicate entry points, take profits, and stop loss
+4. Explain your reasoning for each price identification
+5. List any ambiguities or uncertainties you encounter
+6. Then provide the final JSON output
 
 CRITICAL VISUAL INDICATORS:
 🔴 RED BOXES = Entry prices and Take Profit levels
@@ -375,7 +454,9 @@ OUTPUT FORMAT (JSON only):
         "leverage": 10 (default if not visible),
         "margin_amount": "100" (default if not visible)
     }},
-    "notes": "List ALL price numbers you can see, even if unsure of their purpose"
+    "notes": "List ALL price numbers you can see, even if unsure of their purpose",
+    "reasoning": "Explain your identification process for each price level",
+    "visible_elements": "Describe all colored boxes, labels, and numbers you can see"
 }}
 
 CRITICAL RULES:
@@ -387,7 +468,14 @@ CRITICAL RULES:
 - For {direction} trades: {"TPs should be LOWER than entry, SL HIGHER" if side == "Sell" else "TPs should be HIGHER than entry, SL LOWER"}
 - Double-check mobile screenshots for small text near chart edges
 - Conservative strategy needs at least 3 entries OR 4 TPs visible
-- IMPORTANT: Extract the FULL PRECISION of each number - all decimal places"""
+- IMPORTANT: Extract the FULL PRECISION of each number - all decimal places
+
+ENHANCED ANALYSIS REQUIREMENTS:
+- Before the JSON output, provide a detailed description of what you observe
+- Explain your reasoning for each price identification
+- Note any difficulties in reading specific values
+- Describe the confidence level for each extracted price
+- Use all available tokens to provide comprehensive analysis"""
 
     async def _parse_openai_response(self, content: str, symbol: str, side: str) -> Dict[str, Any]:
         """Parse OpenAI response and convert to internal format with enhanced null handling"""
@@ -556,13 +644,27 @@ CRITICAL RULES:
                     "notes": "AI extraction successful but validation failed"
                 }
             
-            return {
+            # Include enhanced analysis data if available
+            enhanced_data = {}
+            if "reasoning" in result:
+                enhanced_data["reasoning"] = result["reasoning"]
+                logger.info(f"Enhanced reasoning: {result['reasoning'][:200]}...")  # Log first 200 chars
+            if "visible_elements" in result:
+                enhanced_data["visible_elements"] = result["visible_elements"]
+            
+            return_data = {
                 "success": True,
                 "confidence": result.get("confidence", 0.8),
                 "strategy_type": strategy_type,
                 "parameters": validated_params,  # Use validated/corrected params
                 "notes": result.get("notes", "Analysis completed successfully")
             }
+            
+            # Add enhanced data if available
+            if enhanced_data:
+                return_data["enhanced_analysis"] = enhanced_data
+            
+            return return_data
             
         except json.JSONDecodeError as e:
             logger.error(f"JSON parsing error: {e}")
@@ -980,14 +1082,14 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
             # Sort entries and TPs based on labels
             if side == "Sell":
                 # For SHORT trades
-                # Sort entries: lowest to highest (primary entry is lowest)
+                # Sort entries: lowest to highest (primary entry is lowest/closest to market)
                 entries = sorted([v for v, _ in entry_prices])
                 # Sort TPs: highest to lowest
                 tps = sorted([v for v, _ in tp_prices], reverse=True)
                 
             else:  # Buy/LONG
                 # For LONG trades
-                # Sort entries: highest to lowest (primary entry is highest)
+                # Sort entries: highest to lowest (primary entry is highest/closest to market)
                 entries = sorted([v for v, _ in entry_prices], reverse=True)
                 # Sort TPs: lowest to highest
                 tps = sorted([v for v, _ in tp_prices])
@@ -1037,6 +1139,174 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
         except Exception as e:
             logger.error(f"Error parsing numbers-only response: {e}")
             return self._error_result("Failed to parse colored box numbers")
+    
+    async def _calculate_extraction_confidence(self, result: Dict[str, Any], 
+                                             symbol: str, side: str) -> float:
+        """
+        Calculate composite confidence score for extraction result
+        
+        Weights:
+        - Field completeness: 40%
+        - Logical consistency: 30%
+        - Price relationships: 20%
+        - OpenAI confidence: 10%
+        """
+        if not result.get("success"):
+            return 0.0
+        
+        params = result.get("parameters", {})
+        strategy = result.get("strategy_type", "fast")
+        scores = {}
+        
+        # 1. Field Completeness (40%)
+        required_fields = [PRIMARY_ENTRY_PRICE, TP1_PRICE, SL_PRICE]
+        if strategy == "conservative":
+            required_fields.extend([TP2_PRICE, TP3_PRICE, TP4_PRICE])
+        
+        present_fields = sum(1 for field in required_fields if field in params)
+        field_completeness = present_fields / len(required_fields)
+        scores["field_completeness"] = field_completeness * 0.4
+        
+        # 2. Logical Consistency (30%)
+        logic_score = 1.0
+        
+        # Check entry vs SL relationship
+        if PRIMARY_ENTRY_PRICE in params and SL_PRICE in params:
+            entry = params[PRIMARY_ENTRY_PRICE]
+            sl = params[SL_PRICE]
+            
+            if side == "Buy":
+                if sl >= entry:
+                    logic_score *= 0.0  # Critical failure
+                    logger.warning(f"Buy SL ({sl}) >= entry ({entry})")
+            else:  # Sell
+                if sl <= entry:
+                    logic_score *= 0.0  # Critical failure
+                    logger.warning(f"Sell SL ({sl}) <= entry ({entry})")
+        else:
+            logic_score *= 0.5  # Missing critical fields
+        
+        # Check TP vs entry relationship
+        if PRIMARY_ENTRY_PRICE in params and TP1_PRICE in params:
+            entry = params[PRIMARY_ENTRY_PRICE]
+            tp1 = params[TP1_PRICE]
+            
+            if side == "Buy":
+                if tp1 <= entry:
+                    logic_score *= 0.3
+                    logger.warning(f"Buy TP1 ({tp1}) <= entry ({entry})")
+            else:  # Sell
+                if tp1 >= entry:
+                    logic_score *= 0.3
+                    logger.warning(f"Sell TP1 ({tp1}) >= entry ({entry})")
+        
+        # Check TP ordering for conservative
+        if strategy == "conservative":
+            tps = [params.get(tp) for tp in [TP1_PRICE, TP2_PRICE, TP3_PRICE, TP4_PRICE] 
+                   if tp in params]
+            if len(tps) >= 2:
+                if side == "Buy":
+                    # TPs should be ascending
+                    if not all(tps[i] <= tps[i+1] for i in range(len(tps)-1)):
+                        logic_score *= 0.7
+                        logger.warning("Buy TPs not in ascending order")
+                else:  # Sell
+                    # TPs should be descending
+                    if not all(tps[i] >= tps[i+1] for i in range(len(tps)-1)):
+                        logic_score *= 0.7
+                        logger.warning("Sell TPs not in descending order")
+        
+        scores["logical_consistency"] = logic_score * 0.3
+        
+        # 3. Price Relationships (20%)
+        relationship_score = 1.0
+        
+        if all(field in params for field in [PRIMARY_ENTRY_PRICE, TP1_PRICE, SL_PRICE]):
+            entry = params[PRIMARY_ENTRY_PRICE]
+            tp1 = params[TP1_PRICE]
+            sl = params[SL_PRICE]
+            
+            # Check price distances
+            tp_distance = abs((tp1 - entry) / entry)
+            sl_distance = abs((sl - entry) / entry)
+            
+            # Penalize if distances are too small (<0.1%) or too large (>50%)
+            if tp_distance < Decimal("0.001"):
+                relationship_score *= 0.5
+                logger.warning(f"TP1 too close to entry: {tp_distance:.4%}")
+            elif tp_distance > Decimal("0.5"):
+                relationship_score *= 0.7
+                logger.warning(f"TP1 too far from entry: {tp_distance:.4%}")
+            
+            if sl_distance < Decimal("0.001"):
+                relationship_score *= 0.5
+                logger.warning(f"SL too close to entry: {sl_distance:.4%}")
+            elif sl_distance > Decimal("0.5"):
+                relationship_score *= 0.7
+                logger.warning(f"SL too far from entry: {sl_distance:.4%}")
+            
+            # Check risk/reward ratio
+            if side == "Buy":
+                risk = entry - sl
+                reward = tp1 - entry
+            else:
+                risk = sl - entry
+                reward = entry - tp1
+            
+            if risk > 0:
+                rr_ratio = reward / risk
+                if rr_ratio < Decimal("0.5"):
+                    relationship_score *= 0.6
+                    logger.warning(f"Poor R:R ratio: {rr_ratio:.2f}:1")
+                elif rr_ratio > Decimal("10"):
+                    relationship_score *= 0.8
+                    logger.warning(f"Unrealistic R:R ratio: {rr_ratio:.2f}:1")
+        else:
+            relationship_score = 0.5  # Missing fields for calculation
+        
+        scores["price_relationships"] = relationship_score * 0.2
+        
+        # 4. OpenAI Confidence (10%)
+        openai_confidence = float(result.get("confidence", 0.5))
+        scores["openai_confidence"] = openai_confidence * 0.1
+        
+        # Calculate total
+        total_confidence = sum(scores.values())
+        
+        # Log breakdown
+        logger.info(f"Confidence breakdown: Field={scores['field_completeness']:.2f}, "
+                   f"Logic={scores['logical_consistency']:.2f}, "
+                   f"Relationships={scores['price_relationships']:.2f}, "
+                   f"OpenAI={scores['openai_confidence']:.2f}, "
+                   f"Total={total_confidence:.2f}")
+        
+        return total_confidence
+    
+    def _identify_missing_fields(self, result: Dict[str, Any]) -> List[str]:
+        """Identify which critical fields are missing from extraction"""
+        if not result or not result.get("success"):
+            return ["all"]
+        
+        params = result.get("parameters", {})
+        strategy = result.get("strategy_type", "fast")
+        missing = []
+        
+        # Check required fields
+        if PRIMARY_ENTRY_PRICE not in params:
+            missing.append("primary_entry")
+        if TP1_PRICE not in params:
+            missing.append("tp1")
+        if SL_PRICE not in params:
+            missing.append("sl")
+        
+        # Check conservative strategy fields
+        if strategy == "conservative":
+            if LIMIT_ENTRY_1_PRICE not in params:
+                missing.append("limit_entries")
+            if TP4_PRICE not in params:
+                missing.append("tp4")
+        
+        return missing
 
 # Global analyzer instance
 screenshot_analyzer = ScreenshotAnalyzer()

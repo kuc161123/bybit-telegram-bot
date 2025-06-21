@@ -26,6 +26,14 @@ class EnhancedGGShotAnalyzer(ScreenshotAnalyzer):
         # Get base analysis from parent class
         initial_result = await self.analyze_trading_screenshot(file_path, symbol, side)
         
+        # Log extraction statistics if available
+        if "extraction_stats" in initial_result:
+            stats = initial_result["extraction_stats"]
+            logger.info(f"📊 Extraction stats: {stats['passes_attempted']} passes, "
+                       f"first_pass_confidence={stats['first_pass_confidence']:.2f}, "
+                       f"final_confidence={stats['final_confidence']:.2f}, "
+                       f"method={stats['method_used']}")
+        
         if not initial_result.get("success"):
             return initial_result
         

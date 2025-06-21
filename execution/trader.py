@@ -690,13 +690,51 @@ class TradeExecutor:
                     f"🛡️ Stop: <code>${format_price(sl_price)}</code> ({format_mobile_percentage(-sl_percentage)})\n\n"
                     f"⚖️ <b>Risk/Reward:</b> 1:{risk_reward_ratio:.1f}\n"
                     f"🚀 <b>Execution:</b> {execution_time}\n\n"
-                    f"✅ Monitoring Active"
                 )
+                
+                # Add full logical breakdown for non-merge scenario
+                logical_breakdown = "\n📋 <b>Parameter Logic (New Position):</b>\n"
+                
+                # Entry logic
+                logical_breakdown += f"• <b>Entry @ ${format_price(avg_price)}:</b>\n"
+                logical_breakdown += f"  - Market order for immediate fill\n"
+                logical_breakdown += f"  - Ensures position entry at current price\n"
+                logical_breakdown += f"  - Fast approach prioritizes quick execution\n"
+                
+                # TP logic
+                logical_breakdown += f"• <b>TP @ ${format_price(tp_price)}:</b>\n"
+                logical_breakdown += f"  - Set at {format_mobile_percentage(tp_percentage)} from entry\n"
+                logical_breakdown += f"  - 100% position exit (fast approach)\n"
+                logical_breakdown += f"  - Potential profit: ${format_decimal_or_na(reward_amount, 2)}\n"
+                
+                # SL logic
+                logical_breakdown += f"• <b>SL @ ${format_price(sl_price)}:</b>\n"
+                logical_breakdown += f"  - Set at {format_mobile_percentage(sl_percentage)} from entry\n"
+                logical_breakdown += f"  - Max loss limited to ${format_decimal_or_na(risk_amount, 2)}\n"
+                logical_breakdown += f"  - Protects {format_mobile_percentage((risk_amount/margin_amount)*100)} of margin\n"
+                
+                # Position sizing logic
+                logical_breakdown += f"• <b>Position Size {format_decimal_or_na(tp_sl_qty, 4)}:</b>\n"
+                logical_breakdown += f"  - Calculated from margin × leverage\n"
+                logical_breakdown += f"  - ${margin_amount} × {leverage}x = ${format_decimal_or_na(position_value, 2)}\n"
+                logical_breakdown += f"  - Rounded to exchange precision ({qty_step})\n"
+                
+                message += logical_breakdown
+                message += "\n✅ Monitoring Active"
                 
                 # Add mirror trading summary if available
                 mirror_summary = self._format_mirror_trading_summary(mirror_results)
                 if mirror_summary:
                     message += mirror_summary
+                    
+                    # Add mirror parameter logic if successful
+                    if mirror_results.get("market") and mirror_results["market"].get("orderId"):
+                        message += "\n📋 <b>Mirror Parameter Logic:</b>\n"
+                        message += f"• Entry: Matched main @ market price\n"
+                        message += f"• TP: Same target as main account\n"
+                        message += f"• SL: Same stop as main account\n"
+                        message += f"• Size: Matched position size\n"
+                        message += f"• Execution: Synchronized with main\n"
                 
                 if errors:
                     message += f"\n⚠️ <b>Warnings:</b>\n"
@@ -963,6 +1001,42 @@ class TradeExecutor:
             
             # Format success message
             execution_time = self._format_execution_time(start_time)
+            
+            # Build merge reasoning
+            merge_reasoning = "\n📝 <b>Merge Reasoning:</b>\n"
+            
+            # TP reasoning
+            if 'tp_price' in merged_params and 'tp_price' in new_params:
+                existing_tp = existing_data.get('tp_orders', [])
+                if existing_tp and len(existing_tp) > 0:
+                    existing_tp_price = Decimal(str(existing_tp[0].get('triggerPrice', 0)))
+                    new_tp_price = Decimal(str(new_params.get('tp_price', 0)))
+                    if merged_params['tp_price'] == existing_tp_price:
+                        merge_reasoning += f"• TP kept at {format_price(existing_tp_price)} (existing = new)\n"
+                    else:
+                        if side == 'Sell':  # SHORT
+                            merge_reasoning += f"• TP changed: {format_price(existing_tp_price)} → {format_price(merged_params['tp_price'])} (took lower/aggressive)\n"
+                        else:  # LONG
+                            merge_reasoning += f"• TP changed: {format_price(existing_tp_price)} → {format_price(merged_params['tp_price'])} (took higher/aggressive)\n"
+                else:
+                    merge_reasoning += f"• TP set to {format_price(merged_params['tp_price'])} (no existing TP)\n"
+            
+            # SL reasoning
+            if 'sl_price' in merged_params and 'sl_price' in new_params:
+                existing_sl = existing_data.get('sl_order')
+                if existing_sl and existing_sl.get('stopOrderType') == 'StopLoss':
+                    existing_sl_price = Decimal(str(existing_sl.get('triggerPrice', 0)))
+                    new_sl_price = Decimal(str(new_params.get('sl_price', 0)))
+                    if merged_params['sl_price'] == existing_sl_price:
+                        merge_reasoning += f"• SL kept at {format_price(existing_sl_price)} (existing = new)\n"
+                    else:
+                        if side == 'Sell':  # SHORT
+                            merge_reasoning += f"• SL changed: {format_price(existing_sl_price)} → {format_price(merged_params['sl_price'])} (took higher/conservative)\n"
+                        else:  # LONG
+                            merge_reasoning += f"• SL changed: {format_price(existing_sl_price)} → {format_price(merged_params['sl_price'])} (took lower/conservative)\n"
+                else:
+                    merge_reasoning += f"• SL set to {format_price(merged_params['sl_price'])} (no existing SL)\n"
+            
             message = (
                 f"✅ <b>FAST POSITION MERGED SUCCESSFULLY</b> {execution_time}\n"
                 f"{create_mobile_separator()}\n"
@@ -972,12 +1046,73 @@ class TradeExecutor:
                 f"Total: {format_decimal_or_na(merged_params['merged_size'])} {symbol}\n\n"
                 f"🎯 <b>New Parameters:</b>\n"
                 f"TP: {format_price(merged_params['tp_price'])}\n"
-                f"SL: {format_price(merged_params['sl_price'])}\n\n"
+                f"SL: {format_price(merged_params['sl_price'])}\n"
+                f"{merge_reasoning}\n"
                 f"📊 <b>Risk/Reward:</b>\n"
                 f"Risk: {format_mobile_currency(risk_amount)}\n"
                 f"Potential: {format_mobile_currency(reward_amount)}\n"
                 f"Ratio: 1:{risk_reward_ratio:.2f}\n"
             )
+            
+            # Add full logical breakdown for merge scenario
+            logical_breakdown = "\n📋 <b>Parameter Logic (Merged Position):</b>\n"
+            
+            # Entry logic
+            logical_breakdown += f"• <b>Entry Addition @ ${format_price(fill_price)}:</b>\n"
+            logical_breakdown += f"  - Market order added {format_decimal_or_na(add_qty)} units\n"
+            logical_breakdown += f"  - Averaged with existing position\n"
+            logical_breakdown += f"  - Fast approach for immediate execution\n"
+            
+            # TP merge logic
+            if 'tp_price' in merged_params:
+                logical_breakdown += f"• <b>TP Selection @ ${format_price(merged_params['tp_price'])}:</b>\n"
+                if existing_tp and len(existing_tp) > 0:
+                    existing_tp_price = Decimal(str(existing_tp[0].get('triggerPrice', 0)))
+                    if merged_params['tp_price'] != existing_tp_price:
+                        if side == 'Sell':  # SHORT
+                            logical_breakdown += f"  - Chose lower TP (aggressive strategy)\n"
+                            logical_breakdown += f"  - Existing: ${format_price(existing_tp_price)} → New: ${format_price(merged_params['tp_price'])}\n"
+                        else:  # LONG
+                            logical_breakdown += f"  - Chose higher TP (aggressive strategy)\n"
+                            logical_breakdown += f"  - Existing: ${format_price(existing_tp_price)} → New: ${format_price(merged_params['tp_price'])}\n"
+                        logical_breakdown += f"  - Maximizes profit potential\n"
+                    else:
+                        logical_breakdown += f"  - Kept existing TP (already optimal)\n"
+                        logical_breakdown += f"  - No change needed for profit target\n"
+                logical_breakdown += f"  - Applied to full position ({format_decimal_or_na(merged_params['merged_size'])})\n"
+            
+            # SL merge logic
+            if 'sl_price' in merged_params:
+                logical_breakdown += f"• <b>SL Selection @ ${format_price(merged_params['sl_price'])}:</b>\n"
+                if existing_sl and existing_sl.get('stopOrderType') == 'StopLoss':
+                    existing_sl_price = Decimal(str(existing_sl.get('triggerPrice', 0)))
+                    if merged_params['sl_price'] != existing_sl_price:
+                        if side == 'Sell':  # SHORT
+                            logical_breakdown += f"  - Chose higher SL (conservative strategy)\n"
+                            logical_breakdown += f"  - Existing: ${format_price(existing_sl_price)} → New: ${format_price(merged_params['sl_price'])}\n"
+                        else:  # LONG
+                            logical_breakdown += f"  - Chose lower SL (conservative strategy)\n"
+                            logical_breakdown += f"  - Existing: ${format_price(existing_sl_price)} → New: ${format_price(merged_params['sl_price'])}\n"
+                        logical_breakdown += f"  - Minimizes risk on combined position\n"
+                    else:
+                        logical_breakdown += f"  - Kept existing SL (already optimal)\n"
+                        logical_breakdown += f"  - No change needed for risk level\n"
+                logical_breakdown += f"  - Protects full position value\n"
+            
+            # Position sizing logic
+            logical_breakdown += f"• <b>Position Size Management:</b>\n"
+            logical_breakdown += f"  - Previous: {format_decimal_or_na(merged_params['existing_size'])}\n"
+            logical_breakdown += f"  - Added: {format_decimal_or_na(add_qty)}\n"
+            logical_breakdown += f"  - Total: {format_decimal_or_na(merged_params['merged_size'])}\n"
+            logical_breakdown += f"  - Leverage maintained at {leverage}x\n"
+            
+            # Risk management logic
+            logical_breakdown += f"• <b>Risk/Reward Optimization:</b>\n"
+            logical_breakdown += f"  - Conservative SL + Aggressive TP strategy\n"
+            logical_breakdown += f"  - Balances safety with profit potential\n"
+            logical_breakdown += f"  - New R:R ratio: 1:{risk_reward_ratio:.2f}\n"
+            
+            message += logical_breakdown
             
             if monitor_started:
                 message += f"\n🔄 Monitoring active"
@@ -997,6 +1132,18 @@ class TradeExecutor:
                         message += f"SL placed: ✅\n"
                     else:
                         message += f"SL placed: ❌\n"
+                    
+                    # Add same merge reasoning for mirror account
+                    message += "\n📝 <b>Mirror Merge Logic:</b>\n"
+                    message += "• Same TP/SL merge rules applied\n"
+                    message += "• Conservative SL + Aggressive TP strategy\n"
+                    
+                    # Add full parameter logic for mirror
+                    message += "\n📋 <b>Mirror Parameter Logic:</b>\n"
+                    message += f"• Entry: Market add @ mirror price\n"
+                    message += f"• TP: Same selection logic as main\n"
+                    message += f"• SL: Same conservative approach\n"
+                    message += f"• Size: Matched main position\n"
                     
                     if mirror_results["errors"]:
                         message += f"\n⚠️ Mirror errors:\n"
@@ -1496,8 +1643,52 @@ class TradeExecutor:
                     f"└─ R:R Ratio: 1:{risk_reward_ratio:.1f} {'🌟 EXCELLENT' if risk_reward_ratio >= 3 else '✅ GOOD' if risk_reward_ratio >= 2 else '⚠️ FAIR' if risk_reward_ratio >= 1 else '❌ POOR'}\n\n"
                 )
                 
+                # Add full logical breakdown for non-merge scenario
+                logical_breakdown = "\n📋 <b>Parameter Logic (New Position):</b>\n"
+                
+                # Entry logic
+                logical_breakdown += f"• <b>Entry Strategy (3 Orders):</b>\n"
+                logical_breakdown += f"  - 1st: Market @ current price (immediate)\n"
+                logical_breakdown += f"  - 2nd: Limit @ ${format_price(limit_prices[1] if len(limit_prices) > 1 else avg_entry)}\n"
+                logical_breakdown += f"  - 3rd: Limit @ ${format_price(limit_prices[2] if len(limit_prices) > 2 else avg_entry)}\n"
+                logical_breakdown += f"  - Scaled entry reduces timing risk\n"
+                logical_breakdown += f"  - Each order: {format_mobile_percentage(33.3)} of position\n"
+                
+                # TP logic
+                logical_breakdown += f"• <b>Take Profit Strategy:</b>\n"
+                if len(tp_order_ids) > 0:
+                    logical_breakdown += f"  - TP1 @ ${format_price(tp_prices[0])}: 70% exit\n"
+                    logical_breakdown += f"  - TP2-4: 10% each for runners\n"
+                    logical_breakdown += f"  - Gradual profit taking approach\n"
+                    logical_breakdown += f"  - Max profit: ${format_decimal_or_na(max_reward, 2)}\n"
+                else:
+                    logical_breakdown += f"  - TPs configured but not placed\n"
+                    logical_breakdown += f"  - Stop order limit reached\n"
+                    logical_breakdown += f"  - Monitor will manage exits\n"
+                
+                # SL logic
+                logical_breakdown += f"• <b>Stop Loss @ ${format_price(sl_price)}:</b>\n"
+                logical_breakdown += f"  - {format_mobile_percentage(sl_pct)} from avg entry\n"
+                logical_breakdown += f"  - Protects entire position\n"
+                logical_breakdown += f"  - Max loss: ${format_decimal_or_na(risk_amount, 2)}\n"
+                
+                # Position sizing logic
+                logical_breakdown += f"• <b>Position Sizing:</b>\n"
+                logical_breakdown += f"  - Total size: {format_decimal_or_na(final_sl_qty, 4)}\n"
+                logical_breakdown += f"  - From: ${margin_amount} × {leverage}x\n"
+                logical_breakdown += f"  - Value: ${format_decimal_or_na(position_value, 2)}\n"
+                logical_breakdown += f"  - Per order: {format_decimal_or_na(qty_per_limit, 4)}\n"
+                
+                # Risk management logic
+                logical_breakdown += f"• <b>Risk Management:</b>\n"
+                logical_breakdown += f"  - R:R Ratio: 1:{risk_reward_ratio:.1f}\n"
+                logical_breakdown += f"  - Conservative approach\n"
+                logical_breakdown += f"  - Multiple exits reduce risk\n"
+                
+                message += logical_breakdown
+                
                 # Execution summary
-                message += f"⚡ Execution Time: {execution_time}\n"
+                message += f"\n⚡ Execution Time: {execution_time}\n"
                 message += f"🔄 Enhanced Monitoring: ACTIVE"
                 
                 # Add mirror trading summary if available
@@ -2477,6 +2668,59 @@ class TradeExecutor:
             
             # Format success message
             execution_time = self._format_execution_time(start_time)
+            
+            # Build merge reasoning
+            merge_reasoning = "\n📝 <b>Merge Reasoning:</b>\n"
+            
+            # SL reasoning
+            if 'sl_price' in merged_params and 'sl_price' in new_params:
+                existing_sl = existing_data.get('sl_order')
+                if existing_sl and existing_sl.get('stopOrderType') == 'StopLoss':
+                    existing_sl_price = Decimal(str(existing_sl.get('triggerPrice', 0)))
+                    new_sl_price = Decimal(str(new_params.get('sl_price', 0)))
+                    if merged_params['sl_price'] == existing_sl_price:
+                        merge_reasoning += f"• SL kept at {format_price(existing_sl_price)} (existing = new)\n"
+                    else:
+                        if side == 'Sell':  # SHORT
+                            merge_reasoning += f"• SL changed: {format_price(existing_sl_price)} → {format_price(merged_params['sl_price'])} (took higher/conservative)\n"
+                        else:  # LONG
+                            merge_reasoning += f"• SL changed: {format_price(existing_sl_price)} → {format_price(merged_params['sl_price'])} (took lower/conservative)\n"
+                else:
+                    merge_reasoning += f"• SL set to {format_price(merged_params['sl_price'])} (no existing SL)\n"
+            
+            # TP reasoning for conservative approach (multiple TPs)
+            existing_tps = existing_data.get('tp_orders', [])
+            new_tps = new_params.get('take_profits', [])
+            
+            if existing_tps or new_tps:
+                merge_reasoning += "• TP changes:\n"
+                for i, tp in enumerate(merged_params.get('take_profits', []), 1):
+                    tp_price = tp.get('price')
+                    
+                    # Find corresponding existing TP
+                    existing_tp = None
+                    if i-1 < len(existing_tps):
+                        for ex_tp in existing_tps:
+                            if ex_tp.get('orderLinkId', '').startswith(f'TP{i}'):
+                                existing_tp = ex_tp
+                                break
+                    
+                    # Find corresponding new TP
+                    new_tp = new_tps[i-1] if i-1 < len(new_tps) else None
+                    
+                    if existing_tp and new_tp:
+                        existing_tp_price = Decimal(str(existing_tp.get('triggerPrice', 0)))
+                        new_tp_price = Decimal(str(new_tp.get('price', 0)))
+                        if tp_price == existing_tp_price:
+                            merge_reasoning += f"  - TP{i} kept at {format_price(tp_price)} ({tp.get('percentage')}%)\n"
+                        else:
+                            if side == 'Sell':  # SHORT
+                                merge_reasoning += f"  - TP{i}: {format_price(existing_tp_price)} → {format_price(tp_price)} (took lower/aggressive) ({tp.get('percentage')}%)\n"
+                            else:  # LONG
+                                merge_reasoning += f"  - TP{i}: {format_price(existing_tp_price)} → {format_price(tp_price)} (took higher/aggressive) ({tp.get('percentage')}%)\n"
+                    else:
+                        merge_reasoning += f"  - TP{i} set to {format_price(tp_price)} ({tp.get('percentage')}%)\n"
+            
             message = (
                 f"✅ <b>POSITION MERGED SUCCESSFULLY</b> {execution_time}\n"
                 f"{create_mobile_separator()}\n"
@@ -2490,6 +2734,50 @@ class TradeExecutor:
             
             for i, tp in enumerate(merged_params['take_profits'], 1):
                 message += f"TP{i}: {format_price(tp['price'])} ({tp['percentage']}%)\n"
+            
+            message += merge_reasoning
+            
+            # Add full logical breakdown for merge scenario
+            logical_breakdown = "\n📋 <b>Parameter Logic (Merged Position):</b>\n"
+            
+            # Entry logic
+            logical_breakdown += f"• <b>Entry Addition @ ${format_price(fill_price)}:</b>\n"
+            logical_breakdown += f"  - Market order added {format_decimal_or_na(add_qty)} units\n"
+            logical_breakdown += f"  - Combined with existing position\n"
+            logical_breakdown += f"  - Conservative scaling strategy\n"
+            
+            # TP merge logic
+            logical_breakdown += f"• <b>Take Profit Selection:</b>\n"
+            for i, tp in enumerate(merged_params.get('take_profits', []), 1):
+                if i == 1:
+                    logical_breakdown += f"  - TP1 @ ${format_price(tp['price'])}: 70% exit (primary)\n"
+                else:
+                    logical_breakdown += f"  - TP{i} @ ${format_price(tp['price'])}: 10% exit (runner)\n"
+            logical_breakdown += f"  - Aggressive TP selection for max profit\n"
+            logical_breakdown += f"  - Applied to full merged position\n"
+            
+            # SL merge logic
+            if 'sl_price' in merged_params:
+                logical_breakdown += f"• <b>Stop Loss @ ${format_price(merged_params['sl_price'])}:</b>\n"
+                logical_breakdown += f"  - Conservative SL selection\n"
+                logical_breakdown += f"  - Minimizes risk on combined position\n"
+                logical_breakdown += f"  - Protects entire position value\n"
+            
+            # Position sizing logic
+            logical_breakdown += f"• <b>Position Management:</b>\n"
+            logical_breakdown += f"  - Previous: {format_decimal_or_na(merged_params['existing_size'])}\n"
+            logical_breakdown += f"  - Added: {format_decimal_or_na(add_qty)}\n"
+            logical_breakdown += f"  - Total: {format_decimal_or_na(merged_params['merged_size'])}\n"
+            logical_breakdown += f"  - Distributed across {len(merged_params.get('take_profits', []))} TP levels\n"
+            
+            # Risk management logic
+            logical_breakdown += f"• <b>Risk/Reward Strategy:</b>\n"
+            logical_breakdown += f"  - Conservative SL + Aggressive TP\n"
+            logical_breakdown += f"  - Gradual profit taking (70/10/10/10)\n"
+            logical_breakdown += f"  - Risk: ${format_decimal_or_na(risk_amount, 2)}\n"
+            logical_breakdown += f"  - Potential: ${format_decimal_or_na(max_reward, 2)}\n"
+            
+            message += logical_breakdown
             
             message += (
                 f"\n📊 <b>Risk/Reward:</b>\n"
@@ -2514,6 +2802,19 @@ class TradeExecutor:
                         message += f"SL placed: ✅\n"
                     else:
                         message += f"SL placed: ❌\n"
+                    
+                    # Add same merge reasoning for mirror account
+                    message += "\n📝 <b>Mirror Merge Logic:</b>\n"
+                    message += "• Same TP/SL merge rules applied\n"
+                    message += "• Conservative SL + Aggressive TP strategy\n"
+                    
+                    # Add full parameter logic for mirror
+                    message += "\n📋 <b>Mirror Parameter Logic:</b>\n"
+                    message += f"• Entry: Market add @ mirror price\n"
+                    message += f"• TP: Same selection logic as main\n"
+                    message += f"• SL: Same conservative approach\n"
+                    message += f"• Size: Matched main position\n"
+                    message += "• Multiple TP levels preserved (70/10/10/10%)\n"
                     
                     if mirror_results["errors"]:
                         message += f"\n⚠️ Mirror errors:\n"

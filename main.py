@@ -51,124 +51,13 @@ logger = logging.getLogger(__name__)
 _global_app = None
 _cleanup_tasks = []
 
-# Configuration for external position monitoring
-ENABLE_EXTERNAL_POSITION_MONITORING = True  # Set to False to disable
-READ_ONLY_MONITORING_CHAT_ID_BASE = 9000000000  # Base for synthetic chat IDs
-
-async def create_read_only_chat_data_for_position(position: dict) -> dict:
-    """
-    NEW: Create READ-ONLY chat data for external positions
-    
-    This creates minimal data needed for P&L tracking WITHOUT any order management
-    """
-    try:
-        symbol = position.get("symbol", "")
-        side = position.get("side", "")
-        size = Decimal(str(position.get("size", "0")))
-        entry_price = Decimal(str(position.get("avgPrice", "0")))
-        
-        logger.info(f"🔍 Creating READ-ONLY monitoring data for external position: {symbol} {side} {size}")
-        
-        # Create MINIMAL read-only chat data (NO ORDER IDs, NO TP/SL PRICES)
-        chat_data = {
-            # Basic position info for tracking
-            SYMBOL: symbol,
-            SIDE: side,
-            LAST_KNOWN_POSITION_SIZE: size,
-            PRIMARY_ENTRY_PRICE: entry_price,
-            
-            # Mark as read-only external position
-            "external_position": True,
-            "read_only_monitoring": True,
-            TRADING_APPROACH: "read_only",
-            
-            # NO TP/SL prices = NO automatic actions
-            # NO order IDs = NO order management
-            # NO leverage/margin = NO trade interference
-            
-            # Timestamp for tracking
-            "external_adoption_time": time.time(),
-        }
-        
-        logger.info(f"✅ READ-ONLY monitoring data created for {symbol} (NO order management)")
-        return chat_data
-        
-    except Exception as e:
-        logger.error(f"❌ Error creating read-only chat data for position: {e}")
-        return {}
-
-async def adopt_external_positions_for_monitoring(application: Application, external_positions: list):
-    """
-    NEW: Adopt external positions for READ-ONLY monitoring
-    """
-    try:
-        if not ENABLE_EXTERNAL_POSITION_MONITORING:
-            logger.info("📊 External position monitoring is disabled")
-            return 0
-        
-        if not external_positions:
-            logger.info("📊 No external positions to adopt")
-            return 0
-        
-        logger.info(f"🔄 Adopting {len(external_positions)} external positions for READ-ONLY monitoring...")
-        
-        adopted_count = 0
-        
-        for i, position in enumerate(external_positions):
-            try:
-                symbol = position.get("symbol", "")
-                side = position.get("side", "")
-                
-                # Create synthetic chat ID for this external position
-                synthetic_chat_id = READ_ONLY_MONITORING_CHAT_ID_BASE + i + 1
-                
-                logger.info(f"📊 Adopting external position: {symbol} {side} → Chat {synthetic_chat_id}")
-                
-                # Create read-only chat data
-                read_only_chat_data = await create_read_only_chat_data_for_position(position)
-                
-                if not read_only_chat_data:
-                    logger.warning(f"⚠️ Failed to create read-only data for {symbol}")
-                    continue
-                
-                # ENHANCED: Store external positions in bot_data (more reliable)
-                if 'external_positions' not in application.bot_data:
-                    application.bot_data['external_positions'] = {}
-                application.bot_data['external_positions'][synthetic_chat_id] = read_only_chat_data
-                logger.info(f"✅ READ-ONLY data stored in bot_data for {symbol}")
-                
-                # Start READ-ONLY monitoring
-                try:
-                    from execution.monitor import start_position_monitoring
-                    await start_position_monitoring(application, synthetic_chat_id, read_only_chat_data)
-                    logger.info(f"✅ READ-ONLY monitor started for external position: {symbol}")
-                except Exception as monitor_error:
-                    logger.error(f"❌ Error starting monitor for {symbol}: {monitor_error}")
-                    continue
-                
-                adopted_count += 1
-                
-                # Small delay between adoptions
-                await asyncio.sleep(0.3)
-                
-            except Exception as e:
-                logger.error(f"❌ Error adopting external position {position.get('symbol', 'unknown')}: {e}")
-                continue
-        
-        if adopted_count > 0:
-            logger.info(f"🎉 Successfully adopted {adopted_count} external positions for READ-ONLY monitoring!")
-            logger.info(f"📊 These positions will be tracked for P&L but NO orders will be modified")
-            await application.update_persistence()
-        
-        return adopted_count
-        
-    except Exception as e:
-        logger.error(f"❌ Error in external position adoption: {e}")
-        return 0
+# All positions will be treated as bot positions
+# All positions are now bot trades - no external monitoring
 
 async def get_positions_requiring_monitoring():
     """
-    ENHANCED: Get all positions from Bybit that require monitoring
+    Get all positions from Bybit that require monitoring
+    All positions are treated as bot trades now
     """
     try:
         from clients.bybit_helpers import get_all_positions
@@ -211,7 +100,8 @@ async def get_positions_requiring_monitoring():
 
 async def get_orders_requiring_monitoring():
     """
-    ENHANCED: Get all orders from Bybit that require monitoring
+    Get all orders from Bybit that require monitoring
+    All orders are treated as bot orders now
     """
     try:
         from clients.bybit_helpers import get_all_open_orders
@@ -258,14 +148,15 @@ async def get_orders_requiring_monitoring():
         logger.error(f"❌ Error getting orders for monitoring: {e}")
         return []
 
-async def find_chat_data_for_symbol(application: Application, symbol: str, side: str = None):
+
+async def find_chat_data_for_symbol(application: Application, symbol: str, side: str = None, approach: str = None):
     """
-    ENHANCED: Find chat data that corresponds to a symbol/side combination
+    Find chat data that corresponds to a symbol/side/approach combination
     """
     matching_chats = []
     
     try:
-        # Check regular chat_data first
+        # Check regular chat_data
         try:
             chat_data_items = list(application.chat_data.items()) if hasattr(application.chat_data, 'items') else []
         except Exception as e:
@@ -279,43 +170,19 @@ async def find_chat_data_for_symbol(application: Application, symbol: str, side:
             try:
                 chat_symbol = chat_data.get(SYMBOL)
                 chat_side = chat_data.get(SIDE)
+                chat_approach = chat_data.get(TRADING_APPROACH, "fast")
                 
                 # Match symbol first
                 if chat_symbol == symbol:
                     # If side is specified, match it too
                     if side is None or chat_side == side:
-                        matching_chats.append((chat_id, chat_data))
-                        is_external = chat_data.get("external_position", False)
-                        chat_type = "EXTERNAL" if is_external else "BOT"
-                        logger.info(f"🎯 Found matching chat {chat_id} ({chat_type}) for {symbol} {side or 'any side'}")
+                        # If approach is specified, match it too
+                        if approach is None or chat_approach == approach:
+                            matching_chats.append((chat_id, chat_data))
+                            logger.info(f"🎯 Found matching chat {chat_id} for {symbol} {side or 'any side'} ({chat_approach})")
             except Exception as e:
                 logger.error(f"Error processing chat_data for chat {chat_id}: {e}")
                 continue
-        
-        # Also check external positions stored in bot_data (fallback)
-        try:
-            external_positions = application.bot_data.get('external_positions', {})
-            for chat_id, chat_data in external_positions.items():
-                if not isinstance(chat_data, dict):
-                    continue
-                
-                try:
-                    chat_symbol = chat_data.get(SYMBOL)
-                    chat_side = chat_data.get(SIDE)
-                    
-                    # Match symbol first
-                    if chat_symbol == symbol:
-                        # If side is specified, match it too
-                        if side is None or chat_side == side:
-                            # Avoid duplicates
-                            if (chat_id, chat_data) not in matching_chats:
-                                matching_chats.append((chat_id, chat_data))
-                                logger.info(f"🎯 Found matching external chat {chat_id} (EXTERNAL) for {symbol} {side or 'any side'}")
-                except Exception as e:
-                    logger.error(f"Error processing external position for chat {chat_id}: {e}")
-                    continue
-        except Exception as e:
-            logger.error(f"Error accessing external positions from bot_data: {e}")
         
         return matching_chats
         
@@ -335,15 +202,15 @@ async def verify_monitor_status(chat_id: int, chat_data: dict):
         
         # Check if we have a stored task reference
         from execution.monitor import get_monitor_task_status
-        status = await get_monitor_task_status(chat_id, chat_data.get(SYMBOL, ""))
+        symbol = chat_data.get(SYMBOL, "")
+        approach = chat_data.get(TRADING_APPROACH, "fast")
+        status = await get_monitor_task_status(chat_id, symbol, approach)
         
         if status.get("running", False):
-            is_external = chat_data.get("external_position", False)
-            monitor_type = "READ-ONLY" if is_external else "FULL"
-            logger.info(f"✅ {monitor_type} monitor for {chat_data.get(SYMBOL)} in chat {chat_id} is actively running")
+            logger.info(f"✅ Monitor for {symbol} ({approach}) in chat {chat_id} is actively running")
             return True
         else:
-            logger.info(f"🔄 Monitor task for {chat_data.get(SYMBOL)} in chat {chat_id} needs restart")
+            logger.info(f"🔄 Monitor task for {symbol} ({approach}) in chat {chat_id} needs restart")
             return False
         
     except Exception as e:
@@ -375,9 +242,7 @@ async def restore_monitoring_for_position(application: Application, position: di
                 is_running = await verify_monitor_status(chat_id, chat_data)
                 
                 if is_running:
-                    is_external = chat_data.get("external_position", False)
-                    monitor_type = "READ-ONLY" if is_external else "FULL"
-                    logger.info(f"✅ {monitor_type} monitor already running for {symbol} in chat {chat_id}")
+                    logger.info(f"✅ Monitor already running for {symbol} in chat {chat_id}")
                     continue
                 
                 # Update chat data with current position info
@@ -385,14 +250,12 @@ async def restore_monitoring_for_position(application: Application, position: di
                 
                 # Determine approach for proper monitoring
                 approach = chat_data.get(TRADING_APPROACH, "fast")
-                is_external = chat_data.get("external_position", False)
                 
                 # Start monitoring
                 from execution.monitor import start_position_monitoring
                 await start_position_monitoring(application, int(chat_id), chat_data)
                 
-                monitor_type = "READ-ONLY" if is_external else "FULL"
-                logger.info(f"✅ {monitor_type} monitor restored for {symbol} ({approach}) in chat {chat_id}")
+                logger.info(f"✅ Monitor restored for {symbol} ({approach}) in chat {chat_id}")
                 restored_count += 1
                 
                 # Small delay between restorations
@@ -467,17 +330,13 @@ async def restore_monitoring_for_orders(application: Application, orders: list):
                                 from execution.monitor import start_position_monitoring
                                 await start_position_monitoring(application, int(chat_id), chat_data)
                                 
-                                is_external = chat_data.get("external_position", False)
-                                monitor_type = "READ-ONLY" if is_external else "FULL"
-                                logger.info(f"✅ {monitor_type} monitor restored for orders on {symbol} in chat {chat_id}")
+                                logger.info(f"✅ Bot monitor restored for orders on {symbol} in chat {chat_id}")
                                 restored_count += 1
                                 
                                 # Small delay between restorations
                                 await asyncio.sleep(0.5)
                             else:
-                                is_external = chat_data.get("external_position", False)
-                                monitor_type = "READ-ONLY" if is_external else "FULL"
-                                logger.info(f"✅ {monitor_type} monitor already running for orders on {symbol} in chat {chat_id}")
+                                logger.info(f"✅ Bot monitor already running for orders on {symbol} in chat {chat_id}")
                         
                     except Exception as e:
                         logger.error(f"❌ Failed to restore monitor for orders on {symbol} in chat {chat_id}: {e}")
@@ -493,72 +352,14 @@ async def restore_monitoring_for_orders(application: Application, orders: list):
         logger.error(f"❌ Error restoring monitoring for orders: {e}")
         return 0
 
-async def clean_up_orphaned_monitors(application: Application):
-    """
-    ENHANCED: Clean up monitors for chats that no longer have active positions/orders
-    """
-    try:
-        logger.info("🧹 Cleaning up orphaned monitors...")
-        
-        # Get current positions and orders from Bybit
-        positions = await get_positions_requiring_monitoring()
-        orders = await get_orders_requiring_monitoring()
-        
-        # Create sets of active symbols for quick lookup
-        active_symbols_with_positions = {pos["symbol"] for pos in positions}
-        active_symbols_with_orders = {order["symbol"] for order in orders}
-        all_active_symbols = active_symbols_with_positions | active_symbols_with_orders
-        
-        cleaned_count = 0
-        
-        # Check each chat's monitor status
-        for chat_id, chat_data in application.chat_data.items():
-            if not isinstance(chat_data, dict):
-                continue
-            
-            try:
-                monitor_task_info = chat_data.get(ACTIVE_MONITOR_TASK, {})
-                
-                if not monitor_task_info.get("active"):
-                    continue
-                
-                chat_symbol = chat_data.get(SYMBOL)
-                is_external = chat_data.get("external_position", False)
-                
-                if chat_symbol and chat_symbol not in all_active_symbols:
-                    # This chat has a monitor but no active positions/orders
-                    monitor_type = "READ-ONLY" if is_external else "FULL"
-                    logger.info(f"🧹 Cleaning up orphaned {monitor_type} monitor for {chat_symbol} in chat {chat_id}")
-                    
-                    # Stop the monitor
-                    monitor_task_info["active"] = False
-                    chat_data[ACTIVE_MONITOR_TASK] = {}
-                    
-                    # If it's an external position, remove the synthetic chat data
-                    if is_external:
-                        logger.info(f"🧹 Removing synthetic chat data for closed external position {chat_symbol}")
-                    
-                    cleaned_count += 1
-                    
-            except Exception as e:
-                logger.error(f"Error cleaning up monitor for chat {chat_id}: {e}")
-                continue
-        
-        if cleaned_count > 0:
-            logger.info(f"🧹 Cleaned up {cleaned_count} orphaned monitors")
-            await application.update_persistence()
-        else:
-            logger.info("🧹 No orphaned monitors found")
-            
-    except Exception as e:
-        logger.error(f"❌ Error cleaning up orphaned monitors: {e}")
+# Orphaned monitor cleanup removed - all trades are now bot trades with persistence
 
 async def check_and_restart_position_monitors(application: Application):
     """
-    ENHANCED: Comprehensive monitor restoration system with external position adoption
+    Comprehensive monitor restoration system - all positions treated as bot positions
     """
     try:
-        logger.info("🚀 Starting ENHANCED monitor restoration with EXTERNAL POSITION ADOPTION...")
+        logger.info("🚀 Starting monitor restoration...")
         
         # Step 1: Get current positions and orders from Bybit
         logger.info("📊 Step 1: Fetching current positions and orders from Bybit...")
@@ -571,32 +372,31 @@ async def check_and_restart_position_monitors(application: Application):
         
         logger.info(f"📊 Found {len(positions)} positions and {len(orders)} orders requiring monitoring")
         
-        # Step 2: Separate positions with and without chat data
-        logger.info("🔍 Step 2: Identifying bot vs external positions...")
+        # Step 2: Find the main chat ID to use for positions without chat data
+        logger.info("🔍 Step 2: Finding main chat ID...")
+        main_chat_id = None
         
-        # DEBUG: Log persistence data status
-        try:
-            chat_data_count = len(application.chat_data) if hasattr(application.chat_data, '__len__') else 0
-            bot_data_keys = list(application.bot_data.keys()) if hasattr(application.bot_data, 'keys') else []
-            logger.info(f"🔍 DEBUG: chat_data entries: {chat_data_count}, bot_data keys: {bot_data_keys}")
-            
-            # Log symbols in chat_data
-            symbols_in_chat_data = []
-            try:
-                for chat_id, chat_data in application.chat_data.items():
-                    if isinstance(chat_data, dict):
-                        symbol = chat_data.get(SYMBOL)
-                        if symbol:
-                            symbols_in_chat_data.append(f"{symbol}({chat_id})")
-            except Exception as e:
-                logger.warning(f"Could not enumerate chat_data: {e}")
-            
-            logger.info(f"🔍 DEBUG: Symbols in chat_data: {symbols_in_chat_data}")
-        except Exception as e:
-            logger.error(f"Error debugging persistence data: {e}")
+        # Find a valid chat ID from existing chat data
+        for chat_id, chat_data in application.chat_data.items():
+            if isinstance(chat_data, dict) and chat_data.get(SYMBOL):
+                # Skip synthetic chat IDs
+                try:
+                    if int(chat_id) < 9000000000:
+                        main_chat_id = chat_id
+                        logger.info(f"Found main chat ID: {main_chat_id}")
+                        break
+                except (ValueError, TypeError):
+                    continue
         
-        bot_positions = []
-        external_positions = []
+        if not main_chat_id:
+            logger.warning("⚠️ No valid chat ID found in persistence")
+            # You might want to handle this case differently, e.g., get from config
+            return
+        
+        # Step 3: Process all positions as bot positions
+        logger.info("🤖 Step 3: Processing all positions as bot positions...")
+        restored_positions = 0
+        created_new_entries = 0
         
         for position in positions:
             symbol = position["symbol"]
@@ -606,100 +406,95 @@ async def check_and_restart_position_monitors(application: Application):
             matching_chats = await find_chat_data_for_symbol(application, symbol, side)
             
             if matching_chats:
-                # Determine if this is a real BOT position or external position
-                has_real_bot_chat = False
-                has_external_chat = False
-                
+                # Restore monitoring for existing chat data
                 for chat_id, chat_data in matching_chats:
-                    is_external = chat_data.get("external_position", False)
-                    if is_external:
-                        has_external_chat = True
-                    else:
-                        has_real_bot_chat = True
-                
-                if has_real_bot_chat:
-                    # Real BOT position - has actual chat_data (not external)
-                    bot_positions.append(position)
-                    chat_types = []
-                    for chat_id, chat_data in matching_chats:
-                        is_external = chat_data.get("external_position", False)
-                        chat_types.append("EXTERNAL" if is_external else "BOT")
-                    logger.info(f"🤖 BOT position: {symbol} {side} (Chat types: {', '.join(chat_types)})")
-                elif has_external_chat:
-                    # External position - only has external chat data
-                    external_positions.append(position)
-                    logger.info(f"🌍 EXTERNAL position: {symbol} {side} (from previous adoption)")
-                else:
-                    # Fallback - treat as external
-                    external_positions.append(position)
-                    logger.info(f"🌍 EXTERNAL position: {symbol} {side} (no clear classification)")
+                    try:
+                        # All positions are bot trades now - no external positions
+                        chat_data.pop("read_only_monitoring", None)
+                        
+                        # Verify if monitor is already running
+                        is_running = await verify_monitor_status(chat_id, chat_data)
+                        
+                        if not is_running:
+                            # Update chat data with current position info
+                            chat_data[LAST_KNOWN_POSITION_SIZE] = position["size"]
+                            
+                            # Start monitoring
+                            from execution.monitor import start_position_monitoring
+                            await start_position_monitoring(application, int(chat_id), chat_data)
+                            
+                            logger.info(f"✅ Monitor restored for {symbol} in chat {chat_id}")
+                            restored_positions += 1
+                        else:
+                            logger.info(f"✅ Monitor already running for {symbol} in chat {chat_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Error restoring monitor for {symbol}: {e}")
             else:
-                # No chat data - EXTERNAL position
-                external_positions.append(position)
-                logger.info(f"🌍 EXTERNAL position: {symbol} {side}")
-        
-        logger.info(f"📊 Categorized: {len(bot_positions)} BOT positions, {len(external_positions)} EXTERNAL positions")
-        
-        # Step 3: Restore monitoring for bot positions
-        logger.info("🤖 Step 3: Restoring monitoring for BOT positions...")
-        restored_bot_positions = 0
-        
-        for position in bot_positions:
-            try:
-                success = await restore_monitoring_for_position(application, position)
-                if success:
-                    restored_bot_positions += 1
-                    
-                # Small delay between position restorations
-                await asyncio.sleep(0.3)
+                # No chat data found - create new entry
+                logger.info(f"📝 Creating new chat data for position: {symbol} {side}")
                 
-            except Exception as e:
-                logger.error(f"❌ Error restoring monitor for bot position {position.get('symbol', 'unknown')}: {e}")
-                continue
+                # Create chat data for this position
+                new_chat_data = {
+                    SYMBOL: symbol,
+                    SIDE: side,
+                    LAST_KNOWN_POSITION_SIZE: position["size"],
+                    PRIMARY_ENTRY_PRICE: position.get("avgPrice", "0"),
+                    TRADING_APPROACH: "fast",  # Default to fast approach
+                    "position_created": True,
+                    "bot_position": True
+                }
+                
+                # Store in the main chat's data
+                if main_chat_id not in application.chat_data:
+                    application.chat_data[main_chat_id] = {}
+                
+                # Create a unique key for this position
+                position_key = f"position_{symbol}_{side}"
+                application.chat_data[main_chat_id][position_key] = new_chat_data
+                
+                # Start monitoring
+                try:
+                    from execution.monitor import start_position_monitoring
+                    await start_position_monitoring(application, int(main_chat_id), new_chat_data)
+                    
+                    logger.info(f"✅ Created new monitor for {symbol} in chat {main_chat_id}")
+                    created_new_entries += 1
+                except Exception as e:
+                    logger.error(f"❌ Error creating monitor for {symbol}: {e}")
+            
+            # Small delay between position processing
+            await asyncio.sleep(0.3)
         
-        # Step 4: Adopt external positions for read-only monitoring
-        logger.info("🌍 Step 4: Adopting EXTERNAL positions for READ-ONLY monitoring...")
-        adopted_external_positions = await adopt_external_positions_for_monitoring(application, external_positions)
-        
-        # Step 5: Restore monitoring for orders
-        logger.info("📋 Step 5: Restoring monitoring for orders...")
+        # Step 4: Restore monitoring for orders
+        logger.info("📋 Step 4: Restoring monitoring for orders...")
         restored_orders = await restore_monitoring_for_orders(application, orders)
         
-        # Step 6: Clean up orphaned monitors
-        logger.info("🧹 Step 6: Cleaning up orphaned monitors...")
-        await clean_up_orphaned_monitors(application)
+        # Step 5: Orphaned monitor cleanup no longer needed - all trades are bot trades
+        logger.info("✅ Step 5: Skipping orphaned monitor cleanup (all trades are bot trades)")
         
-        # Step 7: Update persistence
-        if restored_bot_positions > 0 or adopted_external_positions > 0 or restored_orders > 0:
-            logger.info("💾 Step 7: Updating persistence...")
+        # Step 6: Update persistence
+        if restored_positions > 0 or created_new_entries > 0 or restored_orders > 0:
+            logger.info("💾 Step 6: Updating persistence...")
             await application.update_persistence()
         
         # Summary
-        total_restored = restored_bot_positions + adopted_external_positions + (1 if restored_orders > 0 else 0)
-        if total_restored > 0:
-            logger.info(f"✅ ENHANCED Monitor Restoration with External Adoption Complete!")
-            logger.info(f"   🤖 BOT positions monitored: {restored_bot_positions}")
-            logger.info(f"   🌍 EXTERNAL positions adopted (READ-ONLY): {adopted_external_positions}")
-            logger.info(f"   📋 Order groups monitored: {restored_orders}")
-            logger.info(f"   💾 Persistence updated")
-            
-            if adopted_external_positions > 0:
-                logger.info(f"🛡️ SAFETY: External positions have READ-ONLY monitoring (NO order interference)")
-        else:
-            logger.info("✅ ENHANCED Monitor Restoration: No restoration needed")
-            logger.info("   📊 All active positions/orders already monitored")
+        total_restored = restored_positions + created_new_entries
+        logger.info(f"✅ Monitor Restoration Complete!")
+        logger.info(f"   🤖 Positions monitored: {total_restored}")
+        logger.info(f"   📝 New entries created: {created_new_entries}")
+        logger.info(f"   📋 Order groups monitored: {restored_orders}")
         
     except Exception as e:
-        logger.error(f"❌ Error in ENHANCED monitor restoration with external adoption: {e}", exc_info=True)
+        logger.error(f"❌ Error in monitor restoration: {e}", exc_info=True)
 
 async def auto_restart_monitors_with_delay(application: Application):
     """Restart monitors with a delay to ensure everything is initialized"""
     try:
         await asyncio.sleep(3)
-        logger.info("🔄 Starting ENHANCED automatic monitor restart check with EXTERNAL ADOPTION...")
+        logger.info("🔄 Starting automatic monitor restart check...")
         await check_and_restart_position_monitors(application)
     except Exception as e:
-        logger.error(f"❌ Error in delayed ENHANCED monitor restart: {e}")
+        logger.error(f"❌ Error in delayed monitor restart: {e}")
 
 async def startup_order_cleanup():
     """Run order cleanup on bot startup"""
@@ -714,7 +509,8 @@ async def startup_order_cleanup():
         logger.info(f"🧹 Scheduling startup order cleanup in {ORDER_CLEANUP_STARTUP_DELAY} seconds...")
         await asyncio.sleep(ORDER_CLEANUP_STARTUP_DELAY)
         
-        logger.info("🧹 Running startup orphaned order cleanup...")
+        # Orphaned order cleanup removed - all trades are bot trades
+        logger.info("✅ Orphaned order cleanup no longer needed (all trades are bot trades)")
         
         # Clean up expired protections
         cleanup_expired_protections()
@@ -785,11 +581,11 @@ async def start_background_tasks():
         logger.error(f"❌ Error starting background tasks: {e}")
 
 async def enhanced_post_init(application: Application) -> None:
-    """Enhanced post-initialization with EXTERNAL POSITION ADOPTION and better resource management"""
+    """Enhanced post-initialization with better resource management"""
     global _global_app
     _global_app = application
     
-    logger.info("🚀 Enhanced Trading Bot initializing with EXTERNAL POSITION ADOPTION...")
+    logger.info("🚀 Enhanced Trading Bot initializing...")
     
     # Initialize enhanced bot data
     stats_defaults = {
@@ -858,8 +654,8 @@ async def enhanced_post_init(application: Application) -> None:
     # ENHANCED: Start background tasks (within async context)
     await start_background_tasks()
     
-    # ENHANCED: Monitor restoration with external position adoption
-    logger.info("🔄 Initializing ENHANCED monitor restoration with EXTERNAL ADOPTION...")
+    # Monitor restoration
+    logger.info("🔄 Initializing monitor restoration...")
     asyncio.create_task(auto_restart_monitors_with_delay(application))
     
     # Order cleanup
@@ -867,7 +663,7 @@ async def enhanced_post_init(application: Application) -> None:
     asyncio.create_task(startup_order_cleanup())
     
     await application.update_persistence()
-    logger.info("✅ Enhanced bot initialization with EXTERNAL POSITION ADOPTION completed!")
+    logger.info("✅ Enhanced bot initialization completed!")
 
 def setup_signal_handlers():
     """ENHANCED: Setup signal handlers for graceful shutdown"""
@@ -960,10 +756,10 @@ def main():
     # Register cleanup function
     atexit.register(lambda: asyncio.run(graceful_shutdown()) if _global_app else None)
     
-    logger.info(f"🚀 Enhanced Trading Bot starting with EXTERNAL POSITION ADOPTION!")
+    logger.info(f"🚀 Enhanced Trading Bot starting!")
     logger.info(f"📱 Mobile-first design with manual trading optimization")
     logger.info(f"Environment: {'TESTNET' if USE_TESTNET else 'LIVE'}")
-    logger.info(f"Version: Enhanced Manual v5.2 - EXTERNAL ADOPTION + RESOURCE MANAGEMENT")
+    logger.info(f"Version: Enhanced Manual v5.3 - ALL POSITIONS AS BOT POSITIONS")
     
     # Setup persistence
     persistence_file = PERSISTENCE_FILE
@@ -1001,8 +797,8 @@ def main():
     logger.info(f"📱 Mobile UX: Touch-optimized interface, quick selections")
     logger.info(f"📝 Manual Trading: Enhanced workflow with intelligent defaults")
     logger.info(f"🔄 ROBUST Monitor Restoration: Direct Bybit verification system")
-    logger.info(f"🌍 EXTERNAL Position Adoption: Read-only monitoring for external trades")
-    logger.info(f"🧹 Order Cleanup: Prevention of orphaned orders")
+    logger.info(f"🤖 All Positions Bot Mode: Every position gets full monitoring")
+    logger.info(f"✅ Order Management: All trades tracked with persistence")
     logger.info(f"📊 Performance: Real-time stats and enhanced tracking")
     logger.info(f"🛡️ Risk Management: Smart position sizing and R:R analysis")
     logger.info(f"🔧 Resource Management: Memory leak prevention and graceful shutdown")
@@ -1025,7 +821,7 @@ def main():
         "🧠 AI-Powered Insights",
         # "📱 Social Media Intelligence",  # Disabled - API keys not configured
         "🔄 ROBUST Automatic Monitoring",
-        "🌍 External Position Adoption",
+        "🤖 All Positions as Bot Positions",
         "📊 Real-Time Statistics",
         "🛡️ Smart Risk Management",
         "🔧 Enhanced Resource Management",
@@ -1049,15 +845,13 @@ def main():
     logger.info(f"🔄 ROBUST Monitor Restoration:")
     logger.info(f"   • Direct Bybit API verification")
     logger.info(f"   • Position and order cross-referencing")
-    logger.info(f"   • Automatic orphaned monitor cleanup")
+    logger.info(f"   • All trades have chat data and persistence")
     logger.info(f"   • Conservative and fast approach support")
     
-    logger.info(f"🌍 EXTERNAL Position Adoption:")
-    logger.info(f"   • READ-ONLY monitoring for external positions")
-    logger.info(f"   • P&L tracking without order interference") 
-    logger.info(f"   • Combined dashboard view of all positions")
-    logger.info(f"   • Performance stats for external trades")
-    logger.info(f"   • SAFE: No modification of external orders")
+    logger.info(f"🤖 All Positions Bot Mode:")
+    logger.info(f"   • Every position gets full monitoring capabilities")
+    logger.info(f"   • Automatic TP/SL management for all positions") 
+    logger.info(f"   • Unified dashboard view of all positions")
     
     # logger.info(f"📱 Social Media Intelligence:")
     # logger.info(f"   • Multi-platform sentiment analysis (Reddit, Twitter, YouTube, Discord)")
