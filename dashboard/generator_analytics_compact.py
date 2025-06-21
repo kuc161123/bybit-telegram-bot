@@ -510,7 +510,8 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
             current_chat_data = context.get('chat_data', {})
             if current_chat_data:
                 monitor_info = current_chat_data.get(ACTIVE_MONITOR_TASK, {})
-                if isinstance(monitor_info, dict) and monitor_info.get('active', False):
+                # Handle single monitor stored directly
+                if isinstance(monitor_info, dict) and monitor_info.get('symbol') and monitor_info.get('active', False):
                     # Only count if not already counted
                     chat_key = f'chat_data_{chat_id}'
                     if chat_key not in bot_data:
