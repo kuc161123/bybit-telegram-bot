@@ -1594,8 +1594,18 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
             approach = chat_data.get(TRADING_APPROACH, 'fast')
             monitor_key = f"{chat_id}_{symbol}_{approach}"
             if 'monitor_tasks' in bot_data and monitor_key in bot_data['monitor_tasks']:
+                # Mark as inactive first
+                bot_data['monitor_tasks'][monitor_key]['active'] = False
+                # Then delete
                 del bot_data['monitor_tasks'][monitor_key]
                 logger.info(f"📊 Cleaned up monitor from bot_data: {symbol} ({approach})")
+                
+                # Force persistence update
+                try:
+                    if hasattr(ctx_app, 'update_persistence'):
+                        await ctx_app.update_persistence()
+                except Exception as e:
+                    logger.warning(f"Could not update persistence: {e}")
         
         # Clear local variables to help GC
         position_history.clear()
@@ -1666,8 +1676,18 @@ async def stop_position_monitoring(chat_data: dict, ctx_app=None):
                 bot_data = ctx_app.bot_data
                 monitor_key = f"{chat_id}_{symbol}_{approach}"
                 if 'monitor_tasks' in bot_data and monitor_key in bot_data['monitor_tasks']:
+                    # Mark as inactive first
+                    bot_data['monitor_tasks'][monitor_key]['active'] = False
+                    # Then delete
                     del bot_data['monitor_tasks'][monitor_key]
                     logger.info(f"📊 Removed monitor from bot_data: {symbol} ({approach})")
+                    
+                    # Force persistence update
+                    try:
+                        if hasattr(ctx_app, 'update_persistence'):
+                            await ctx_app.update_persistence()
+                    except Exception as e:
+                        logger.warning(f"Could not update persistence: {e}")
         
         monitoring_mode = task_info.get("monitoring_mode", "UNKNOWN")
         chat_data[ACTIVE_MONITOR_TASK] = {}

@@ -33,13 +33,15 @@ from .conversation import (
     # NEW: GGShot screenshot handlers
     screenshot_upload_handler, handle_ggshot_callbacks,
     # NEW: Back button handler
-    handle_back_callback
+    handle_back_callback,
+    # NEW: GGShot edit handlers
+    ggshot_edit_value_handler
 )
 
 logger = logging.getLogger(__name__)
 
 # ENHANCED: Conversation states with GGShot screenshot strategy
-SYMBOL, SIDE, APPROACH_SELECTION, SCREENSHOT_UPLOAD, PRIMARY_ENTRY, LIMIT_ENTRIES, TAKE_PROFITS, STOP_LOSS, LEVERAGE, MARGIN, CONFIRMATION = range(11)
+SYMBOL, SIDE, APPROACH_SELECTION, SCREENSHOT_UPLOAD, PRIMARY_ENTRY, LIMIT_ENTRIES, TAKE_PROFITS, STOP_LOSS, LEVERAGE, MARGIN, CONFIRMATION, GGSHOT_EDIT_VALUES = range(12)
 
 def setup_enhanced_conversation_handlers(app):
     """Setup enhanced conversation handlers for dual approach trading"""
@@ -100,6 +102,11 @@ def setup_enhanced_conversation_handlers(app):
                     CallbackQueryHandler(handle_execute_trade, pattern="^confirm_execute_trade$"),
                     CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
                     MessageHandler(filters.TEXT & ~filters.COMMAND, confirmation_handler)
+                ],
+                # NEW: GGSHOT_EDIT_VALUES state for editing extracted values
+                GGSHOT_EDIT_VALUES: [
+                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, ggshot_edit_value_handler)
                 ]
             },
             fallbacks=[
@@ -418,6 +425,16 @@ def setup_handlers(app: Application):
     # Test command for enhanced UI
     from .test_dashboard import test_dashboard_command
     app.add_handler(CommandHandler("test", test_dashboard_command))
+    
+    # Monitor management commands
+    try:
+        from .monitor_commands import cleanup_monitors_command, list_monitors_command, force_cleanup_command
+        app.add_handler(CommandHandler("cleanup_monitors", cleanup_monitors_command))
+        app.add_handler(CommandHandler("list_monitors", list_monitors_command))
+        app.add_handler(CommandHandler("force_cleanup", force_cleanup_command))
+        logger.info("✅ Monitor management commands loaded!")
+    except Exception as e:
+        logger.warning(f"Monitor management commands not loaded: {e}")
     
     # NEW: Position mode command handlers
     setup_position_mode_commands(app)

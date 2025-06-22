@@ -217,6 +217,60 @@ async def verify_monitor_status(chat_id: int, chat_data: dict):
         logger.error(f"Error verifying monitor status for chat {chat_id}: {e}")
         return False
 
+async def cleanup_stale_monitors(application: Application):
+    """
+    Clean up stale monitor entries from bot_data on startup
+    """
+    try:
+        if 'monitor_tasks' not in application.bot_data:
+            logger.info("No monitor_tasks found in bot_data")
+            return
+        
+        monitor_tasks = application.bot_data['monitor_tasks']
+        current_time = time.time()
+        stale_monitors = []
+        
+        # Check each monitor entry
+        for monitor_key, task_info in monitor_tasks.items():
+            if not isinstance(task_info, dict):
+                stale_monitors.append(monitor_key)
+                continue
+            
+            # Check if monitor is stale (older than 24 hours)
+            started_at = task_info.get('started_at', 0)
+            if started_at > 0 and (current_time - started_at) > 86400:  # 24 hours
+                stale_monitors.append(monitor_key)
+                logger.info(f"Found stale monitor {monitor_key} (started {(current_time - started_at)/3600:.1f} hours ago)")
+                continue
+            
+            # Check if monitor is marked as active but has no running task
+            if task_info.get('active', False):
+                chat_id = task_info.get('chat_id')
+                symbol = task_info.get('symbol')
+                approach = task_info.get('approach', 'fast')
+                
+                if chat_id and symbol:
+                    from execution.monitor import get_monitor_task_status
+                    status = await get_monitor_task_status(chat_id, symbol, approach)
+                    
+                    if not status.get("running", False):
+                        stale_monitors.append(monitor_key)
+                        logger.info(f"Found inactive monitor {monitor_key} marked as active")
+        
+        # Remove stale monitors
+        for monitor_key in stale_monitors:
+            del monitor_tasks[monitor_key]
+            logger.info(f"Removed stale monitor: {monitor_key}")
+        
+        if stale_monitors:
+            logger.info(f"✅ Cleaned up {len(stale_monitors)} stale monitors")
+            await application.update_persistence()
+        else:
+            logger.info("✅ No stale monitors found")
+            
+    except Exception as e:
+        logger.error(f"Error cleaning up stale monitors: {e}")
+
 async def restore_monitoring_for_position(application: Application, position: dict):
     """
     ENHANCED: Restore monitoring for a specific position
@@ -653,6 +707,10 @@ async def enhanced_post_init(application: Application) -> None:
     
     # ENHANCED: Start background tasks (within async context)
     await start_background_tasks()
+    
+    # Clean up stale monitors before restoration
+    logger.info("🧹 Cleaning up stale monitors...")
+    await cleanup_stale_monitors(application)
     
     # Monitor restoration
     logger.info("🔄 Initializing monitor restoration...")

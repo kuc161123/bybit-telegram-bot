@@ -8,6 +8,7 @@ from decimal import Decimal
 from datetime import datetime, timedelta
 import random
 import math
+import time
 from typing import Dict, Any, List, Tuple
 
 from config.constants import *
@@ -413,8 +414,15 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         active_monitor_count = 0
         
         # Count from monitor_tasks registry (primary source)
+        current_time = time.time()
         for monitor_key, task_info in monitor_tasks.items():
             if isinstance(task_info, dict) and task_info.get('active', False):
+                # Validate monitor is not stale (older than 24 hours)
+                started_at = task_info.get('started_at', 0)
+                if started_at > 0 and (current_time - started_at) > 86400:  # 24 hours
+                    logger.debug(f"Skipping stale monitor {monitor_key} (started {(current_time - started_at)/3600:.1f} hours ago)")
+                    continue
+                
                 approach = task_info.get('approach', 'unknown')
                 
                 if approach == 'fast':
