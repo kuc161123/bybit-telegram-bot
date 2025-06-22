@@ -1,187 +1,174 @@
 #!/usr/bin/env python3
 """
-Monitor management commands for debugging and administration
+Monitor management commands for manual cleanup and inspection
 """
 import logging
+import time
 from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
-import time
-
 from config.constants import *
 
 logger = logging.getLogger(__name__)
 
 async def cleanup_monitors_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Command to manually clean up stale monitors"""
+    """Clean up stale monitors manually"""
+    chat_id = update.effective_chat.id
+    
     try:
-        message = await update.message.reply_text(
-            "🧹 Cleaning up stale monitors...",
-            parse_mode=ParseMode.HTML
-        )
-        
-        if 'monitor_tasks' not in context.bot_data:
-            await message.edit_text("No monitor_tasks found in bot_data")
-            return
-        
-        monitor_tasks = context.bot_data['monitor_tasks']
+        bot_data = context.application.bot_data
+        monitor_tasks = bot_data.get('monitor_tasks', {})
         current_time = time.time()
-        stale_monitors = []
+        stale_count = 0
         
-        # Check each monitor entry
-        for monitor_key, task_info in list(monitor_tasks.items()):
-            if not isinstance(task_info, dict):
-                stale_monitors.append(monitor_key)
-                continue
-            
-            # Check if monitor is stale (older than 24 hours)
-            started_at = task_info.get('started_at', 0)
-            if started_at > 0 and (current_time - started_at) > 86400:  # 24 hours
-                stale_monitors.append(monitor_key)
-                continue
-            
-            # Check if monitor is marked as active but has no running task
-            if task_info.get('active', False):
-                chat_id = task_info.get('chat_id')
-                symbol = task_info.get('symbol')
-                approach = task_info.get('approach', 'fast')
+        # Check each monitor and remove if stale
+        monitors_to_remove = []
+        
+        for monitor_key, task_info in monitor_tasks.items():
+            if isinstance(task_info, dict):
+                started_at = task_info.get('started_at', 0)
+                is_active = task_info.get('active', False)
                 
-                if chat_id and symbol:
-                    from execution.monitor import get_monitor_task_status
-                    status = await get_monitor_task_status(chat_id, symbol, approach)
-                    
-                    if not status.get("running", False):
-                        stale_monitors.append(monitor_key)
+                # Remove if older than 24 hours or marked inactive
+                if (started_at > 0 and (current_time - started_at) > 86400) or not is_active:
+                    age_hours = (current_time - started_at) / 3600 if started_at > 0 else 0
+                    monitors_to_remove.append((monitor_key, age_hours, is_active))
+                    stale_count += 1
         
         # Remove stale monitors
-        for monitor_key in stale_monitors:
+        for monitor_key, _, _ in monitors_to_remove:
             del monitor_tasks[monitor_key]
         
-        if stale_monitors:
-            await context.application.update_persistence()
-            await message.edit_text(
-                f"✅ Cleaned up {len(stale_monitors)} stale monitors:\n"
-                f"{chr(10).join(stale_monitors[:10])}{'...' if len(stale_monitors) > 10 else ''}",
-                parse_mode=ParseMode.HTML
-            )
-        else:
-            await message.edit_text("✅ No stale monitors found")
+        # Build response message
+        if stale_count > 0:
+            msg = f"🧹 <b>Monitor Cleanup Complete</b>\n\n"
+            msg += f"✅ Removed {stale_count} stale monitors:\n\n"
             
+            for monitor_key, age_hours, is_active in monitors_to_remove[:10]:  # Show max 10
+                parts = monitor_key.split('_')
+                symbol = parts[1] if len(parts) > 1 else "Unknown"
+                approach = parts[2] if len(parts) > 2 else "unknown"
+                msg += f"• {symbol} ({approach}) - {age_hours:.1f}h old, active: {is_active}\n"
+            
+            if len(monitors_to_remove) > 10:
+                msg += f"\n... and {len(monitors_to_remove) - 10} more"
+            
+            await context.application.update_persistence()
+        else:
+            msg = "✅ <b>No stale monitors found</b>\n\nAll monitors are active and recent."
+        
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+        
     except Exception as e:
-        logger.error(f"Error in cleanup_monitors_command: {e}")
+        logger.error(f"Error in cleanup_monitors command: {e}")
         await update.message.reply_text(
             f"❌ Error cleaning up monitors: {str(e)}",
             parse_mode=ParseMode.HTML
         )
 
 async def list_monitors_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Command to list all active monitors"""
+    """List all monitors with their status"""
+    chat_id = update.effective_chat.id
+    
     try:
-        monitor_tasks = context.bot_data.get('monitor_tasks', {})
+        bot_data = context.application.bot_data
+        monitor_tasks = bot_data.get('monitor_tasks', {})
+        current_time = time.time()
         
         if not monitor_tasks:
             await update.message.reply_text(
-                "📊 No monitors found in bot_data",
+                "📊 <b>No monitors found</b>\n\nNo active position monitors.",
                 parse_mode=ParseMode.HTML
             )
             return
         
-        current_time = time.time()
+        msg = f"📊 <b>Monitor Status</b>\n"
+        msg += f"Total monitors: {len(monitor_tasks)}\n\n"
+        
+        # Categorize monitors
         active_monitors = []
         stale_monitors = []
         
         for monitor_key, task_info in monitor_tasks.items():
             if isinstance(task_info, dict):
                 started_at = task_info.get('started_at', 0)
-                hours_ago = (current_time - started_at) / 3600 if started_at > 0 else 0
+                is_active = task_info.get('active', False)
+                age_hours = (current_time - started_at) / 3600 if started_at > 0 else 0
                 
-                info = {
+                monitor_data = {
                     'key': monitor_key,
-                    'symbol': task_info.get('symbol', 'Unknown'),
-                    'approach': task_info.get('approach', 'Unknown'),
-                    'chat_id': task_info.get('chat_id', 'Unknown'),
-                    'hours_ago': hours_ago,
-                    'active': task_info.get('active', False)
+                    'age_hours': age_hours,
+                    'active': is_active,
+                    'info': task_info
                 }
                 
-                if hours_ago > 24:
-                    stale_monitors.append(info)
+                if age_hours > 24 or not is_active:
+                    stale_monitors.append(monitor_data)
                 else:
-                    active_monitors.append(info)
+                    active_monitors.append(monitor_data)
         
-        # Build response message
-        message_parts = [f"📊 <b>Monitor Status Report</b>"]
-        message_parts.append(f"\nTotal monitors in bot_data: {len(monitor_tasks)}")
-        
+        # Show active monitors
         if active_monitors:
-            message_parts.append(f"\n\n<b>Active Monitors ({len(active_monitors)}):</b>")
-            for monitor in active_monitors[:10]:  # Show first 10
-                message_parts.append(
-                    f"• {monitor['symbol']} ({monitor['approach']}) - "
-                    f"Chat {monitor['chat_id']} - {monitor['hours_ago']:.1f}h ago"
-                )
+            msg += f"✅ <b>Active Monitors ({len(active_monitors)})</b>\n"
+            for mon in active_monitors[:10]:
+                parts = mon['key'].split('_')
+                symbol = parts[1] if len(parts) > 1 else "Unknown"
+                approach = parts[2] if len(parts) > 2 else "unknown"
+                msg += f"• {symbol} ({approach}) - {mon['age_hours']:.1f}h old\n"
             if len(active_monitors) > 10:
-                message_parts.append(f"... and {len(active_monitors) - 10} more")
+                msg += f"... and {len(active_monitors) - 10} more\n"
+            msg += "\n"
         
+        # Show stale monitors
         if stale_monitors:
-            message_parts.append(f"\n\n<b>Stale Monitors ({len(stale_monitors)}):</b>")
-            for monitor in stale_monitors[:5]:  # Show first 5
-                message_parts.append(
-                    f"• {monitor['symbol']} ({monitor['approach']}) - "
-                    f"Chat {monitor['chat_id']} - {monitor['hours_ago']:.1f}h ago"
-                )
+            msg += f"⚠️ <b>Stale Monitors ({len(stale_monitors)})</b>\n"
+            for mon in stale_monitors[:5]:
+                parts = mon['key'].split('_')
+                symbol = parts[1] if len(parts) > 1 else "Unknown"
+                approach = parts[2] if len(parts) > 2 else "unknown"
+                status = "active" if mon['active'] else "inactive"
+                msg += f"• {symbol} ({approach}) - {mon['age_hours']:.1f}h old, {status}\n"
             if len(stale_monitors) > 5:
-                message_parts.append(f"... and {len(stale_monitors) - 5} more")
+                msg += f"... and {len(stale_monitors) - 5} more\n"
             
-            message_parts.append(f"\n💡 Use /cleanup_monitors to remove stale entries")
+            msg += f"\n💡 Use /cleanup_monitors to remove stale monitors"
         
-        # Check actual running tasks
-        from execution.monitor import get_monitor_registry_stats
-        registry_stats = get_monitor_registry_stats()
-        message_parts.append(f"\n\n<b>Registry Stats:</b>")
-        message_parts.append(f"• Registered tasks: {registry_stats.get('total_registered', 0)}")
-        message_parts.append(f"• Running tasks: {registry_stats.get('running_tasks', 0)}")
-        
-        await update.message.reply_text(
-            "\n".join(message_parts),
-            parse_mode=ParseMode.HTML
-        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         
     except Exception as e:
-        logger.error(f"Error in list_monitors_command: {e}")
+        logger.error(f"Error in list_monitors command: {e}")
         await update.message.reply_text(
             f"❌ Error listing monitors: {str(e)}",
             parse_mode=ParseMode.HTML
         )
 
 async def force_cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Command to force cleanup all monitors (admin only)"""
+    """Force cleanup of ALL monitors (admin command)"""
+    chat_id = update.effective_chat.id
+    
+    # Add admin check if needed
+    # if chat_id not in ADMIN_CHAT_IDS:
+    #     await update.message.reply_text("❌ Unauthorized")
+    #     return
+    
     try:
-        # Add admin check here if needed
-        # if update.effective_user.id not in ADMIN_USER_IDS:
-        #     await update.message.reply_text("❌ Unauthorized")
-        #     return
+        bot_data = context.application.bot_data
+        monitor_tasks = bot_data.get('monitor_tasks', {})
         
-        monitor_tasks = context.bot_data.get('monitor_tasks', {})
         count = len(monitor_tasks)
+        monitor_tasks.clear()
         
-        if count == 0:
-            await update.message.reply_text("No monitors to clean up")
-            return
-        
-        # Clear all monitors
-        context.bot_data['monitor_tasks'] = {}
         await context.application.update_persistence()
         
-        await update.message.reply_text(
-            f"✅ Force cleaned {count} monitors from bot_data\n"
-            f"⚠️ Active monitors may need to be restarted",
-            parse_mode=ParseMode.HTML
-        )
+        msg = f"🗑️ <b>Force Cleanup Complete</b>\n\n"
+        msg += f"Removed ALL {count} monitors from registry.\n\n"
+        msg += f"⚠️ Note: This doesn't stop running monitors, just clears the registry."
+        
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         
     except Exception as e:
-        logger.error(f"Error in force_cleanup_command: {e}")
+        logger.error(f"Error in force_cleanup_monitors command: {e}")
         await update.message.reply_text(
-            f"❌ Error: {str(e)}",
+            f"❌ Error force cleaning monitors: {str(e)}",
             parse_mode=ParseMode.HTML
         )

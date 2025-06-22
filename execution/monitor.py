@@ -1452,6 +1452,15 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                             if cancelled_limits:
                                 logger.info(f"🎯 {approach.capitalize()} partial cancellation completed: {', '.join(cancelled_limits)}")
                                 logger.info(f"✅ TP2, TP3, TP4 remain ACTIVE for the life of the trade")
+                    
+                    # Check for other TP hits (TP2, TP3, TP4) if TP1 was handled
+                    if not conservative_tp1_cancelled:
+                        await check_conservative_other_tp_hits(chat_data, symbol, current_price, side, ctx_app)
+                    
+                    # Check for SL hit
+                    sl_hit = await check_conservative_sl_hit(chat_data, symbol, current_price, side, ctx_app)
+                    if sl_hit:
+                        logger.info(f"🛡️ {approach.capitalize()} SL hit for {symbol} - all orders cancelled")
                 
                 # FIXED: Fast approach TP/SL monitoring with proper order cancellation
                 elif approach == "fast" and current_size > 0:
@@ -1873,16 +1882,19 @@ async def check_conservative_tp1_hit_with_fills(chat_data: dict, symbol: str, cu
         logger.error(f"Error checking conservative TP1 hit with fills: {e}")
         return False
 
-async def cancel_conservative_orders_on_tp1_hit(chat_data: dict, symbol: str) -> List[str]:
+async def cancel_conservative_orders_on_tp1_hit(chat_data: dict, symbol: str, ctx_app=None) -> List[str]:
     """
     Cancel ALL orders when TP1 hits before any limits fill (Scenario 1)
     Cancels: All unfilled limits + All TPs + SL
     Works for both Conservative and GGShot approaches
+    ADDED: Send alert when TP1 hits early
     """
     cancelled_orders = []
+    cancelled_order_details = []
     
     try:
         approach = chat_data.get(TRADING_APPROACH, "conservative")
+        side = chat_data.get(SIDE, "Unknown")
         
         # Cancel all unfilled limit orders
         limit_order_ids = chat_data.get(LIMIT_ORDER_IDS, [])
@@ -1921,12 +1933,48 @@ async def cancel_conservative_orders_on_tp1_hit(chat_data: dict, symbol: str) ->
                 ([sl_order_id] if sl_order_id else [])
             )
             
+            # Build list of cancelled order descriptions
+            limit_count = 0
+            tp_count = 0
+            
             for order_id, result in zip(all_order_ids, results):
                 if not isinstance(result, Exception) and result:
                     cancelled_orders.append(order_id)
+                    
+                    # Categorize cancelled orders for alert
+                    if order_id in limit_order_ids:
+                        limit_count += 1
+                        cancelled_order_details.append(f"Limit order {order_id[:8]}...")
+                    elif order_id in tp_order_ids:
+                        tp_count += 1
+                        cancelled_order_details.append(f"TP{tp_count} order {order_id[:8]}...")
+                    elif order_id == sl_order_id:
+                        cancelled_order_details.append(f"Stop Loss order {order_id[:8]}...")
+                    
                     logger.info(f"✅ Cancelled order {order_id[:8]}...")
                 else:
                     logger.warning(f"⚠️ Failed to cancel order {order_id[:8]}...")
+        
+        # Send alert for TP1 early hit
+        if ctx_app and hasattr(ctx_app, 'bot') and cancelled_orders:
+            chat_id = chat_data.get('chat_id') or chat_data.get('_chat_id')
+            if chat_id:
+                await send_trade_alert(
+                    bot=ctx_app.bot,
+                    chat_id=chat_id,
+                    alert_type="tp1_early_hit",
+                    symbol=symbol,
+                    side=side,
+                    approach=approach,
+                    pnl=Decimal("0"),  # No P&L for early TP1
+                    entry_price=Decimal("0"),
+                    current_price=Decimal("0"),
+                    position_size=Decimal("0"),
+                    cancelled_orders=cancelled_order_details,
+                    additional_info={
+                        "total_cancelled": len(cancelled_orders)
+                    }
+                )
         
         logger.info(f"🚨 {approach.capitalize()} TP1 early hit - cancelled {len(cancelled_orders)} orders")
         
@@ -1935,14 +1983,19 @@ async def cancel_conservative_orders_on_tp1_hit(chat_data: dict, symbol: str) ->
     
     return cancelled_orders
 
-async def cancel_remaining_conservative_limits_only(chat_data: dict, symbol: str) -> List[str]:
+async def cancel_remaining_conservative_limits_only(chat_data: dict, symbol: str, ctx_app=None) -> List[str]:
     """
     Cancel only remaining unfilled limit orders when TP1 hits after some fills (Scenario 2)
     Keeps: All TPs (TP2, TP3, TP4) and SL active
+    ADDED: Send alert when TP1 hits with fills
     """
     cancelled_orders = []
+    cancelled_order_details = []
     
     try:
+        approach = chat_data.get(TRADING_APPROACH, "conservative")
+        side = chat_data.get(SIDE, "Unknown")
+        
         # Only cancel unfilled limit orders
         limit_order_ids = chat_data.get(LIMIT_ORDER_IDS, [])
         filled_limits = chat_data.get(CONSERVATIVE_LIMITS_FILLED, [])
@@ -1962,9 +2015,32 @@ async def cancel_remaining_conservative_limits_only(chat_data: dict, symbol: str
             for order_id, result in zip(unfilled_limits, results):
                 if not isinstance(result, Exception) and result:
                     cancelled_orders.append(order_id)
+                    cancelled_order_details.append(f"Unfilled limit {order_id[:8]}...")
                     logger.info(f"✅ Cancelled unfilled limit {order_id[:8]}...")
                 else:
                     logger.warning(f"⚠️ Failed to cancel limit {order_id[:8]}...")
+        
+        # Send alert for TP1 hit with fills
+        if ctx_app and hasattr(ctx_app, 'bot'):
+            chat_id = chat_data.get('chat_id') or chat_data.get('_chat_id')
+            if chat_id:
+                await send_trade_alert(
+                    bot=ctx_app.bot,
+                    chat_id=chat_id,
+                    alert_type="tp1_with_fills",
+                    symbol=symbol,
+                    side=side,
+                    approach=approach,
+                    pnl=Decimal("0"),  # No P&L yet
+                    entry_price=Decimal("0"),
+                    current_price=Decimal("0"),
+                    position_size=Decimal("0"),
+                    cancelled_orders=cancelled_order_details,
+                    additional_info={
+                        "filled_count": len(filled_limits),
+                        "total_limits": len(limit_order_ids)
+                    }
+                )
         
         logger.info(f"🎯 Conservative TP1 with fills - cancelled {len(cancelled_orders)} unfilled limits")
         logger.info(f"✅ Keeping TP2, TP3, TP4 and SL orders active")
@@ -1973,6 +2049,190 @@ async def cancel_remaining_conservative_limits_only(chat_data: dict, symbol: str
         logger.error(f"Error cancelling remaining conservative limits: {e}")
     
     return cancelled_orders
+
+async def check_conservative_other_tp_hits(chat_data: dict, symbol: str, current_price: Decimal, side: str, ctx_app=None) -> bool:
+    """
+    Check if TP2, TP3, or TP4 have been hit for conservative approach
+    ADDED: Send alerts for each TP hit
+    """
+    try:
+        approach = chat_data.get(TRADING_APPROACH, "conservative")
+        if approach not in ["conservative", "ggshot"]:
+            return False
+        
+        # Get TP order IDs
+        tp_order_ids = chat_data.get(CONSERVATIVE_TP_ORDER_IDS, [])
+        if not tp_order_ids and approach == "ggshot":
+            tp_order_ids = chat_data.get(GGSHOT_TP_ORDER_IDS, [])
+        
+        if len(tp_order_ids) < 2:  # Need at least TP2
+            return False
+        
+        # Track which TPs have been hit
+        tps_hit = chat_data.get("conservative_tps_hit", [])
+        
+        hit_any = False
+        
+        # Check TP2, TP3, TP4 (skip TP1 which is index 0)
+        for i, tp_order_id in enumerate(tp_order_ids[1:], start=2):
+            if tp_order_id and f"TP{i}" not in tps_hit:
+                tp_info = await get_order_info(symbol, tp_order_id)
+                if tp_info:
+                    tp_status = tp_info.get("orderStatus", "")
+                    if tp_status in ["Filled", "PartiallyFilled"]:
+                        # TP hit!
+                        tps_hit.append(f"TP{i}")
+                        hit_any = True
+                        
+                        # Calculate P&L for this TP
+                        entry_price = safe_decimal_conversion(chat_data.get(PRIMARY_ENTRY_PRICE, "0"))
+                        tp_price = safe_decimal_conversion(tp_info.get("triggerPrice", "0"))
+                        tp_qty = safe_decimal_conversion(tp_info.get("cumExecQty", "0"))
+                        
+                        if side == "Buy":
+                            pnl = (tp_price - entry_price) * tp_qty
+                        else:  # Sell
+                            pnl = (entry_price - tp_price) * tp_qty
+                        
+                        logger.info(f"🎯 {approach.capitalize()} TP{i} hit at {tp_price} for {symbol}")
+                        
+                        # Send alert
+                        if ctx_app and hasattr(ctx_app, 'bot'):
+                            chat_id = chat_data.get('chat_id') or chat_data.get('_chat_id')
+                            if chat_id:
+                                # Get remaining active TPs
+                                remaining_tps = []
+                                for j, tp_id in enumerate(tp_order_ids, start=1):
+                                    if f"TP{j}" not in tps_hit and tp_id:
+                                        remaining_tps.append(f"TP{j}")
+                                
+                                position_size = safe_decimal_conversion(chat_data.get(LAST_KNOWN_POSITION_SIZE, "0"))
+                                
+                                await send_trade_alert(
+                                    bot=ctx_app.bot,
+                                    chat_id=chat_id,
+                                    alert_type="tp_hit",
+                                    symbol=symbol,
+                                    side=side,
+                                    approach=approach,
+                                    pnl=pnl,
+                                    entry_price=entry_price,
+                                    current_price=tp_price,
+                                    position_size=tp_qty,
+                                    cancelled_orders=[],
+                                    additional_info={
+                                        "tp_number": i,
+                                        "remaining_tps": remaining_tps
+                                    }
+                                )
+        
+        # Update chat data
+        chat_data["conservative_tps_hit"] = tps_hit
+        
+        return hit_any
+        
+    except Exception as e:
+        logger.error(f"Error checking conservative TP hits: {e}")
+        return False
+
+async def check_conservative_sl_hit(chat_data: dict, symbol: str, current_price: Decimal, side: str, ctx_app=None) -> bool:
+    """
+    Check if SL has been hit for conservative approach
+    ADDED: Send alert with total loss and cancelled orders
+    """
+    try:
+        approach = chat_data.get(TRADING_APPROACH, "conservative")
+        if approach not in ["conservative", "ggshot"]:
+            return False
+        
+        # Check if SL already processed
+        if chat_data.get("conservative_sl_hit_processed", False):
+            return False
+        
+        # Get SL order ID
+        sl_order_id = chat_data.get(CONSERVATIVE_SL_ORDER_ID)
+        if not sl_order_id and approach == "ggshot":
+            sl_order_id = chat_data.get(GGSHOT_SL_ORDER_ID)
+        
+        if not sl_order_id:
+            return False
+        
+        # Check SL order status
+        sl_info = await get_order_info(symbol, sl_order_id)
+        if not sl_info:
+            return False
+        
+        sl_status = sl_info.get("orderStatus", "")
+        if sl_status in ["Filled", "PartiallyFilled"]:
+            logger.info(f"🛡️ {approach.capitalize()} SL HIT for {symbol}")
+            
+            # Get position info for alert
+            entry_price = safe_decimal_conversion(chat_data.get(PRIMARY_ENTRY_PRICE, "0"))
+            sl_price = safe_decimal_conversion(sl_info.get("triggerPrice", "0"))
+            position_size = safe_decimal_conversion(chat_data.get(LAST_KNOWN_POSITION_SIZE, "0"))
+            
+            # Calculate total loss
+            if side == "Buy":
+                pnl = (sl_price - entry_price) * position_size
+            else:  # Sell
+                pnl = (entry_price - sl_price) * position_size
+            
+            # Cancel all remaining orders
+            cancelled_orders = []
+            cancelled_order_details = []
+            
+            # Cancel unfilled limits
+            limit_order_ids = chat_data.get(LIMIT_ORDER_IDS, [])
+            filled_limits = chat_data.get(CONSERVATIVE_LIMITS_FILLED, [])
+            
+            for order_id in limit_order_ids:
+                if order_id not in filled_limits:
+                    success = await cancel_order_with_retry(symbol, order_id)
+                    if success:
+                        cancelled_orders.append(order_id)
+                        cancelled_order_details.append(f"Unfilled limit {order_id[:8]}...")
+            
+            # Cancel remaining TPs
+            tp_order_ids = chat_data.get(CONSERVATIVE_TP_ORDER_IDS, [])
+            if not tp_order_ids and approach == "ggshot":
+                tp_order_ids = chat_data.get(GGSHOT_TP_ORDER_IDS, [])
+            
+            tps_hit = chat_data.get("conservative_tps_hit", [])
+            
+            for i, tp_order_id in enumerate(tp_order_ids, start=1):
+                if tp_order_id and f"TP{i}" not in tps_hit:
+                    success = await cancel_order_with_retry(symbol, tp_order_id)
+                    if success:
+                        cancelled_orders.append(tp_order_id)
+                        cancelled_order_details.append(f"TP{i} order {tp_order_id[:8]}...")
+            
+            # Send alert
+            if ctx_app and hasattr(ctx_app, 'bot'):
+                chat_id = chat_data.get('chat_id') or chat_data.get('_chat_id')
+                if chat_id:
+                    await send_trade_alert(
+                        bot=ctx_app.bot,
+                        chat_id=chat_id,
+                        alert_type="sl_hit",
+                        symbol=symbol,
+                        side=side,
+                        approach=approach,
+                        pnl=pnl,
+                        entry_price=entry_price,
+                        current_price=sl_price,
+                        position_size=position_size,
+                        cancelled_orders=cancelled_order_details
+                    )
+            
+            # Mark SL as processed
+            chat_data["conservative_sl_hit_processed"] = True
+            return True
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"Error checking conservative SL hit: {e}")
+        return False
 
 # =============================================
 # PERIODIC CLEANUP TASK

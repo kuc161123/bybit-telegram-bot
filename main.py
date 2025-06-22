@@ -615,6 +615,43 @@ async def start_monitor_cleanup_task_async():
     except Exception as e:
         logger.error(f"Error starting monitor cleanup task: {e}")
 
+async def cleanup_stale_monitors(application: Application):
+    """Clean up stale monitors from bot_data on startup"""
+    try:
+        logger.info("🧹 Cleaning up stale monitors...")
+        
+        bot_data = application.bot_data
+        monitor_tasks = bot_data.get('monitor_tasks', {})
+        current_time = time.time()
+        stale_count = 0
+        
+        # Check each monitor and remove if stale
+        monitors_to_remove = []
+        for monitor_key, task_info in monitor_tasks.items():
+            if isinstance(task_info, dict):
+                started_at = task_info.get('started_at', 0)
+                is_active = task_info.get('active', False)
+                
+                # Remove if older than 24 hours or marked inactive
+                if (started_at > 0 and (current_time - started_at) > 86400) or not is_active:
+                    age_hours = (current_time - started_at) / 3600 if started_at > 0 else 0
+                    logger.info(f"🗑️ Removing stale monitor {monitor_key} (age: {age_hours:.1f}h, active: {is_active})")
+                    monitors_to_remove.append(monitor_key)
+                    stale_count += 1
+        
+        # Remove stale monitors
+        for monitor_key in monitors_to_remove:
+            del monitor_tasks[monitor_key]
+        
+        if stale_count > 0:
+            logger.info(f"✅ Cleaned up {stale_count} stale monitors")
+            await application.update_persistence()
+        else:
+            logger.info("✅ No stale monitors found")
+            
+    except Exception as e:
+        logger.error(f"❌ Error cleaning up stale monitors: {e}")
+
 async def start_background_tasks():
     """ENHANCED: Start all background tasks with proper management"""
     try:
