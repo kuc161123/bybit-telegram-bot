@@ -698,6 +698,16 @@ async def mock_ai_screenshot_analysis(chat_data: dict) -> dict:
             }
         }
 
+def format_value_with_edit_indicator(value, field_name: str, edited_fields: set) -> str:
+    """Format value with edit indicator if it has been edited"""
+    formatted_value = f"<code>{format_decimal_or_na(value)}</code>"
+    
+    # Check if this field has been edited
+    if field_name in edited_fields:
+        formatted_value += " ✅ <i>(edited)</i>"
+    
+    return formatted_value
+
 async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: int, extracted_data: dict) -> int:
     """Show extracted parameters and ask for confirmation"""
     symbol = context.chat_data.get(SYMBOL, "Unknown")
@@ -710,6 +720,9 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
     params = extracted_data.get("parameters", {})
     validation_errors = extracted_data.get("validation_errors", [])
     quality_report = extracted_data.get("quality_report", {})
+    
+    # Get edited fields
+    edited_fields = context.chat_data.get("ggshot_edited_fields", set())
     
     # Get accuracy check results if available
     accuracy_checks = extracted_data.get("accuracy_checks", {})
@@ -819,13 +832,6 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
     # Mark values as edited if they've been changed
     edited_fields = context.chat_data.get("ggshot_edited_fields", set())
     
-    # Helper function to add edit indicator
-    def format_value_with_edit_indicator(value, field_name):
-        formatted = format_decimal_or_na(value)
-        if field_name in edited_fields:
-            return f"{formatted} ✏️"
-        return formatted
-    
     # Build confirmation message based on detected strategy
     if strategy_type == "conservative":
         confirmation_msg = (
@@ -839,15 +845,15 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
             f"{accuracy_msg}\n"
             f"📊 <b>EXTRACTED VALUES:</b>\n\n"
             f"🔹 <b>Limit Orders:</b>\n"
-            f"• Entry #1: <code>{format_value_with_edit_indicator(params.get(LIMIT_ENTRY_1_PRICE), 'limit_1')}</code>\n"
-            f"• Entry #2: <code>{format_value_with_edit_indicator(params.get(LIMIT_ENTRY_2_PRICE), 'limit_2')}</code>\n"
-            f"• Entry #3: <code>{format_value_with_edit_indicator(params.get(LIMIT_ENTRY_3_PRICE), 'limit_3')}</code>\n\n"
+            f"• Entry #1: {format_value_with_edit_indicator(params.get(LIMIT_ENTRY_1_PRICE), 'limit_1', edited_fields)}\n"
+            f"• Entry #2: {format_value_with_edit_indicator(params.get(LIMIT_ENTRY_2_PRICE), 'limit_2', edited_fields)}\n"
+            f"• Entry #3: {format_value_with_edit_indicator(params.get(LIMIT_ENTRY_3_PRICE), 'limit_3', edited_fields)}\n\n"
             f"🎯 <b>Take Profits:</b>\n"
-            f"• TP1 (70%): <code>{format_value_with_edit_indicator(params.get(TP1_PRICE), 'tp1')}</code>\n"
-            f"• TP2 (10%): <code>{format_value_with_edit_indicator(params.get(TP2_PRICE), 'tp2')}</code>\n"
-            f"• TP3 (10%): <code>{format_value_with_edit_indicator(params.get(TP3_PRICE), 'tp3')}</code>\n"
-            f"• TP4 (10%): <code>{format_value_with_edit_indicator(params.get(TP4_PRICE), 'tp4')}</code>\n\n"
-            f"🛡️ <b>Stop Loss:</b> <code>{format_value_with_edit_indicator(params.get(SL_PRICE), 'sl')}</code>\n\n"
+            f"• TP1 (70%): {format_value_with_edit_indicator(params.get(TP1_PRICE), 'tp1', edited_fields)}\n"
+            f"• TP2 (10%): {format_value_with_edit_indicator(params.get(TP2_PRICE), 'tp2', edited_fields)}\n"
+            f"• TP3 (10%): {format_value_with_edit_indicator(params.get(TP3_PRICE), 'tp3', edited_fields)}\n"
+            f"• TP4 (10%): {format_value_with_edit_indicator(params.get(TP4_PRICE), 'tp4', edited_fields)}\n\n"
+            f"🛡️ <b>Stop Loss:</b> {format_value_with_edit_indicator(params.get(SL_PRICE), 'sl', edited_fields)}\n\n"
             f"💡 <i>Review values and edit if needed</i>\n"
         )
     else:
@@ -861,9 +867,9 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
             f"{quality_msg}"
             f"{accuracy_msg}\n"
             f"📊 <b>EXTRACTED VALUES:</b>\n\n"
-            f"💰 <b>Entry Price:</b> <code>{format_value_with_edit_indicator(params.get(PRIMARY_ENTRY_PRICE), 'entry')}</code>\n"
-            f"🎯 <b>Take Profit:</b> <code>{format_value_with_edit_indicator(params.get(TP1_PRICE), 'tp1')}</code> (100%)\n"
-            f"🛡️ <b>Stop Loss:</b> <code>{format_value_with_edit_indicator(params.get(SL_PRICE), 'sl')}</code>\n\n"
+            f"💰 <b>Entry Price:</b> {format_value_with_edit_indicator(params.get(PRIMARY_ENTRY_PRICE), 'entry', edited_fields)}\n"
+            f"🎯 <b>Take Profit:</b> {format_value_with_edit_indicator(params.get(TP1_PRICE), 'tp1', edited_fields)} (100%)\n"
+            f"🛡️ <b>Stop Loss:</b> {format_value_with_edit_indicator(params.get(SL_PRICE), 'sl', edited_fields)}\n\n"
             f"💡 <i>Review values and edit if needed</i>\n"
         )
     
@@ -872,16 +878,32 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
     
     # Add edit buttons based on strategy type
     if strategy_type == "conservative":
+        # Check if any limits have been edited
+        limits_edited = any(f"limit_{i}" in edited_fields for i in range(1, 4))
+        limits_btn_text = "📝 Edit Limit Orders" if not limits_edited else "✏️ Edit Limit Orders (Modified)"
+        
+        # Check if any TPs have been edited
+        tps_edited = any(f"tp{i}" in edited_fields for i in range(1, 5))
+        tps_btn_text = "🎯 Edit Take Profits" if not tps_edited else "✏️ Edit Take Profits (Modified)"
+        
+        # Check if SL has been edited
+        sl_btn_text = "🛡️ Edit Stop Loss" if "sl" not in edited_fields else "✏️ Edit Stop Loss (Modified)"
+        
         keyboard_buttons.extend([
-            [InlineKeyboardButton("📝 Edit Limit Orders", callback_data="ggshot_edit_limits")],
-            [InlineKeyboardButton("🎯 Edit Take Profits", callback_data="ggshot_edit_tps")],
-            [InlineKeyboardButton("🛡️ Edit Stop Loss", callback_data="ggshot_edit_sl")]
+            [InlineKeyboardButton(limits_btn_text, callback_data="ggshot_edit_limits")],
+            [InlineKeyboardButton(tps_btn_text, callback_data="ggshot_edit_tps")],
+            [InlineKeyboardButton(sl_btn_text, callback_data="ggshot_edit_sl")]
         ])
     else:
+        # Check if values have been edited for fast approach
+        entry_btn_text = "💰 Edit Entry Price" if "entry" not in edited_fields else "✏️ Edit Entry Price (Modified)"
+        tp_btn_text = "🎯 Edit Take Profit" if "tp1" not in edited_fields else "✏️ Edit Take Profit (Modified)"
+        sl_btn_text = "🛡️ Edit Stop Loss" if "sl" not in edited_fields else "✏️ Edit Stop Loss (Modified)"
+        
         keyboard_buttons.extend([
-            [InlineKeyboardButton("💰 Edit Entry Price", callback_data="ggshot_edit_entry")],
-            [InlineKeyboardButton("🎯 Edit Take Profit", callback_data="ggshot_edit_tp_fast")],
-            [InlineKeyboardButton("🛡️ Edit Stop Loss", callback_data="ggshot_edit_sl")]
+            [InlineKeyboardButton(entry_btn_text, callback_data="ggshot_edit_entry")],
+            [InlineKeyboardButton(tp_btn_text, callback_data="ggshot_edit_tp_fast")],
+            [InlineKeyboardButton(sl_btn_text, callback_data="ggshot_edit_sl")]
         ])
     
     # Add main action buttons
@@ -2974,7 +2996,7 @@ async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # =============================================
 
 async def show_ggshot_edit_limits(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
-    """Show interface for editing limit orders"""
+    """Show interface for editing limit orders with edit status indicators"""
     symbol = context.chat_data.get(SYMBOL, "Unknown")
     side = context.chat_data.get(SIDE, "Buy")
     
@@ -2983,29 +3005,65 @@ async def show_ggshot_edit_limits(context: ContextTypes.DEFAULT_TYPE, chat_id: i
     limit2 = context.chat_data.get(LIMIT_ENTRY_2_PRICE, "Not Set") 
     limit3 = context.chat_data.get(LIMIT_ENTRY_3_PRICE, "Not Set")
     
+    # Get edited fields
+    edited_fields = context.chat_data.get("ggshot_edited_fields", set())
+    
+    # Build price display with edit indicators
+    limit1_display = f"<code>{format_decimal_or_na(limit1)}</code>"
+    if "limit_1" in edited_fields:
+        limit1_display += " ✅ <i>(edited)</i>"
+    
+    limit2_display = f"<code>{format_decimal_or_na(limit2)}</code>"
+    if "limit_2" in edited_fields:
+        limit2_display += " ✅ <i>(edited)</i>"
+    
+    limit3_display = f"<code>{format_decimal_or_na(limit3)}</code>"
+    if "limit_3" in edited_fields:
+        limit3_display += " ✅ <i>(edited)</i>"
+    
     edit_msg = (
         f"📝 <b>Edit Limit Orders</b>\n"
         f"{'═' * 25}\n\n"
         f"Symbol: <code>{symbol}</code> {'📈' if side == 'Buy' else '📉'} {side.upper()}\n\n"
         f"Current limit order prices:\n\n"
-        f"• Entry #1: <code>{format_decimal_or_na(limit1)}</code>\n"
-        f"• Entry #2: <code>{format_decimal_or_na(limit2)}</code>\n"
-        f"• Entry #3: <code>{format_decimal_or_na(limit3)}</code>\n\n"
-        f"Select which limit order to edit:"
+        f"• Entry #1: {limit1_display}\n"
+        f"• Entry #2: {limit2_display}\n"
+        f"• Entry #3: {limit3_display}\n\n"
     )
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📝 Edit Entry #1", callback_data="ggshot_set_limit_1")],
-        [InlineKeyboardButton(f"📝 Edit Entry #2", callback_data="ggshot_set_limit_2")],
-        [InlineKeyboardButton(f"📝 Edit Entry #3", callback_data="ggshot_set_limit_3")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="ggshot_back_to_edit")]
+    # Add instruction based on edit status
+    if edited_fields:
+        edit_msg += "💡 <i>Continue editing or click Done when finished</i>\n\n"
+    else:
+        edit_msg += "Select which limit order to edit:\n\n"
+    
+    # Build keyboard with edit status
+    buttons = []
+    
+    # Add edit buttons with indicators
+    btn1_text = "📝 Edit Entry #1" if "limit_1" not in edited_fields else "✏️ Edit Entry #1 (Modified)"
+    btn2_text = "📝 Edit Entry #2" if "limit_2" not in edited_fields else "✏️ Edit Entry #2 (Modified)"
+    btn3_text = "📝 Edit Entry #3" if "limit_3" not in edited_fields else "✏️ Edit Entry #3 (Modified)"
+    
+    buttons.extend([
+        [InlineKeyboardButton(btn1_text, callback_data="ggshot_set_limit_1")],
+        [InlineKeyboardButton(btn2_text, callback_data="ggshot_set_limit_2")],
+        [InlineKeyboardButton(btn3_text, callback_data="ggshot_set_limit_3")]
     ])
+    
+    # Add Done button if any edits were made
+    if any(f"limit_{i}" in edited_fields for i in range(1, 4)):
+        buttons.append([InlineKeyboardButton("✅ Done Editing", callback_data="ggshot_back_to_edit")])
+    else:
+        buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="ggshot_back_to_edit")])
+    
+    keyboard = InlineKeyboardMarkup(buttons)
     
     await edit_last_message(context, chat_id, edit_msg, keyboard)
     return GGSHOT_EDIT_VALUES
 
 async def show_ggshot_edit_tps(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
-    """Show interface for editing take profits"""
+    """Show interface for editing take profits with edit status indicators"""
     symbol = context.chat_data.get(SYMBOL, "Unknown")
     side = context.chat_data.get(SIDE, "Buy")
     
@@ -3015,25 +3073,66 @@ async def show_ggshot_edit_tps(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     tp3 = context.chat_data.get(TP3_PRICE, "Not Set")
     tp4 = context.chat_data.get(TP4_PRICE, "Not Set")
     
+    # Get edited fields
+    edited_fields = context.chat_data.get("ggshot_edited_fields", set())
+    
+    # Build price display with edit indicators
+    tp1_display = f"<code>{format_decimal_or_na(tp1)}</code>"
+    if "tp1" in edited_fields:
+        tp1_display += " ✅ <i>(edited)</i>"
+    
+    tp2_display = f"<code>{format_decimal_or_na(tp2)}</code>"
+    if "tp2" in edited_fields:
+        tp2_display += " ✅ <i>(edited)</i>"
+    
+    tp3_display = f"<code>{format_decimal_or_na(tp3)}</code>"
+    if "tp3" in edited_fields:
+        tp3_display += " ✅ <i>(edited)</i>"
+    
+    tp4_display = f"<code>{format_decimal_or_na(tp4)}</code>"
+    if "tp4" in edited_fields:
+        tp4_display += " ✅ <i>(edited)</i>"
+    
     edit_msg = (
         f"🎯 <b>Edit Take Profits</b>\n"
         f"{'═' * 25}\n\n"
         f"Symbol: <code>{symbol}</code> {'📈' if side == 'Buy' else '📉'} {side.upper()}\n\n"
         f"Current take profit prices:\n\n"
-        f"• TP1 (70%): <code>{format_decimal_or_na(tp1)}</code>\n"
-        f"• TP2 (10%): <code>{format_decimal_or_na(tp2)}</code>\n"
-        f"• TP3 (10%): <code>{format_decimal_or_na(tp3)}</code>\n"
-        f"• TP4 (10%): <code>{format_decimal_or_na(tp4)}</code>\n\n"
-        f"Select which TP to edit:"
+        f"• TP1 (70%): {tp1_display}\n"
+        f"• TP2 (10%): {tp2_display}\n"
+        f"• TP3 (10%): {tp3_display}\n"
+        f"• TP4 (10%): {tp4_display}\n\n"
     )
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"🎯 Edit TP1", callback_data="ggshot_set_tp_1")],
-        [InlineKeyboardButton(f"🎯 Edit TP2", callback_data="ggshot_set_tp_2")],
-        [InlineKeyboardButton(f"🎯 Edit TP3", callback_data="ggshot_set_tp_3")],
-        [InlineKeyboardButton(f"🎯 Edit TP4", callback_data="ggshot_set_tp_4")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="ggshot_back_to_edit")]
+    # Add instruction based on edit status
+    if edited_fields:
+        edit_msg += "💡 <i>Continue editing or click Done when finished</i>\n\n"
+    else:
+        edit_msg += "Select which TP to edit:\n\n"
+    
+    # Build keyboard with edit status
+    buttons = []
+    
+    # Add edit buttons with indicators
+    btn1_text = "🎯 Edit TP1" if "tp1" not in edited_fields else "✏️ Edit TP1 (Modified)"
+    btn2_text = "🎯 Edit TP2" if "tp2" not in edited_fields else "✏️ Edit TP2 (Modified)"
+    btn3_text = "🎯 Edit TP3" if "tp3" not in edited_fields else "✏️ Edit TP3 (Modified)"
+    btn4_text = "🎯 Edit TP4" if "tp4" not in edited_fields else "✏️ Edit TP4 (Modified)"
+    
+    buttons.extend([
+        [InlineKeyboardButton(btn1_text, callback_data="ggshot_set_tp_1")],
+        [InlineKeyboardButton(btn2_text, callback_data="ggshot_set_tp_2")],
+        [InlineKeyboardButton(btn3_text, callback_data="ggshot_set_tp_3")],
+        [InlineKeyboardButton(btn4_text, callback_data="ggshot_set_tp_4")]
     ])
+    
+    # Add Done button if any edits were made
+    if any(f"tp{i}" in edited_fields for i in range(1, 5)):
+        buttons.append([InlineKeyboardButton("✅ Done Editing", callback_data="ggshot_back_to_edit")])
+    else:
+        buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="ggshot_back_to_edit")])
+    
+    keyboard = InlineKeyboardMarkup(buttons)
     
     await edit_last_message(context, chat_id, edit_msg, keyboard)
     return GGSHOT_EDIT_VALUES
@@ -3281,10 +3380,18 @@ async def ggshot_edit_value_handler(update: Update, context: ContextTypes.DEFAUL
         # Clear editing state
         context.chat_data.pop("ggshot_editing", None)
         
-        # Return to main edit screen
-        strategy_type = "conservative" if context.chat_data.get(LIMIT_ENTRY_1_PRICE) else "fast"
-        return await show_extracted_parameters_confirmation(context, chat_id, 
-            {"success": True, "parameters": context.chat_data, "strategy_type": strategy_type})
+        # Determine where to return based on what was edited
+        if editing_field.startswith("limit_"):
+            # Return to limit orders edit screen
+            return await show_ggshot_edit_limits(context, chat_id)
+        elif editing_field.startswith("tp_") and editing_field != "tp_fast":
+            # Return to take profits edit screen
+            return await show_ggshot_edit_tps(context, chat_id)
+        else:
+            # For SL, entry price, or fast TP, return to main confirmation
+            strategy_type = "conservative" if context.chat_data.get(LIMIT_ENTRY_1_PRICE) else "fast"
+            return await show_extracted_parameters_confirmation(context, chat_id, 
+                {"success": True, "parameters": context.chat_data, "strategy_type": strategy_type})
         
     except (ValueError, InvalidOperation):
         await send_error_and_retry(
