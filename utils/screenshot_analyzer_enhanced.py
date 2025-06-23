@@ -21,18 +21,18 @@ class EnhancedGGShotAnalyzer(ScreenshotAnalyzer):
         """
         Analyze screenshot with multiple accuracy checks
         """
-        logger.info(f"🔍 Starting ENHANCED analysis with multiple accuracy checks for {symbol} {side}")
+        logger.info(f"🔍 Starting ENHANCED analysis with parallel models for {symbol} {side}")
         
-        # Get base analysis from parent class
+        # Get base analysis from parent class (now using parallel models)
         initial_result = await self.analyze_trading_screenshot(file_path, symbol, side)
         
-        # Log extraction statistics if available
-        if "extraction_stats" in initial_result:
-            stats = initial_result["extraction_stats"]
-            logger.info(f"📊 Extraction stats: {stats['passes_attempted']} passes, "
-                       f"first_pass_confidence={stats['first_pass_confidence']:.2f}, "
-                       f"final_confidence={stats['final_confidence']:.2f}, "
-                       f"method={stats['method_used']}")
+        # Log parallel analysis results if available
+        if "parallel_analysis" in initial_result:
+            pa = initial_result["parallel_analysis"]
+            logger.info(f"📊 Parallel analysis: {pa['models_succeeded']}/{pa['models_tried']} models succeeded")
+            logger.info(f"🏆 Best model: {pa['best_model']}")
+            for model, confidence in pa['all_results']:
+                logger.info(f"  - {model}: confidence={confidence:.2f}")
         
         if not initial_result.get("success"):
             return initial_result

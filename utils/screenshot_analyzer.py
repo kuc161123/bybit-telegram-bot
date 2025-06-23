@@ -30,6 +30,68 @@ class ScreenshotAnalyzer:
         self.enhancement_level = "standard"  # Can be "quick", "standard", or "advanced"
         self.debug_mode = True  # Save enhanced images for debugging
         
+    async def _parallel_model_analysis(self, base64_image: str, symbol: str, side: str, prompt_strategy: str = "simple") -> Dict[str, Any]:
+        """Run multiple models in parallel and take the best result"""
+        logger.info("🚀 Starting parallel model analysis for maximum speed...")
+        
+        # Define model configurations (only vision-capable models)
+        models = [
+            ("gpt-4o-mini", "simple"),     # Fastest, good accuracy
+            ("gpt-4o-mini", "numbers_only"), # Same model, different strategy
+            ("gpt-4o", "detailed")         # Slowest but most accurate
+        ]
+        
+        # Create tasks for parallel execution
+        tasks = []
+        for model, strategy in models:
+            task = asyncio.create_task(
+                self._analyze_with_openai(base64_image, symbol, side, strategy, model)
+            )
+            tasks.append((model, strategy, task))
+        
+        # Wait for all tasks to complete
+        results = []
+        for model, strategy, task in tasks:
+            try:
+                result = await asyncio.wait_for(task, timeout=15.0)  # 15 second timeout per model
+                if result.get("success"):
+                    # Calculate confidence for this result
+                    confidence = await self._calculate_extraction_confidence(result, symbol, side)
+                    result["composite_confidence"] = confidence
+                    result["prompt_strategy"] = strategy
+                    results.append((model, strategy, result, confidence))
+                    logger.info(f"✅ {model} ({strategy}) completed with confidence: {confidence:.2f}")
+                else:
+                    logger.warning(f"❌ {model} ({strategy}) failed: {result.get('error', 'Unknown error')}")
+            except asyncio.TimeoutError:
+                logger.warning(f"⏱️ {model} ({strategy}) timed out")
+            except Exception as e:
+                logger.error(f"💥 {model} ({strategy}) error: {e}")
+        
+        if not results:
+            return self._error_result("All models failed to extract parameters")
+        
+        # Sort by confidence and take the best
+        results.sort(key=lambda x: x[3], reverse=True)
+        best_model, best_strategy, best_result, best_confidence = results[0]
+        
+        # Log all results for comparison
+        logger.info("📊 Parallel model results:")
+        for model, strategy, result, confidence in results:
+            logger.info(f"  - {model} ({strategy}): confidence={confidence:.2f}, strategy_type={result.get('strategy_type', 'unknown')}")
+        
+        logger.info(f"🏆 Selected {best_model} ({best_strategy}) with confidence {best_confidence:.2f}")
+        
+        # Add parallel analysis metadata
+        best_result["parallel_analysis"] = {
+            "models_tried": len(models),
+            "models_succeeded": len(results),
+            "all_results": [(f"{m} ({s})", c) for m, s, _, c in results],
+            "best_model": f"{best_model} ({best_strategy})"
+        }
+        
+        return best_result
+
     async def analyze_trading_screenshot(self, image_url: str, symbol: str, side: str) -> Dict[str, Any]:
         """
         Analyze trading screenshot and extract parameters with multi-pass extraction
@@ -59,124 +121,35 @@ class ScreenshotAnalyzer:
             from utils.image_enhancer import image_enhancer
             _, quality_report = image_enhancer.enhance_for_ocr(processed_image, "quick")
             
-            # Multi-pass extraction strategy with smart early termination
-            extraction_attempts = [
-                ("standard", "standard extraction"),
-                ("advanced", "advanced enhancement"),
-                ("aggressive", "aggressive processing")
-            ]
+            # Apply standard enhancement for parallel processing
+            enhanced_image, _ = image_enhancer.enhance_for_ocr(processed_image.copy(), "standard")
             
-            best_result = None
-            best_confidence = 0.0
-            first_pass_result = None
-            first_pass_confidence = 0.0
+            # Save debug image if enabled
+            if self.debug_mode:
+                debug_filename = f"debug_enhanced_parallel_{symbol}_{side}.png"
+                try:
+                    enhanced_image.save(debug_filename)
+                    logger.info(f"Debug: Saved enhanced image to {debug_filename}")
+                except Exception as e:
+                    logger.error(f"Failed to save debug image: {e}")
             
-            for i, (enhancement_level, attempt_name) in enumerate(extraction_attempts):
-                logger.info(f"Attempting {attempt_name} (pass {i + 1}/3)")
-                
-                # Apply enhancement based on level
-                if enhancement_level == "aggressive":
-                    # Use special aggressive enhancement for very poor quality images
-                    enhanced_image = await self._aggressive_enhance_for_ocr(original_image.copy())
-                else:
-                    enhanced_image, _ = image_enhancer.enhance_for_ocr(original_image.copy(), enhancement_level)
-                
-                # Save debug image if enabled
-                if self.debug_mode:
-                    debug_filename = f"debug_enhanced_{enhancement_level}_{symbol}_{side}.png"
-                    try:
-                        enhanced_image.save(debug_filename)
-                        logger.info(f"Debug: Saved enhanced image to {debug_filename}")
-                    except Exception as e:
-                        logger.error(f"Failed to save debug image: {e}")
-                
-                # Convert to base64
-                base64_image = self._image_to_base64(enhanced_image)
-                if not base64_image:
-                    continue
-                
-                # Determine prompt strategy based on attempt number
-                if i == 0:
-                    prompt_strategy = "detailed"
-                elif i == 1:
-                    prompt_strategy = "simple"
-                else:
-                    prompt_strategy = "numbers_only"
-                
-                # Log token usage for this strategy
-                max_tokens = self._get_max_tokens_for_strategy(prompt_strategy)
-                logger.info(f"Using {prompt_strategy} strategy with max_tokens={max_tokens}")
-                
-                # Analyze with OpenAI
-                analysis_result = await self._analyze_with_openai(base64_image, symbol, side, prompt_strategy)
-                
-                # Check if this is a valid result
-                if analysis_result.get("success"):
-                    # Calculate composite confidence score
-                    composite_confidence = await self._calculate_extraction_confidence(
-                        analysis_result, symbol, side
-                    )
-                    analysis_result["composite_confidence"] = composite_confidence
-                    
-                    # Store first pass result for potential reversion
-                    if i == 0:
-                        first_pass_result = analysis_result.copy()
-                        first_pass_confidence = composite_confidence
-                        logger.info(f"First pass confidence: {composite_confidence:.2f}")
-                        
-                        # Check if we should accept first pass immediately
-                        if composite_confidence >= 0.85:
-                            logger.info("✅ First pass confidence excellent (>=0.85), accepting results immediately")
-                            best_result = first_pass_result
-                            best_result["extraction_method"] = "first_pass_high_confidence"
-                            break
-                        elif composite_confidence >= 0.70:
-                            logger.info("⚠️ First pass confidence moderate (>=0.70), will try one more targeted pass")
-                            # Limit attempts to just one more
-                            extraction_attempts = extraction_attempts[:2]
-                    
-                    # Update best result if this is better
-                    if composite_confidence > best_confidence:
-                        best_result = analysis_result
-                        best_confidence = composite_confidence
-                        best_result["extraction_method"] = attempt_name
-                    
-                    # Early termination on high confidence
-                    if composite_confidence >= 0.85:
-                        logger.info(f"High confidence achieved ({composite_confidence:.2f}), stopping extraction")
-                        break
-                
-                # For moderate first pass confidence, skip to targeted enhancement
-                if i == 0 and first_pass_confidence >= 0.70 and first_pass_confidence < 0.85:
-                    # Determine what's missing and adjust next attempt
-                    missing_fields = self._identify_missing_fields(first_pass_result)
-                    if missing_fields:
-                        logger.info(f"Targeting enhancement for missing fields: {missing_fields}")
-                        # Skip to advanced enhancement which often helps with missing fields
-                        continue
+            # Convert to base64
+            base64_image = self._image_to_base64(enhanced_image)
+            if not base64_image:
+                return self._error_result("Failed to convert image to base64")
             
-            # Check if we should revert to first pass
-            if best_result and first_pass_result and i > 0:
-                if first_pass_confidence > best_confidence:
-                    logger.warning(f"⚠️ Reverting to first pass result (confidence {first_pass_confidence:.2f} > {best_confidence:.2f})")
-                    best_result = first_pass_result
-                    best_result["extraction_method"] = "first_pass_reverted"
-                    best_confidence = first_pass_confidence
+            # Use parallel model analysis for maximum speed
+            parallel_result = await self._parallel_model_analysis(base64_image, symbol, side)
             
-            # Use best result or try final fallback
-            if best_result:
-                best_result["quality_report"] = quality_report
-                logger.info(f"Best extraction: {best_result.get('extraction_method')} with confidence {best_confidence:.2f}")
+            if parallel_result.get("success"):
+                parallel_result["quality_report"] = quality_report
+                parallel_result["extraction_method"] = "parallel_model_analysis"
                 
-                # Add extraction statistics
-                best_result["extraction_stats"] = {
-                    "passes_attempted": i + 1,
-                    "first_pass_confidence": first_pass_confidence,
-                    "final_confidence": best_confidence,
-                    "method_used": best_result.get('extraction_method')
-                }
+                # Log the winning model
+                if "parallel_analysis" in parallel_result:
+                    logger.info(f"🏆 Parallel analysis winner: {parallel_result['parallel_analysis']['best_model']}")
                 
-                return best_result
+                return parallel_result
             else:
                 # Final fallback - try to get ANY numbers from the image
                 logger.warning("All extraction attempts failed, trying emergency number extraction")
@@ -310,7 +283,7 @@ class ScreenshotAnalyzer:
             # Default fallback
             return 1000
     
-    async def _analyze_with_openai(self, base64_image: str, symbol: str, side: str, prompt_strategy: str = "detailed") -> Dict[str, Any]:
+    async def _analyze_with_openai(self, base64_image: str, symbol: str, side: str, prompt_strategy: str = "detailed", model: str = "gpt-4o") -> Dict[str, Any]:
         """Analyze image using OpenAI Vision API with different prompt strategies"""
         try:
             # Create system prompt based on strategy
@@ -332,7 +305,7 @@ class ScreenshotAnalyzer:
             # Call OpenAI Vision API
             response = await asyncio.to_thread(
                 self.client.chat.completions.create,
-                model="gpt-4o",  # GPT-4 with vision capabilities
+                model=model,  # Use specified model
                 messages=[
                     {
                         "role": "system",
@@ -349,28 +322,34 @@ class ScreenshotAnalyzer:
                                 "type": "image_url",
                                 "image_url": {
                                     "url": f"data:image/jpeg;base64,{base64_image}",
-                                    "detail": "high"
+                                    "detail": "auto" if model != "gpt-4o" else "high"  # Lower detail for faster models
                                 }
                             }
                         ]
                     }
                 ],
-                max_tokens=self._get_max_tokens_for_strategy(prompt_strategy),
+                max_tokens=self._get_max_tokens_for_strategy(prompt_strategy) if model == "gpt-4o" else min(1500, self._get_max_tokens_for_strategy(prompt_strategy)),
                 temperature=0.1  # Low temperature for consistent extraction
             )
             
             # Parse response
             content = response.choices[0].message.content
             
-            # Special handling for numbers-only strategy
+            # Add model info to result
+            result = None
             if prompt_strategy == "numbers_only":
-                return await self._parse_numbers_only_response(content, symbol, side)
+                result = await self._parse_numbers_only_response(content, symbol, side)
             else:
-                return await self._parse_openai_response(content, symbol, side)
+                result = await self._parse_openai_response(content, symbol, side)
+            
+            if result and isinstance(result, dict):
+                result["model_used"] = model
+            
+            return result
             
         except Exception as e:
-            logger.error(f"Error calling OpenAI Vision API: {e}")
-            return self._error_result(f"OpenAI API error: {str(e)}")
+            logger.error(f"Error calling OpenAI Vision API with model {model}: {e}")
+            return self._error_result(f"OpenAI API error ({model}): {str(e)}")
     
     def _create_analysis_prompt(self, symbol: str, side: str) -> str:
         """Create detailed analysis prompt for OpenAI Vision API with enhanced reasoning"""
@@ -860,56 +839,40 @@ ENHANCED ANALYSIS REQUIREMENTS:
             return image  # Return original if enhancement fails
     
     def _create_simple_analysis_prompt(self, symbol: str, side: str) -> str:
-        """Create simplified prompt focusing on visible numbers"""
+        """Create simplified prompt focusing on visible numbers - optimized for speed"""
         direction = "LONG" if side == "Buy" else "SHORT"
         
-        return f"""Look at this enhanced mobile trading screenshot and find ALL price numbers for {symbol} {direction} position.
+        return f"""Extract trading prices from this {symbol} {direction} screenshot.
 
-VISUAL KEY TO FINDING PRICES:
-📝 TEXT LABELS (MOST IMPORTANT):
-- "add short" or "add long" = ENTRY PRICES
-- "GG-Shot:Take Profit" = TAKE PROFIT PRICES
-- "GG-Shot:Trailing Stop Loss" = STOP LOSS PRICE
+LOOK FOR:
+- RED BOXES = Entry/TP prices
+- GREY BOX = Stop Loss
+- Labels: "add short/long", "GG-Shot:Take Profit", "GG-Shot:Trailing Stop Loss"
 
-🔴 RED BOXES = Contains entry prices and take profit prices
-⬜ GREY/GRAY BOXES = Contains stop loss price
+{direction} POSITIONS:
+{"- Entries: RED boxes ABOVE current price" if side == "Sell" else "- Entries: RED boxes BELOW current price"}
+{"- TPs: RED boxes BELOW entries" if side == "Sell" else "- TPs: RED boxes ABOVE entries"}  
+{"- SL: GREY box at TOP" if side == "Sell" else "- SL: GREY box at BOTTOM"}
 
-ENHANCED IMAGE - Look for labeled prices AND colored boxes:
-1. Find ALL numbers inside RED boxes (these are entries and TPs)
-2. Find the number inside the GREY box (this is the stop loss)
-3. Count how many red boxes you see total
-4. For {direction} trades:
-   - {"RED boxes ABOVE current price = Entry prices" if side == "Sell" else "RED boxes BELOW current price = Entry prices"}
-   - {"RED boxes BELOW entries = Take Profit prices" if side == "Sell" else "RED boxes ABOVE entries = Take Profit prices"}
-   - {"GREY box at TOP = Stop Loss" if side == "Sell" else "GREY box at BOTTOM = Stop Loss"}
-
-The colored boxes are your guide:
-- Multiple RED boxes in entry zone = Conservative strategy (3+ entries)
-- Multiple RED boxes in TP zone = Multiple take profits (up to 4)
-
-Return ALL prices you can find WITH FULL DECIMAL PRECISION:
+Return JSON:
 {{
     "success": true,
     "confidence": 0.0-1.0,
-    "strategy_type": "conservative" (if 3+ entries or 4 TPs) or "fast",
+    "strategy_type": "conservative" or "fast",
     "parameters": {{
-        "primary_entry": "exact_number_with_all_decimals",
-        "limit_entry_1": "exact_number_with_all_decimals",
-        "limit_entry_2": "exact_number_with_all_decimals", 
-        "limit_entry_3": "exact_number_with_all_decimals",
-        "tp1_price": "exact_number_with_all_decimals",
-        "tp2_price": "exact_number_with_all_decimals",
-        "tp3_price": "exact_number_with_all_decimals",
-        "tp4_price": "exact_number_with_all_decimals",
-        "sl_price": "exact_number_with_all_decimals"
-    }},
-    "all_numbers_seen": ["list", "every", "number", "with", "full", "precision"]
+        "primary_entry": "price",
+        "limit_entry_1": "price",
+        "limit_entry_2": "price",
+        "limit_entry_3": "price",
+        "tp1_price": "price",
+        "tp2_price": "price",
+        "tp3_price": "price",
+        "tp4_price": "price",
+        "sl_price": "price"
+    }}
 }}
 
-IMPORTANT: 
-- List EVERY number visible with ALL decimal places
-- If you see 0.78721, return "0.78721" not "0.7872" 
-- PRESERVE FULL PRECISION - do not round or truncate"""
+Extract EXACT numbers with ALL decimals."""
 
     def _create_numbers_only_prompt(self) -> str:
         """Create minimal prompt to just extract numbers"""

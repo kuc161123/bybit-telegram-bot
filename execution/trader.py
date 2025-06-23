@@ -972,25 +972,29 @@ class TradeExecutor:
                 
                 # Mirror the new TP order
                 if tp_order_id:
+                    # Generate unique order link ID for mirror TP
+                    mirror_tp_link_id = self._generate_unique_order_link_id(f"{tp_order_link_id}_MIRROR")
                     mirror_tp = await mirror_tp_sl_order(
                         symbol=symbol,
                         side="Buy" if side == "Sell" else "Sell",
                         qty=tp_qty,
                         trigger_price=str(merged_params['tp_price']),
                         position_idx=None,  # Will auto-detect
-                        order_link_id=f"{tp_order_link_id}_MIRROR"
+                        order_link_id=mirror_tp_link_id
                     )
                     mirror_results["tp"] = mirror_tp
                 
                 # Mirror the new SL order
                 if sl_order_id:
+                    # Generate unique order link ID for mirror SL
+                    mirror_sl_link_id = self._generate_unique_order_link_id(f"{sl_order_link_id}_MIRROR")
                     mirror_sl = await mirror_tp_sl_order(
                         symbol=symbol,
                         side="Buy" if side == "Sell" else "Sell",
                         qty=sl_qty,
                         trigger_price=str(merged_params['sl_price']),
                         position_idx=None,  # Will auto-detect
-                        order_link_id=f"{sl_order_link_id}_MIRROR"
+                        order_link_id=mirror_sl_link_id
                     )
                     mirror_results["sl"] = mirror_sl
             
@@ -2830,24 +2834,28 @@ class TradeExecutor:
                         qty_step
                     )
                     if tp_qty > 0:
+                        # Generate unique order link ID for mirror TP
+                        mirror_tp_link_id = self._generate_unique_order_link_id(f"TP{i}_{tp['percentage']}_MIRROR")
                         mirror_tp = await mirror_tp_sl_order(
                             symbol=symbol,
                             side="Buy" if side == "Sell" else "Sell",
                             qty=tp_qty,
                             trigger_price=str(tp['price']),
                             position_idx=None,  # Will auto-detect
-                            order_link_id=f"TP{i}_{tp['percentage']}"
+                            order_link_id=mirror_tp_link_id
                         )
                         mirror_results["tps"].append(mirror_tp)
                 
                 # Mirror the new SL order
+                # Generate unique order link ID for mirror SL
+                mirror_sl_link_id = self._generate_unique_order_link_id(f"SL_{trade_group_id}_MIRROR")
                 mirror_sl = await mirror_tp_sl_order(
                     symbol=symbol,
                     side="Buy" if side == "Sell" else "Sell",
                     qty=sl_qty,
                     trigger_price=str(merged_params['sl_price']),
                     position_idx=None,  # Will auto-detect
-                    order_link_id=f"SL_{trade_group_id}"
+                    order_link_id=mirror_sl_link_id
                 )
                 mirror_results["sl"] = mirror_sl
             

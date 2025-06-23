@@ -588,16 +588,15 @@ async def screenshot_upload_handler(update: Update, context: ContextTypes.DEFAUL
             # Initialize enhanced analyzer
             analyzer = EnhancedGGShotAnalyzer()
             
-            # Show analyzing message
+            # Show analyzing message with parallel models info
             analyzing_msg = await context.bot.send_message(
                 chat_id=chat_id,
-                text="🔍 <b>Analyzing Screenshot...</b>\n\n"
-                     "Running multiple accuracy checks:\n"
-                     "• Cross-validation ⏳\n"
-                     "• Logical consistency ⏳\n"
-                     "• Price relationships ⏳\n"
-                     "• Risk/Reward validation ⏳\n"
-                     "• Market context ⏳",
+                text="🚀 <b>Parallel AI Analysis</b>\n\n"
+                     "🔄 Running multiple strategies simultaneously:\n"
+                     "• GPT-4o-mini (simple) ⚡\n"
+                     "• GPT-4o-mini (numbers) 🔢\n"
+                     "• GPT-4o (detailed) 🎯\n\n"
+                     "⏳ Analyzing your screenshot...",
                 parse_mode=ParseMode.HTML
             )
             
