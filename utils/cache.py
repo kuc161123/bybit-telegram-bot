@@ -358,6 +358,11 @@ def invalidate_balance_cache():
     enhanced_cache.delete("wallet_balance_usdt")
     logger.debug("Balance cache invalidated")
 
+def invalidate_mirror_balance_cache():
+    """Invalidate mirror balance cache"""
+    enhanced_cache.delete("mirror_wallet_balance_usdt")
+    logger.debug("Mirror balance cache invalidated")
+
 def invalidate_ticker_cache(symbol: str):
     """Invalidate ticker cache for specific symbol"""
     enhanced_cache.delete(f"ticker_{symbol}")
@@ -418,3 +423,56 @@ def start_cache_cleanup_task():
         logger.info("✅ Cache cleanup task started")
     except Exception as e:
         logger.error(f"Error starting cache cleanup task: {e}")
+
+async def get_mirror_wallet_balance_cached() -> tuple[Optional[Decimal], Optional[Decimal]]:
+    """Get USDT wallet balance from mirror account with caching - returns (total_balance, available_balance)"""
+    
+    async def fetch():
+        try:
+            # Import here to avoid circular imports
+            from execution.mirror_trader import get_mirror_wallet_balance, is_mirror_trading_enabled
+            
+            if not is_mirror_trading_enabled():
+                return (Decimal("0"), Decimal("0"))
+            
+            # Get mirror balance
+            balance_tuple = await get_mirror_wallet_balance()
+            return balance_tuple
+            
+        except Exception as e:
+            logger.error(f"Error fetching mirror wallet balance: {e}")
+            return (Decimal("0"), Decimal("0"))
+    
+    result = await enhanced_cache.get_or_fetch_async("mirror_wallet_balance_usdt", fetch, ttl=30)
+    # Ensure we always return a tuple
+    if isinstance(result, tuple) and len(result) == 2:
+        return result
+    else:
+        return (Decimal("0"), Decimal("0"))
+
+# Decorator for async caching
+def async_cache(ttl_seconds: int = 300):
+    """Decorator for caching async function results"""
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            # Create cache key from function name and arguments
+            cache_key = f"{func.__name__}:{str(args)}:{str(kwargs)}"
+            
+            # Try to get from cache
+            cached_result = enhanced_cache.get(cache_key)
+            if cached_result is not None:
+                return cached_result
+            
+            # Call the actual function
+            result = await func(*args, **kwargs)
+            
+            # Store in cache
+            enhanced_cache.set(cache_key, result, ttl_seconds)
+            
+            return result
+        
+        wrapper.__name__ = func.__name__
+        wrapper.__doc__ = func.__doc__
+        return wrapper
+    
+    return decorator

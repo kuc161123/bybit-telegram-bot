@@ -205,6 +205,22 @@ def setup_callback_handlers(app):
         app.add_handler(CallbackQueryHandler(handle_stats_callbacks, pattern="^export_"))
         app.add_handler(CallbackQueryHandler(handle_stats_callbacks, pattern="^confirm_reset_stats$"))
         
+        # AI Insights callback
+        try:
+            from .ai_insights_handler import show_ai_insights
+            app.add_handler(CallbackQueryHandler(show_ai_insights, pattern="^ai_insights$"))
+            logger.info("✅ AI Insights handler loaded!")
+        except Exception as e:
+            logger.warning(f"AI Insights handler not loaded: {e}")
+        
+        # Predictive Signals callback
+        try:
+            from .predictive_signals_handler import show_predictive_signals
+            app.add_handler(CallbackQueryHandler(show_predictive_signals, pattern="^predictive_signals$"))
+            logger.info("✅ Predictive Signals handler loaded!")
+        except Exception as e:
+            logger.warning(f"Predictive Signals handler not loaded: {e}")
+        
         # Analytics callbacks - NEW
         try:
             from .analytics_callbacks_new import analytics_handlers
@@ -433,8 +449,10 @@ def setup_handlers(app: Application):
         app.add_handler(CommandHandler("list_monitors", list_monitors_command))
         app.add_handler(CommandHandler("force_cleanup", force_cleanup_command))
         logger.info("✅ Monitor management commands loaded!")
-    except Exception as e:
-        logger.warning(f"Monitor management commands not loaded: {e}")
+    except ImportError:
+        # If monitor_commands module doesn't exist, use the command from commands.py
+        app.add_handler(CommandHandler("cleanup_monitors", cleanup_monitors_command))
+        logger.info("✅ Cleanup monitors command loaded from commands.py")
     
     # NEW: Position mode command handlers
     setup_position_mode_commands(app)

@@ -219,16 +219,29 @@ async def show_performance_metrics(query, context: ContextTypes.DEFAULT_TYPE) ->
         win_rate = (wins / total_trades * 100)
         avg_pnl = total_pnl / total_trades
         
-        # Calculate profit factor
-        avg_win = (total_pnl * 1.5 / wins) if wins > 0 else 0
-        avg_loss = (abs(total_pnl) * 0.5 / losses) if losses > 0 else 0
-        profit_factor = (avg_win / avg_loss) if avg_loss > 0 else 0
+        # Calculate profit factor correctly
+        total_wins_pnl = abs(float(bot_data.get('stats_total_wins_pnl', 0)))
+        total_losses_pnl = abs(float(bot_data.get('stats_total_losses_pnl', 0)))
+        
+        if total_losses_pnl > 0:
+            profit_factor = total_wins_pnl / total_losses_pnl
+        else:
+            # No losses, profit factor is undefined/infinity
+            profit_factor = float('inf') if total_wins_pnl > 0 else 0
         
         text += f"📊 <b>Total Trades:</b> {total_trades}\n"
         text += f"✅ <b>Win Rate:</b> {win_rate:.1f}% ({wins}W/{losses}L)\n"
         text += f"💰 <b>Total P&L:</b> {'+' if total_pnl >= 0 else ''}{format_mobile_currency(total_pnl)}\n"
         text += f"📈 <b>Avg Trade:</b> {'+' if avg_pnl >= 0 else ''}{format_mobile_currency(avg_pnl)}\n"
-        text += f"💹 <b>Profit Factor:</b> {profit_factor:.2f}x\n\n"
+        # Display profit factor appropriately
+        if profit_factor == float('inf'):
+            profit_factor_display = "∞"
+        elif profit_factor > 999:
+            profit_factor_display = "999.99+"
+        else:
+            profit_factor_display = f"{profit_factor:.2f}"
+        
+        text += f"💹 <b>Profit Factor:</b> {profit_factor_display}\n\n"
         
         # Visual win rate
         win_blocks = int(win_rate / 10)

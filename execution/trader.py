@@ -659,6 +659,16 @@ class TradeExecutor:
                 from execution.monitor import start_position_monitoring
                 await start_position_monitoring(application, chat_id, chat_data)
                 self.logger.info(f"✅ Position monitoring started for {symbol}")
+                
+                # Start mirror monitoring if mirror trading succeeded
+                if mirror_results.get("market") and mirror_results["market"].get("orderId"):
+                    try:
+                        from execution.monitor import start_mirror_position_monitoring
+                        await start_mirror_position_monitoring(application, chat_id, chat_data)
+                        self.logger.info(f"✅ Mirror position monitoring started for {symbol}")
+                    except Exception as e:
+                        self.logger.error(f"Error starting mirror position monitoring: {e}")
+                        # Don't add to errors - mirror monitoring is optional
             except Exception as e:
                 self.logger.error(f"Error starting position monitoring: {e}")
                 errors.append("Position monitoring failed to start")
@@ -985,6 +995,15 @@ class TradeExecutor:
                     chat_id,
                     chat_data
                 )
+                
+                # Start mirror monitoring if mirror trading succeeded
+                if mirror_results.get("market") and mirror_results["market"].get("orderId"):
+                    try:
+                        from execution.monitor import start_mirror_position_monitoring
+                        await start_mirror_position_monitoring(application, chat_id, chat_data)
+                        self.logger.info(f"✅ Mirror position monitoring started for {symbol}")
+                    except Exception as e:
+                        self.logger.error(f"Error starting mirror position monitoring: {e}")
             except Exception as e:
                 self.logger.error(f"Monitor start error: {e}")
             
@@ -1567,6 +1586,15 @@ class TradeExecutor:
                 from execution.monitor import start_position_monitoring
                 await start_position_monitoring(application, chat_id, chat_data)
                 self.logger.info(f"✅ Enhanced monitoring started for conservative trade {trade_group_id}")
+                
+                # Start mirror monitoring if mirror trading succeeded
+                if mirror_results.get("limits") and any(limit.get("orderId") for limit in mirror_results["limits"]):
+                    try:
+                        from execution.monitor import start_mirror_position_monitoring
+                        await start_mirror_position_monitoring(application, chat_id, chat_data)
+                        self.logger.info(f"✅ Mirror position monitoring started for conservative trade {trade_group_id}")
+                    except Exception as e:
+                        self.logger.error(f"Error starting mirror position monitoring: {e}")
             except Exception as e:
                 self.logger.error(f"Error starting position monitoring: {e}")
                 errors.append("Position monitoring failed to start")
@@ -2530,9 +2558,37 @@ class TradeExecutor:
             if not await self.position_merger.validate_merge(symbol, side, merged_params):
                 raise ValueError("Merge validation failed - invalid price levels")
             
-            # Cancel existing orders
-            self.logger.info(f"🗑️ Cancelling existing orders for {symbol}...")
-            await self.position_merger.cancel_existing_orders(existing_data['orders'])
+            # Extract existing limit orders
+            existing_limit_orders = []
+            for order in existing_data.get('orders', []):
+                if order.get('orderType') == 'Limit' and not order.get('reduceOnly', False):
+                    existing_limit_orders.append(order)
+            
+            # Cancel existing TP/SL orders (but NOT limit orders yet)
+            self.logger.info(f"🗑️ Cancelling existing TP/SL orders for {symbol}...")
+            tp_sl_orders = [o for o in existing_data['orders'] if o.get('reduceOnly', False)]
+            await self.position_merger.cancel_existing_orders(tp_sl_orders)
+            
+            # Check if parameters changed to decide on limit order handling
+            parameters_changed = merged_params.get('parameters_changed', False)
+            
+            if parameters_changed:
+                # Parameters changed, so replace limit orders with new ones
+                self.logger.info(f"🔄 Parameters changed (SL={merged_params.get('sl_changed')}, TPs={merged_params.get('tps_changed')}) - replacing limit orders...")
+                if existing_limit_orders:
+                    await self.position_merger.cancel_existing_orders(existing_limit_orders)
+                    self.logger.info(f"✅ Cancelled {len(existing_limit_orders)} existing limit orders")
+            else:
+                # Parameters unchanged, keep existing limit orders
+                self.logger.info(f"📌 No parameter changes - preserving {len(existing_limit_orders)} existing limit orders")
+                # Store existing limit order info for tracking
+                chat_data["preserved_limit_orders"] = [
+                    {
+                        "orderId": o.get("orderId"),
+                        "price": o.get("price"),
+                        "qty": o.get("qty")
+                    } for o in existing_limit_orders
+                ]
             
             # Place the new position addition (market order)
             self.logger.info(f"📦 Adding {new_params['position_size']} to existing position")
@@ -2553,14 +2609,50 @@ class TradeExecutor:
             order_id = order_result.get("orderId")
             fill_price = Decimal(str(order_result.get("avgPrice", limit_prices[0])))
             
-            # Store the addition for tracking
-            chat_data[LIMIT_ORDER_IDS] = [order_id]
-            chat_data[CONSERVATIVE_LIMITS_FILLED] = [order_id]
+            # Place new limit orders if parameters changed
+            new_limit_order_ids = []
+            if parameters_changed and limit_prices and len(limit_prices) > 0:
+                self.logger.info(f"📍 Placing {len(limit_prices)} new limit orders due to parameter changes...")
+                
+                # Calculate quantity for each limit order
+                remaining_margin = margin_amount - (fill_price * add_qty / leverage)
+                limit_qty_each = remaining_margin * leverage / sum(limit_prices[1:]) if len(limit_prices) > 1 else 0
+                
+                for i, limit_price in enumerate(limit_prices[1:], 1):  # Skip first price (market order)
+                    limit_qty = value_adjusted_to_step(limit_qty_each, qty_step)
+                    if limit_qty > 0:
+                        limit_order_params = {
+                            "symbol": symbol,
+                            "side": side,
+                            "order_type": "Limit",
+                            "qty": limit_qty,
+                            "price": str(limit_price)
+                        }
+                        
+                        limit_result = await place_order_with_retry(**limit_order_params)
+                        if limit_result and limit_result.get("orderId"):
+                            new_limit_order_ids.append(limit_result.get("orderId"))
+                            self.logger.info(f"✅ Placed Limit {i} at {limit_price} for {limit_qty} qty")
+                
+                # Store new limit order IDs
+                chat_data[LIMIT_ORDER_IDS] = new_limit_order_ids
+                self.logger.info(f"✅ Placed {len(new_limit_order_ids)} new limit orders")
+            else:
+                # Use existing limit order IDs
+                chat_data[LIMIT_ORDER_IDS] = [o["orderId"] for o in chat_data.get("preserved_limit_orders", [])]
+                self.logger.info(f"📌 Using {len(chat_data[LIMIT_ORDER_IDS])} preserved limit orders (no parameter changes)")
+            
+            # Store the merge tracking
+            chat_data[CONSERVATIVE_LIMITS_FILLED] = [order_id]  # Market order that was filled
             chat_data["merged_position"] = True
             chat_data["merge_details"] = {
                 "existing_size": str(merged_params['existing_size']),
                 "added_size": str(add_qty),
-                "total_size": str(merged_params['merged_size'])
+                "total_size": str(merged_params['merged_size']),
+                "parameters_changed": parameters_changed,
+                "sl_changed": merged_params.get('sl_changed', False),
+                "tps_changed": merged_params.get('tps_changed', False),
+                "limit_orders_replaced": parameters_changed
             }
             
             # Place new TP orders with merged parameters
@@ -2688,6 +2780,24 @@ class TradeExecutor:
                 else:
                     merge_reasoning += f"• SL set to {format_price(merged_params['sl_price'])} (no existing SL)\n"
             
+            # Limit order reasoning based on parameter changes
+            if parameters_changed:
+                merge_reasoning += f"• Limit Orders: REPLACED due to parameter changes\n"
+                if merged_params.get('sl_changed'):
+                    merge_reasoning += f"  - SL changed, new entry strategy needed\n"
+                if merged_params.get('tps_changed'):
+                    merge_reasoning += f"  - TPs changed, new entry strategy needed\n"
+                if new_limit_order_ids:
+                    for i, price in enumerate(limit_prices[1:], 1):
+                        merge_reasoning += f"  - New Limit {i}: {format_price(price)}\n"
+            else:
+                preserved_count = len(chat_data.get("preserved_limit_orders", []))
+                if preserved_count > 0:
+                    merge_reasoning += f"• Limit Orders: PRESERVED (no parameter changes)\n"
+                    merge_reasoning += f"  - Original entry strategy remains optimal\n"
+                    for i, order in enumerate(chat_data.get("preserved_limit_orders", []), 1):
+                        merge_reasoning += f"  - Kept Limit {i}: {format_price(Decimal(str(order['price'])))}\n"
+            
             # TP reasoning for conservative approach (multiple TPs)
             existing_tps = existing_data.get('tp_orders', [])
             new_tps = new_params.get('take_profits', [])
@@ -2745,6 +2855,21 @@ class TradeExecutor:
             logical_breakdown += f"  - Market order added {format_decimal_or_na(add_qty)} units\n"
             logical_breakdown += f"  - Combined with existing position\n"
             logical_breakdown += f"  - Conservative scaling strategy\n"
+            
+            # Limit order logic based on parameter changes
+            if parameters_changed:
+                logical_breakdown += f"• <b>Limit Orders (REPLACED):</b>\n"
+                logical_breakdown += f"  - Exit parameters changed: SL={merged_params.get('sl_changed')}, TPs={merged_params.get('tps_changed')}\n"
+                logical_breakdown += f"  - Entry strategy updated to match new exit strategy\n"
+                if new_limit_order_ids:
+                    logical_breakdown += f"  - Placed {len(new_limit_order_ids)} new limit orders\n"
+            else:
+                preserved_count = len(chat_data.get("preserved_limit_orders", []))
+                if preserved_count > 0:
+                    logical_breakdown += f"• <b>Limit Orders (PRESERVED):</b>\n"
+                    logical_breakdown += f"  - Exit parameters unchanged\n"
+                    logical_breakdown += f"  - Kept {preserved_count} existing limit orders active\n"
+                    logical_breakdown += f"  - Original entry strategy remains optimal\n"
             
             # TP merge logic
             logical_breakdown += f"• <b>Take Profit Selection:</b>\n"

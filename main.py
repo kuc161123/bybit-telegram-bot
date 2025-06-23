@@ -13,6 +13,7 @@ import asyncio
 import signal
 import atexit
 from decimal import Decimal
+from typing import List, Dict, Optional, Tuple
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -147,6 +148,60 @@ async def get_orders_requiring_monitoring():
     except Exception as e:
         logger.error(f"❌ Error getting orders for monitoring: {e}")
         return []
+
+
+def detect_approach_from_orders(orders: List[Dict]) -> Optional[str]:
+    """
+    Detect trading approach from order patterns
+    Conservative: TP1_, TP2_, TP3_, TP4_, SL_, _LIMIT
+    Fast: _FAST_TP, _FAST_SL, TP_, SL_
+    GGShot: Similar to conservative but may have specific patterns
+    """
+    if not orders:
+        return None
+    
+    conservative_patterns = ['TP1_', 'TP2_', 'TP3_', 'TP4_', '_LIMIT']
+    fast_patterns = ['_FAST_TP', '_FAST_SL', '_FAST_MARKET']
+    ggshot_patterns = ['_GGSHOT_', 'GGShot']
+    
+    conservative_count = 0
+    fast_count = 0
+    ggshot_count = 0
+    tp_count = 0
+    
+    for order in orders:
+        order_link_id = order.get('orderLinkId', '')
+        
+        # Check for GGShot patterns first
+        if any(pattern in order_link_id for pattern in ggshot_patterns):
+            ggshot_count += 1
+            
+        # Check for conservative patterns
+        elif any(pattern in order_link_id for pattern in conservative_patterns):
+            conservative_count += 1
+            
+        # Check for fast patterns
+        elif any(pattern in order_link_id for pattern in fast_patterns):
+            fast_count += 1
+            
+        # Count TPs for conservative detection
+        if order_link_id.startswith('TP') and '_' in order_link_id:
+            tp_count += 1
+    
+    # Determine approach based on counts
+    if ggshot_count > 0:
+        return "ggshot"
+    elif conservative_count > 0 or tp_count >= 2:  # Multiple TPs indicate conservative
+        return "conservative"
+    elif fast_count > 0:
+        return "fast"
+    
+    # Default based on order count (single TP/SL = fast, multiple = conservative)
+    tp_orders = [o for o in orders if o.get('stopOrderType') == 'TakeProfit']
+    if len(tp_orders) > 1:
+        return "conservative"
+    
+    return None
 
 
 async def find_chat_data_for_symbol(application: Application, symbol: str, side: str = None, approach: str = None):
@@ -411,6 +466,7 @@ async def restore_monitoring_for_orders(application: Application, orders: list):
 async def check_and_restart_position_monitors(application: Application):
     """
     Comprehensive monitor restoration system - all positions treated as bot positions
+    ENHANCED: Properly handles multiple positions with same symbol but different approaches
     """
     try:
         logger.info("🚀 Starting monitor restoration...")
@@ -425,6 +481,19 @@ async def check_and_restart_position_monitors(application: Application):
             return
         
         logger.info(f"📊 Found {len(positions)} positions and {len(orders)} orders requiring monitoring")
+        
+        # Get all open orders for approach detection
+        from clients.bybit_helpers import get_all_open_orders
+        all_orders = await get_all_open_orders()
+        
+        # Group orders by symbol for efficient lookup
+        orders_by_symbol = {}
+        for order in all_orders:
+            symbol = order.get('symbol', '')
+            if symbol:
+                if symbol not in orders_by_symbol:
+                    orders_by_symbol[symbol] = []
+                orders_by_symbol[symbol].append(order)
         
         # Step 2: Find the main chat ID to use for positions without chat data
         logger.info("🔍 Step 2: Finding main chat ID...")
@@ -447,74 +516,208 @@ async def check_and_restart_position_monitors(application: Application):
             # You might want to handle this case differently, e.g., get from config
             return
         
-        # Step 3: Process all positions as bot positions
+        # Step 3: Process all positions as bot positions with approach detection
         logger.info("🤖 Step 3: Processing all positions as bot positions...")
         restored_positions = 0
         created_new_entries = 0
+        
+        # First, check persistence for existing configured monitors
+        existing_monitors = {}
+        if 'monitor_tasks' in application.bot_data:
+            for key, monitor_info in application.bot_data['monitor_tasks'].items():
+                if isinstance(monitor_info, dict) and monitor_info.get('active'):
+                    symbol = monitor_info.get('symbol')
+                    approach = monitor_info.get('approach', 'fast')
+                    if symbol:
+                        if symbol not in existing_monitors:
+                            existing_monitors[symbol] = []
+                        existing_monitors[symbol].append(approach)
+                        logger.info(f"Found configured monitor: {symbol} ({approach})")
         
         for position in positions:
             symbol = position["symbol"]
             side = position["side"]
             
-            # Check if we have chat data for this position
-            matching_chats = await find_chat_data_for_symbol(application, symbol, side)
+            # Get orders for this position to detect approach
+            position_orders = orders_by_symbol.get(symbol, [])
+            detected_approach = detect_approach_from_orders(position_orders)
             
-            if matching_chats:
-                # Restore monitoring for existing chat data
-                for chat_id, chat_data in matching_chats:
-                    try:
-                        # All positions are bot trades now - no external positions
-                        chat_data.pop("read_only_monitoring", None)
-                        
-                        # Verify if monitor is already running
-                        is_running = await verify_monitor_status(chat_id, chat_data)
-                        
-                        if not is_running:
-                            # Update chat data with current position info
-                            chat_data[LAST_KNOWN_POSITION_SIZE] = position["size"]
-                            
-                            # Start monitoring
-                            from execution.monitor import start_position_monitoring
-                            await start_position_monitoring(application, int(chat_id), chat_data)
-                            
-                            logger.info(f"✅ Monitor restored for {symbol} in chat {chat_id}")
-                            restored_positions += 1
-                        else:
-                            logger.info(f"✅ Monitor already running for {symbol} in chat {chat_id}")
-                    except Exception as e:
-                        logger.error(f"❌ Error restoring monitor for {symbol}: {e}")
-            else:
-                # No chat data found - create new entry
-                logger.info(f"📝 Creating new chat data for position: {symbol} {side}")
+            # Get configured approaches for this symbol
+            configured_approaches = existing_monitors.get(symbol, [])
+            
+            # If we have configured monitors, restore ALL of them regardless of detection
+            if configured_approaches:
+                logger.info(f"📊 Symbol {symbol} has configured approaches: {configured_approaches}")
                 
-                # Create chat data for this position
-                new_chat_data = {
-                    SYMBOL: symbol,
-                    SIDE: side,
-                    LAST_KNOWN_POSITION_SIZE: position["size"],
-                    PRIMARY_ENTRY_PRICE: position.get("avgPrice", "0"),
-                    TRADING_APPROACH: "fast",  # Default to fast approach
-                    "position_created": True,
-                    "bot_position": True
-                }
-                
-                # Store in the main chat's data
-                if main_chat_id not in application.chat_data:
-                    application.chat_data[main_chat_id] = {}
-                
-                # Create a unique key for this position
-                position_key = f"position_{symbol}_{side}"
-                application.chat_data[main_chat_id][position_key] = new_chat_data
-                
-                # Start monitoring
-                try:
-                    from execution.monitor import start_position_monitoring
-                    await start_position_monitoring(application, int(main_chat_id), new_chat_data)
+                for approach in configured_approaches:
+                    # Check if we have chat data for this specific approach
+                    matching_chats = await find_chat_data_for_symbol(application, symbol, side, approach)
                     
-                    logger.info(f"✅ Created new monitor for {symbol} in chat {main_chat_id}")
-                    created_new_entries += 1
-                except Exception as e:
-                    logger.error(f"❌ Error creating monitor for {symbol}: {e}")
+                    if matching_chats:
+                        # Restore monitoring for existing chat data
+                        for chat_id, chat_data in matching_chats:
+                            try:
+                                chat_approach = chat_data.get(TRADING_APPROACH, "fast")
+                                
+                                # Ensure approach matches
+                                if chat_approach != approach:
+                                    continue
+                                
+                                # All positions are bot trades now - no external positions
+                                chat_data.pop("read_only_monitoring", None)
+                                
+                                # Verify if monitor is already running
+                                is_running = await verify_monitor_status(chat_id, chat_data)
+                                
+                                if not is_running:
+                                    # Update chat data with current position info
+                                    chat_data[LAST_KNOWN_POSITION_SIZE] = position["size"]
+                                    
+                                    # Start monitoring
+                                    from execution.monitor import start_position_monitoring
+                                    await start_position_monitoring(application, int(chat_id), chat_data)
+                                    
+                                    logger.info(f"✅ Monitor restored for {symbol} ({chat_approach}) in chat {chat_id}")
+                                    restored_positions += 1
+                                else:
+                                    logger.info(f"✅ Monitor already running for {symbol} ({chat_approach}) in chat {chat_id}")
+                                break  # Found a match for this approach
+                            except Exception as e:
+                                logger.error(f"❌ Error restoring monitor for {symbol}: {e}")
+                    else:
+                        # No existing chat data for this approach - create new entry
+                        logger.info(f"📝 Creating new chat data for configured approach: {symbol} {side} ({approach})")
+                        
+                        # Create chat data for this position
+                        new_chat_data = {
+                            SYMBOL: symbol,
+                            SIDE: side,
+                            LAST_KNOWN_POSITION_SIZE: position["size"],
+                            PRIMARY_ENTRY_PRICE: position.get("avgPrice", "0"),
+                            TRADING_APPROACH: approach,
+                            "position_created": True,
+                            "bot_position": True
+                        }
+                        
+                        # Add approach-specific order IDs if they match
+                        if approach == "conservative" and position_orders:
+                            tp_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('TP')]
+                            sl_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('SL')]
+                            
+                            if tp_orders:
+                                tp_order_ids = [o.get('orderId') for o in sorted(tp_orders, key=lambda x: x.get('orderLinkId', ''))]
+                                new_chat_data[CONSERVATIVE_TP_ORDER_IDS] = tp_order_ids
+                            if sl_orders:
+                                new_chat_data[CONSERVATIVE_SL_ORDER_ID] = sl_orders[0].get('orderId')
+                        
+                        # Store in the main chat's data
+                        if main_chat_id not in application.chat_data:
+                            application.chat_data[main_chat_id] = {}
+                        
+                        # Create a unique key for this position including approach
+                        position_key = f"position_{symbol}_{side}_{approach}"
+                        application.chat_data[main_chat_id][position_key] = new_chat_data
+                        
+                        # Start monitoring
+                        try:
+                            from execution.monitor import start_position_monitoring
+                            await start_position_monitoring(application, int(main_chat_id), new_chat_data)
+                            
+                            logger.info(f"✅ Created new monitor for {symbol} ({approach}) in chat {main_chat_id}")
+                            created_new_entries += 1
+                        except Exception as e:
+                            logger.error(f"❌ Error creating monitor for {symbol}: {e}")
+            
+            else:
+                # No configured monitors - use detected approach or create single monitor
+                logger.info(f"📊 No configured monitors for {symbol}, using detected approach")
+                
+                # Check if we have chat data for this position with detected approach
+                matching_chats = await find_chat_data_for_symbol(application, symbol, side, detected_approach)
+                
+                # Track if we found a monitor
+                monitor_found = False
+                
+                if matching_chats:
+                    # Restore monitoring for existing chat data
+                    for chat_id, chat_data in matching_chats:
+                        try:
+                            chat_approach = chat_data.get(TRADING_APPROACH, "fast")
+                            
+                            # Skip if approach doesn't match detected approach (if we detected one)
+                            if detected_approach and chat_approach != detected_approach:
+                                logger.info(f"⚠️ Skipping chat {chat_id} - approach mismatch: {chat_approach} != {detected_approach}")
+                                continue
+                            
+                            # All positions are bot trades now - no external positions
+                            chat_data.pop("read_only_monitoring", None)
+                            
+                            # Verify if monitor is already running
+                            is_running = await verify_monitor_status(chat_id, chat_data)
+                            
+                            if not is_running:
+                                # Update chat data with current position info
+                                chat_data[LAST_KNOWN_POSITION_SIZE] = position["size"]
+                                
+                                # Start monitoring
+                                from execution.monitor import start_position_monitoring
+                                await start_position_monitoring(application, int(chat_id), chat_data)
+                                
+                                logger.info(f"✅ Monitor restored for {symbol} ({chat_approach}) in chat {chat_id}")
+                                restored_positions += 1
+                                monitor_found = True
+                                break  # Found a match, no need to check other chats
+                            else:
+                                logger.info(f"✅ Monitor already running for {symbol} ({chat_approach}) in chat {chat_id}")
+                                monitor_found = True
+                                break  # Found a match, no need to check other chats
+                        except Exception as e:
+                            logger.error(f"❌ Error restoring monitor for {symbol}: {e}")
+                
+                # If no monitor found, create new entry
+                if not monitor_found:
+                    approach = detected_approach or "fast"  # Use detected approach or default to fast
+                    logger.info(f"📝 Creating new chat data for position: {symbol} {side} ({approach})")
+                    
+                    # Create chat data for this position
+                    new_chat_data = {
+                        SYMBOL: symbol,
+                        SIDE: side,
+                        LAST_KNOWN_POSITION_SIZE: position["size"],
+                        PRIMARY_ENTRY_PRICE: position.get("avgPrice", "0"),
+                        TRADING_APPROACH: approach,
+                        "position_created": True,
+                        "bot_position": True
+                    }
+                    
+                    # Add approach-specific order IDs if detected and available
+                    if detected_approach == "conservative" and position_orders:
+                        tp_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('TP')]
+                        sl_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('SL')]
+                        
+                        if tp_orders:
+                            tp_order_ids = [o.get('orderId') for o in sorted(tp_orders, key=lambda x: x.get('orderLinkId', ''))]
+                            new_chat_data[CONSERVATIVE_TP_ORDER_IDS] = tp_order_ids
+                        if sl_orders:
+                            new_chat_data[CONSERVATIVE_SL_ORDER_ID] = sl_orders[0].get('orderId')
+                    
+                    # Store in the main chat's data
+                    if main_chat_id not in application.chat_data:
+                        application.chat_data[main_chat_id] = {}
+                    
+                    # Create a unique key for this position including approach
+                    position_key = f"position_{symbol}_{side}_{approach}"
+                    application.chat_data[main_chat_id][position_key] = new_chat_data
+                    
+                    # Start monitoring
+                    try:
+                        from execution.monitor import start_position_monitoring
+                        await start_position_monitoring(application, int(main_chat_id), new_chat_data)
+                        
+                        logger.info(f"✅ Created new monitor for {symbol} ({approach}) in chat {main_chat_id}")
+                        created_new_entries += 1
+                    except Exception as e:
+                        logger.error(f"❌ Error creating monitor for {symbol}: {e}")
             
             # Small delay between position processing
             await asyncio.sleep(0.3)
@@ -694,12 +897,31 @@ async def enhanced_post_init(application: Application) -> None:
         STATS_TOTAL_LOSSES: 0,
         STATS_CONSERVATIVE_TRADES: 0,
         STATS_FAST_TRADES: 0,
-        STATS_CONSERVATIVE_TP1_CANCELLATIONS: 0
+        STATS_CONSERVATIVE_TP1_CANCELLATIONS: 0,
+        # Additional stats for portfolio metrics
+        'stats_total_wins_pnl': Decimal("0"),
+        'stats_total_losses_pnl': Decimal("0"),
+        'stats_max_drawdown': Decimal("0"),
+        'stats_peak_equity': Decimal("0"),
+        'stats_current_drawdown': Decimal("0"),
+        'recent_trade_pnls': []
     }
     
     for stat_key, default_val in stats_defaults.items():
         if stat_key not in application.bot_data:
             application.bot_data[stat_key] = default_val
+    
+    # Clean up stale monitors on startup
+    try:
+        from utils.monitor_cleanup import cleanup_stale_monitors_on_startup
+        logger.info("🧹 Running startup monitor cleanup...")
+        cleanup_performed = await cleanup_stale_monitors_on_startup(application.bot_data)
+        if cleanup_performed:
+            # Force persistence update if cleanup was performed
+            await application.update_persistence()
+            logger.info("✅ Startup monitor cleanup completed and persistence updated")
+    except Exception as e:
+        logger.error(f"Error during startup monitor cleanup: {e}")
     
     # Initialize AI components
     try:

@@ -41,6 +41,13 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
             from utils.cache import invalidate_all_caches
             invalidate_all_caches()
             
+            # Force reload persistence to get latest stats
+            try:
+                await context.application.persistence.flush()
+                logger.info("Flushed persistence before refresh")
+            except Exception as e:
+                logger.warning(f"Could not flush persistence: {e}")
+            
             # Delete the current message (which is the old dashboard)
             try:
                 await query.message.delete()

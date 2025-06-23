@@ -62,6 +62,7 @@ async def place_order_with_retry(symbol: str, side: str, order_type: str,
                                 trigger_price: Optional[str] = None,
                                 position_idx: int = 0,
                                 reduce_only: bool = False,
+                                time_in_force: Optional[str] = None,
                                 max_retries: int = 3) -> Optional[Dict]:
     """
     Place an order with retry logic and enhanced error handling.
@@ -93,6 +94,9 @@ async def place_order_with_retry(symbol: str, side: str, order_type: str,
             
             if reduce_only:
                 params["reduceOnly"] = True
+            
+            if time_in_force:
+                params["timeInForce"] = time_in_force
             
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(

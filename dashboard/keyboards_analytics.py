@@ -22,14 +22,20 @@ def build_analytics_dashboard_keyboard(chat_id: int, context: any,
         second_row.append(InlineKeyboardButton(f"📋 Positions ({active_positions})", callback_data="list_positions"))
     second_row.append(InlineKeyboardButton("📊 Statistics", callback_data="show_statistics"))
     
-    # Third row - Alerts and Settings
+    # Third row - AI and Analytics
     third_row = [
+        InlineKeyboardButton("🎯 Predictive Signals", callback_data="predictive_signals"),
+        InlineKeyboardButton("🤖 AI Insights", callback_data="ai_insights")
+    ]
+    
+    # Fourth row - Alerts and Settings
+    fourth_row = [
         InlineKeyboardButton("🔔 Alerts", callback_data="alerts_list"),
         InlineKeyboardButton("⚙️ Settings", callback_data="show_settings")
     ]
     
-    # Fourth row - Help
-    fourth_row = [
+    # Fifth row - Help
+    fifth_row = [
         InlineKeyboardButton("❓ Help", callback_data="show_help")
     ]
     
@@ -39,6 +45,7 @@ def build_analytics_dashboard_keyboard(chat_id: int, context: any,
         keyboard.append(second_row)
     keyboard.append(third_row)
     keyboard.append(fourth_row)
+    keyboard.append(fifth_row)
     
     return InlineKeyboardMarkup(keyboard)
 
@@ -127,6 +134,10 @@ def build_stats_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("📊 Overall Stats", callback_data="detailed_stats"),
             InlineKeyboardButton("📈 Performance", callback_data="performance_chart")
+        ],
+        [
+            InlineKeyboardButton("🤖 AI Insights", callback_data="ai_insights"),
+            InlineKeyboardButton("💭 Market Sentiment", callback_data="sentiment_analysis")
         ],
         [
             InlineKeyboardButton("⚡ Fast Approach", callback_data="fast_approach_stats"),

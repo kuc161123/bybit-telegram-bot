@@ -692,6 +692,7 @@ async def place_order_with_retry(symbol: str, side: str, order_type: str,
                                 position_idx: Optional[int] = None,
                                 reduce_only: bool = False,
                                 order_link_id: Optional[str] = None,
+                                time_in_force: Optional[str] = None,
                                 max_retries: int = 3) -> Optional[Dict]:
     """
     FIXED: Place an order with automatic position mode detection and improved retry logic
@@ -721,6 +722,9 @@ async def place_order_with_retry(symbol: str, side: str, order_type: str,
             
             if order_link_id:
                 params["orderLinkId"] = order_link_id
+            
+            if time_in_force:
+                params["timeInForce"] = time_in_force
             
             if trigger_price:
                 # Adjust trigger price to tick size for the symbol

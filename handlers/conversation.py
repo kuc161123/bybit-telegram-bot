@@ -2656,8 +2656,10 @@ async def execute_both_trades(update: Update, context: ContextTypes.DEFAULT_TYPE
     fast_margin = total_margin / 2
     conservative_margin = total_margin / 2
     
-    # Store original margin
+    # Store original margin for restoration
     original_margin = total_margin
+    original_approach = context.chat_data.get(TRADING_APPROACH)
+    original_strategy = context.chat_data.get(ORDER_STRATEGY)
     
     try:
         from execution.trader import execute_trade_logic
@@ -2674,15 +2676,13 @@ async def execute_both_trades(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode=ParseMode.HTML
         )
         
-        # Setup for fast trade
-        context.chat_data[TRADING_APPROACH] = "fast"
-        context.chat_data[ORDER_STRATEGY] = STRATEGY_MARKET_ONLY
-        context.chat_data[MARGIN_AMOUNT] = fast_margin
-        context.chat_data["margin_amount"] = fast_margin
-        context.chat_data["margin_amount_usdt"] = fast_margin
-        
-        # Create config for fast trade
+        # Create ISOLATED config for fast trade (don't modify shared chat_data)
         fast_cfg = context.chat_data.copy()
+        fast_cfg[TRADING_APPROACH] = "fast"
+        fast_cfg[ORDER_STRATEGY] = STRATEGY_MARKET_ONLY
+        fast_cfg[MARGIN_AMOUNT] = fast_margin
+        fast_cfg["margin_amount"] = fast_margin
+        fast_cfg["margin_amount_usdt"] = fast_margin
         fast_cfg["_temp_chat_id"] = chat_id
         fast_cfg["_execution_source"] = "ggshot_both_trades_fast"
         
@@ -2721,23 +2721,21 @@ async def execute_both_trades(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode=ParseMode.HTML
         )
         
-        # Setup for conservative trade
-        context.chat_data[TRADING_APPROACH] = "conservative"
-        context.chat_data[ORDER_STRATEGY] = STRATEGY_CONSERVATIVE_LIMITS
-        context.chat_data[MARGIN_AMOUNT] = conservative_margin
-        context.chat_data["margin_amount"] = conservative_margin
-        context.chat_data["margin_amount_usdt"] = conservative_margin
-        
         # Generate new trade group ID for conservative
         trade_group_id = str(uuid.uuid4())[:8]
-        context.chat_data[CONSERVATIVE_TRADE_GROUP_ID] = trade_group_id
         try:
             protect_trade_group_from_cleanup(trade_group_id)
         except Exception as e:
             logger.error(f"Error protecting trade group: {e}")
         
-        # Create config for conservative trade
+        # Create ISOLATED config for conservative trade (don't modify shared chat_data)
         conservative_cfg = context.chat_data.copy()
+        conservative_cfg[TRADING_APPROACH] = "conservative"
+        conservative_cfg[ORDER_STRATEGY] = STRATEGY_CONSERVATIVE_LIMITS
+        conservative_cfg[MARGIN_AMOUNT] = conservative_margin
+        conservative_cfg["margin_amount"] = conservative_margin
+        conservative_cfg["margin_amount_usdt"] = conservative_margin
+        conservative_cfg[CONSERVATIVE_TRADE_GROUP_ID] = trade_group_id
         conservative_cfg["_temp_chat_id"] = chat_id
         conservative_cfg["_execution_source"] = "ggshot_both_trades_conservative"
         
@@ -2800,13 +2798,43 @@ async def execute_both_trades(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode=ParseMode.HTML
         )
         
-        # Restore original margin
+        # Restore original chat_data state to prevent contamination
         context.chat_data[MARGIN_AMOUNT] = original_margin
         context.chat_data["margin_amount"] = original_margin
         context.chat_data["margin_amount_usdt"] = original_margin
         
+        # Restore original approach and strategy if they existed
+        if original_approach is not None:
+            context.chat_data[TRADING_APPROACH] = original_approach
+        elif TRADING_APPROACH in context.chat_data:
+            del context.chat_data[TRADING_APPROACH]
+            
+        if original_strategy is not None:
+            context.chat_data[ORDER_STRATEGY] = original_strategy
+        elif ORDER_STRATEGY in context.chat_data:
+            del context.chat_data[ORDER_STRATEGY]
+        
     except Exception as e:
         logger.error(f"Error in dual trade execution: {e}", exc_info=True)
+        
+        # Restore original chat_data state even on error
+        try:
+            context.chat_data[MARGIN_AMOUNT] = original_margin
+            context.chat_data["margin_amount"] = original_margin
+            context.chat_data["margin_amount_usdt"] = original_margin
+            
+            if original_approach is not None:
+                context.chat_data[TRADING_APPROACH] = original_approach
+            elif TRADING_APPROACH in context.chat_data:
+                del context.chat_data[TRADING_APPROACH]
+                
+            if original_strategy is not None:
+                context.chat_data[ORDER_STRATEGY] = original_strategy
+            elif ORDER_STRATEGY in context.chat_data:
+                del context.chat_data[ORDER_STRATEGY]
+        except:
+            pass  # Don't let cleanup errors mask the original error
+        
         await context.bot.send_message(
             chat_id,
             f"❌ <b>Dual Trade Execution Error</b>\n\n{escape(str(e))}",

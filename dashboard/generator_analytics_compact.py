@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Tuple
 
 from config.constants import *
 from utils.formatters import format_number, mobile_status_indicator
-from utils.cache import get_usdt_wallet_balance_cached
+from utils.cache import get_usdt_wallet_balance_cached, get_mirror_wallet_balance_cached
 from clients.bybit_helpers import get_all_positions
 
 logger = logging.getLogger(__name__)
@@ -25,15 +25,42 @@ def calculate_profit_factor(stats_data: Dict) -> float:
     
     if total_losses_pnl > 0:
         return total_wins_pnl / total_losses_pnl
+    elif total_wins_pnl > 0:
+        # No losses, profit factor is infinity (return a large number for display)
+        return 999.99
     return 0.0
+
+def format_profit_factor(profit_factor: float) -> str:
+    """Format profit factor for display"""
+    if profit_factor >= 999:
+        return "∞"
+    elif profit_factor == 0:
+        return "N/A"
+    else:
+        return f"{profit_factor:.2f}"
 
 def calculate_actual_sharpe(stats_data: Dict) -> float:
     """Calculate simplified Sharpe ratio"""
-    # Simplified calculation based on win rate and average P&L
+    # More realistic calculation based on win rate and win/loss ratio
     win_rate = float(stats_data.get('overall_win_rate', 0)) / 100
-    if win_rate > 0.5:
-        return 1.5 + (win_rate - 0.5) * 4  # Scale from 1.5 to 3.5
-    return win_rate * 3
+    total_wins_pnl = abs(float(stats_data.get('stats_total_wins_pnl', 0)))
+    total_losses_pnl = abs(float(stats_data.get('stats_total_losses_pnl', 0)))
+    
+    if total_losses_pnl > 0:
+        win_loss_ratio = total_wins_pnl / total_losses_pnl
+    else:
+        win_loss_ratio = 2.0 if total_wins_pnl > 0 else 0
+    
+    # Sharpe approximation: higher win rate and win/loss ratio = better Sharpe
+    if win_rate > 0.5 and win_loss_ratio > 1:
+        # Good performance
+        return 1.0 + (win_rate - 0.5) * 2 + (win_loss_ratio - 1) * 0.5
+    elif win_rate > 0.4:
+        # Moderate performance
+        return 0.5 + win_rate
+    else:
+        # Poor performance
+        return win_rate
 
 def calculate_actual_sortino(stats_data: Dict) -> float:
     """Calculate simplified Sortino ratio"""
@@ -58,7 +85,7 @@ def calculate_recovery_factor(stats_data: Dict) -> float:
     max_dd = calculate_actual_max_dd(stats_data)
     
     if max_dd > 0 and total_pnl > 0:
-        return total_pnl / max_dd / 100  # Convert to reasonable scale
+        return total_pnl / max_dd  # Recovery factor is simply profit / max drawdown
     return 0.0
 
 def create_pnl_trend_chart(stats_data: Dict) -> str:
@@ -150,9 +177,23 @@ def create_mini_chart(data: List[float], width: int = 15) -> str:
     
     return result
 
-async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
+async def build_analytics_dashboard_text(chat_data: Any, bot_data: Any) -> str:
     """Build compact analytics dashboard with enhanced account info"""
     try:
+        # Handle both dict parameters and CallbackContext
+        if hasattr(chat_data, 'chat_data'):
+            # This is a CallbackContext object
+            context = chat_data
+            chat_data = context.chat_data or {}
+            bot_data = context.bot_data or {}
+        elif hasattr(bot_data, 'bot_data'):
+            # bot_data is actually the context
+            context = bot_data
+            chat_data = chat_data or {}
+            bot_data = context.bot_data or {}
+        else:
+            # Direct dict parameters
+            context = None
         # Get wallet balance
         try:
             wallet_info = await get_usdt_wallet_balance_cached()
@@ -186,34 +227,50 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         # All positions are bot positions
         bot_positions = []
         
-        # Get both bot_data and chat_data from the telegram-python-bot context
-        bot_data = {}
+        # Get mirror account data if enabled
+        mirror_total_balance = Decimal("0")
+        mirror_available_balance = Decimal("0")
+        mirror_positions = []
+        mirror_unrealized_pnl = Decimal("0")
+        mirror_realized_pnl = Decimal("0")
+        mirror_trading_enabled = False
+        
+        try:
+            from execution.mirror_trader import is_mirror_trading_enabled, get_mirror_positions, calculate_mirror_pnl
+            from utils.cache import get_mirror_wallet_balance_cached
+            
+            if is_mirror_trading_enabled():
+                mirror_trading_enabled = True
+                
+                # Get mirror balance
+                mirror_balance_tuple = await get_mirror_wallet_balance_cached()
+                if isinstance(mirror_balance_tuple, tuple) and len(mirror_balance_tuple) >= 2:
+                    mirror_total_balance = safe_decimal(mirror_balance_tuple[0])
+                    mirror_available_balance = safe_decimal(mirror_balance_tuple[1])
+                
+                # Get mirror positions
+                mirror_positions = await get_mirror_positions()
+                
+                # Get mirror P&L
+                mirror_pnl_tuple = await calculate_mirror_pnl()
+                if isinstance(mirror_pnl_tuple, tuple) and len(mirror_pnl_tuple) >= 2:
+                    mirror_unrealized_pnl = safe_decimal(mirror_pnl_tuple[0])
+                    mirror_realized_pnl = safe_decimal(mirror_pnl_tuple[1])
+                
+                logger.info(f"Mirror account data loaded - Balance: ${mirror_total_balance}, Positions: {len(mirror_positions)}")
+        except Exception as e:
+            logger.warning(f"Could not load mirror account data: {e}")
+        
+        # Use the bot_data and chat_data that we extracted above
+        current_chat_data = chat_data
         all_chat_data = {}
-        current_chat_data = {}
         
-        # Handle telegram-python-bot CallbackContext
-        if hasattr(context, 'bot_data'):
-            bot_data = context.bot_data or {}
-            logger.debug(f"Got bot_data from context.bot_data")
-        
-        if hasattr(context, 'chat_data'):
-            current_chat_data = context.chat_data or {}
-            logger.debug(f"Got current_chat_data from context.chat_data")
-        
-        # Try to get all chat data from application
-        if hasattr(context, 'application'):
-            if hasattr(context.application, 'chat_data'):
-                all_chat_data = dict(context.application.chat_data)
-                logger.debug(f"Got all_chat_data from context.application.chat_data with {len(all_chat_data)} chats")
-            if hasattr(context.application, 'bot_data') and not bot_data:
-                bot_data = context.application.bot_data or {}
-                logger.debug(f"Got bot_data from context.application.bot_data")
-        
-        # Fallback for dict context
-        if isinstance(context, dict):
-            bot_data = context.get('bot_data', bot_data)
-            all_chat_data = context.get('chat_data', all_chat_data)
-            current_chat_data = context.get('current_chat_data', current_chat_data)
+        # Force refresh stats from bot_data
+        logger.info(f"📊 Dashboard loading stats from bot_data")
+        logger.info(f"   Total Trades: {bot_data.get(STATS_TOTAL_TRADES, 0)}")
+        logger.info(f"   Total Wins: {bot_data.get(STATS_TOTAL_WINS, 0)}")
+        logger.info(f"   Total Losses: {bot_data.get(STATS_TOTAL_LOSSES, 0)}")
+        logger.info(f"   Total P&L: {bot_data.get(STATS_TOTAL_PNL, 0)}")
         
         # Calculate largest position percentage
         largest_position_pct = 0
@@ -408,65 +465,110 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         # Get monitor tasks for counting by approach
         monitor_tasks = bot_data.get('monitor_tasks', {})
         
-        # Count monitors by approach
+        # Count monitors by approach and account type
         fast_monitor_count = 0
         conservative_monitor_count = 0
         active_monitor_count = 0
         
+        # Mirror monitor counts
+        mirror_fast_monitor_count = 0
+        mirror_conservative_monitor_count = 0
+        mirror_active_monitor_count = 0
+        
+        # Get list of active position symbols for validation
+        active_position_symbols = set()
+        for pos in active_positions:
+            symbol = pos.get('symbol')
+            if symbol:
+                active_position_symbols.add(symbol)
+        
         # Count from monitor_tasks registry (primary source)
         current_time = time.time()
+        stale_monitors_to_remove = []
+        
         for monitor_key, task_info in monitor_tasks.items():
             if isinstance(task_info, dict) and task_info.get('active', False):
                 # Validate monitor is not stale (older than 24 hours)
                 started_at = task_info.get('started_at', 0)
                 if started_at > 0 and (current_time - started_at) > 86400:  # 24 hours
                     logger.debug(f"Skipping stale monitor {monitor_key} (started {(current_time - started_at)/3600:.1f} hours ago)")
+                    stale_monitors_to_remove.append(monitor_key)
+                    continue
+                
+                # Validate monitor has an active position
+                monitor_symbol = task_info.get('symbol', '')
+                if monitor_symbol and monitor_symbol not in active_position_symbols:
+                    logger.debug(f"Monitor {monitor_key} has no active position, marking for removal")
+                    stale_monitors_to_remove.append(monitor_key)
                     continue
                 
                 approach = task_info.get('approach', 'unknown')
+                account_type = task_info.get('account_type', 'primary')
                 
-                if approach == 'fast':
-                    fast_monitor_count += 1
-                elif approach == 'conservative':
-                    conservative_monitor_count += 1
-                elif approach == 'ggshot':
-                    conservative_monitor_count += 1  # GGShot uses conservative pattern
-                
-                active_monitor_count += 1
+                if account_type == 'mirror':
+                    # Mirror account monitors
+                    if approach == 'fast':
+                        mirror_fast_monitor_count += 1
+                    elif approach == 'conservative':
+                        mirror_conservative_monitor_count += 1
+                    elif approach == 'ggshot':
+                        mirror_conservative_monitor_count += 1  # GGShot uses conservative pattern
+                    
+                    mirror_active_monitor_count += 1
+                else:
+                    # Primary account monitors
+                    if approach == 'fast':
+                        fast_monitor_count += 1
+                    elif approach == 'conservative':
+                        conservative_monitor_count += 1
+                    elif approach == 'ggshot':
+                        conservative_monitor_count += 1  # GGShot uses conservative pattern
+                    
+                    active_monitor_count += 1
+        
+        # Clean up stale monitors from bot_data
+        if stale_monitors_to_remove:
+            logger.info(f"Cleaning up {len(stale_monitors_to_remove)} stale monitors from bot_data")
+            for monitor_key in stale_monitors_to_remove:
+                if monitor_key in monitor_tasks:
+                    del monitor_tasks[monitor_key]
         
         # Also count from chat data (fallback for older monitors)
         counted_keys = set()  # To avoid double counting
         
         for key in bot_data:
             if key.startswith('chat_data_'):
-                chat_data = bot_data.get(key, {})
-                if isinstance(chat_data, dict):
-                    monitor_info = chat_data.get(ACTIVE_MONITOR_TASK, {})
-                    if isinstance(monitor_info, dict) and monitor_info.get('active', False):
-                        # Create unique key to check if already counted
-                        chat_id_from_key = monitor_info.get('chat_id', '')
-                        symbol = monitor_info.get('symbol', '')
-                        unique_key = f"{chat_id_from_key}_{symbol}"
+                chat_data_value = bot_data.get(key, {})
+                # Skip non-dict values (could be int chat IDs from old format)
+                if not isinstance(chat_data_value, dict):
+                    continue
+                monitor_info = chat_data_value.get(ACTIVE_MONITOR_TASK, {})
+                if isinstance(monitor_info, dict) and monitor_info.get('active', False):
+                    # Create unique key to check if already counted
+                    chat_id_from_key = monitor_info.get('chat_id', '')
+                    symbol = monitor_info.get('symbol', '')
+                    unique_key = f"{chat_id_from_key}_{symbol}"
+                    
+                    if unique_key not in monitor_tasks and unique_key not in counted_keys:
+                        counted_keys.add(unique_key)
+                        approach = monitor_info.get('approach', chat_data_value.get(TRADING_APPROACH, 'fast'))
                         
-                        if unique_key not in monitor_tasks and unique_key not in counted_keys:
-                            counted_keys.add(unique_key)
-                            approach = monitor_info.get('approach', chat_data.get(TRADING_APPROACH, 'fast'))
-                            
-                            if approach == 'fast':
-                                fast_monitor_count += 1
-                            elif approach == 'conservative':
-                                conservative_monitor_count += 1
-                            elif approach == 'ggshot':
-                                conservative_monitor_count += 1
-                            
-                            active_monitor_count += 1
+                        if approach == 'fast':
+                            fast_monitor_count += 1
+                        elif approach == 'conservative':
+                            conservative_monitor_count += 1
+                        elif approach == 'ggshot':
+                            conservative_monitor_count += 1
+                        
+                        active_monitor_count += 1
         
         # Also check current context chat data (for the current chat's monitor)
-        if current_chat_data:
+        if current_chat_data and isinstance(current_chat_data, dict):
             monitor_info = current_chat_data.get(ACTIVE_MONITOR_TASK, {})
             if isinstance(monitor_info, dict) and monitor_info.get('active', False):
                 current_symbol = monitor_info.get('symbol', '')
-                unique_key = f"{chat_id}_{current_symbol}"
+                current_chat_id = monitor_info.get('chat_id', 'current')
+                unique_key = f"{current_chat_id}_{current_symbol}"
                 
                 if unique_key not in monitor_tasks and unique_key not in counted_keys:
                     approach = monitor_info.get('approach', current_chat_data.get(TRADING_APPROACH, 'fast'))
@@ -480,6 +582,40 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
                     
                     active_monitor_count += 1
         
+        # Get mirror account data if enabled
+        mirror_trading_enabled = False
+        mirror_balance = Decimal("0")
+        mirror_available = Decimal("0")
+        mirror_positions_count = 0
+        mirror_unrealized_pnl = Decimal("0")
+        mirror_realized_pnl = Decimal("0")
+        
+        try:
+            from config.settings import ENABLE_MIRROR_TRADING
+            from execution.mirror_trader import (
+                is_mirror_trading_enabled, 
+                get_mirror_positions,
+                calculate_mirror_pnl
+            )
+            
+            if is_mirror_trading_enabled():
+                mirror_trading_enabled = True
+                
+                # Get mirror balance
+                mirror_balance, mirror_available = await get_mirror_wallet_balance_cached()
+                
+                # Get mirror positions
+                mirror_positions = await get_mirror_positions()
+                mirror_positions_count = len(mirror_positions)
+                
+                # Get mirror P&L
+                mirror_unrealized_pnl, mirror_realized_pnl = await calculate_mirror_pnl()
+                
+                logger.info(f"Mirror account data - Balance: {mirror_balance}, Positions: {mirror_positions_count}, P&L: {mirror_unrealized_pnl}")
+        except Exception as e:
+            logger.warning(f"Could not fetch mirror account data: {e}")
+            mirror_trading_enabled = False
+        
         # Check if AI is enabled
         from config.settings import LLM_PROVIDER
         stats_data['ai_enabled'] = LLM_PROVIDER != 'stub'
@@ -487,16 +623,51 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         # Get social sentiment if available
         sentiment_score = "No data"
         sentiment_trend = "N/A"
+        sentiment_emoji = "📊"
         try:
             from social_media.integration import SocialMediaIntegration
             social_integration = SocialMediaIntegration()
             if social_integration.is_initialized:
                 sentiment_data = await social_integration.get_current_sentiment()
                 if sentiment_data:
-                    sentiment_score = f"{sentiment_data.get('overall_score', 0):.1f}/100"
-                    sentiment_trend = sentiment_data.get('trend', 'Neutral')
+                    score = sentiment_data.get('overall_score', 50)
+                    sentiment_score = f"{score:.1f}/100"
+                    
+                    # Determine trend and emoji
+                    if score >= 70:
+                        sentiment_trend = "Very Bullish"
+                        sentiment_emoji = "🚀"
+                    elif score >= 60:
+                        sentiment_trend = "Bullish"
+                        sentiment_emoji = "📈"
+                    elif score >= 40:
+                        sentiment_trend = "Neutral"
+                        sentiment_emoji = "⚖️"
+                    elif score >= 30:
+                        sentiment_trend = "Bearish"
+                        sentiment_emoji = "📉"
+                    else:
+                        sentiment_trend = "Very Bearish"
+                        sentiment_emoji = "🔻"
         except:
             pass
+        
+        # Get AI Market Analysis
+        ai_analysis = {}
+        primary_symbol = None
+        
+        try:
+            # Get the most traded symbol or the symbol with most positions
+            if active_positions:
+                # Use the symbol with the largest position
+                primary_symbol = max(active_positions, key=lambda p: float(p.get('positionIM', 0))).get('symbol')
+            
+            if primary_symbol:
+                from execution.ai_market_analysis import get_ai_market_insights
+                ai_analysis = await get_ai_market_insights(primary_symbol, stats_data)
+                logger.info(f"AI Market Analysis loaded for {primary_symbol}")
+        except Exception as e:
+            logger.warning(f"Could not load AI market analysis: {e}")
         
         # Time
         now = datetime.now()
@@ -525,7 +696,29 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
 ├ 📊 In Use: ${format_number(balance_used)} ({balance_used_pct:.1f}%)
 ├ {health_emoji} Health: {account_health:.0f}% ({health_status})
 └ 💎 Current P&L: ${format_number(total_unrealized_pnl)}
-
+"""
+        
+        # Add mirror account section if enabled
+        if mirror_trading_enabled:
+            mirror_total_pnl = mirror_unrealized_pnl + mirror_realized_pnl
+            dashboard += f"""
+🪞 <b>MIRROR ACCOUNT</b>
+├ 💰 Balance: ${format_number(mirror_balance)}
+├ 🔓 Available: ${format_number(mirror_available)}
+├ 📊 Positions: {mirror_positions_count}
+├ 💎 Unrealized: ${format_number(mirror_unrealized_pnl)}
+├ 💵 Realized Today: ${format_number(mirror_realized_pnl)}
+└ 📈 Total P&L: ${format_number(mirror_total_pnl)}
+"""
+        
+        # Log portfolio metrics for debugging
+        logger.info(f"📊 Portfolio Metrics Debug:")
+        logger.info(f"   Max DD from stats: {stats_data.get('stats_max_drawdown', 0)}")
+        logger.info(f"   Peak equity: {stats_data.get('stats_peak_equity', 0)}")
+        logger.info(f"   Recent trade PnLs: {len(stats_data.get('recent_trade_pnls', []))} trades")
+        logger.info(f"   Total P&L: {total_pnl}")
+        
+        dashboard += f"""
 💡 <b>POTENTIAL P&L ANALYSIS</b>
 ├ 🎯 If All TP1 Hit: +${format_number(potential_profit_tp1)}
 ├ 🚀 If All TPs Hit: +${format_number(potential_profit_all_tp)}
@@ -543,7 +736,7 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
 ├ Win Rate: {win_rate:.1f}% ({wins}W/{losses}L)
 ├ Total P&L: ${format_number(total_pnl)}
 ├ Avg Trade: ${format_number(total_pnl/total_trades if total_trades > 0 else 0)}
-└ Profit Factor: {calculate_profit_factor(stats_data):.2f}
+└ Profit Factor: {format_profit_factor(calculate_profit_factor(stats_data))}
 
 📊 <b>PORTFOLIO METRICS</b>
 ├ 🎯 Sharpe: {calculate_actual_sharpe(stats_data):.2f} | Sortino: {calculate_actual_sortino(stats_data):.2f}
@@ -553,15 +746,15 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
 ⏰ <b>TIME ANALYSIS</b>
 ├ Trading Hours: {total_trades} trades logged
 ├ Bot Uptime: {calculate_active_days(stats_data)}
-├ Market Sentiment: {sentiment_score} ({sentiment_trend})
+├ {sentiment_emoji} Market Sentiment: {sentiment_score} ({sentiment_trend})
 └ Data Points: {len(active_positions)} positions
 
-🎯 <b>PREDICTIVE SIGNALS</b>
-├ Win Rate: {win_rate:.1f}% over {total_trades} trades
-├ Win Streak: {stats_data.get(STATS_WIN_STREAK, 0)} | Loss Streak: {stats_data.get(STATS_LOSS_STREAK, 0)}
-├ Momentum: {'🔥 Hot' if stats_data.get(STATS_WIN_STREAK, 0) >= 3 else '✨ Warming' if stats_data.get(STATS_WIN_STREAK, 0) >= 2 else '❄️ Cold' if stats_data.get(STATS_LOSS_STREAK, 0) >= 2 else '⚖️ Neutral'}
-├ Next Trade Confidence: {min(95, win_rate + stats_data.get(STATS_WIN_STREAK, 0) * 2):.0f}%
-└ Trend: {'▲ Uptrend' if win_rate > 60 else '▼ Downtrend' if win_rate < 40 else '→ Sideways'}
+🎯 <b>PREDICTIVE SIGNALS</b> {f"({primary_symbol})" if primary_symbol else ""}
+├ Win Rate: {ai_analysis.get('win_rate', win_rate):.1f}% over {ai_analysis.get('total_trades', total_trades)} trades
+├ Win Streak: {ai_analysis.get('win_streak', stats_data.get(STATS_WIN_STREAK, 0))} | Loss Streak: {ai_analysis.get('loss_streak', stats_data.get(STATS_LOSS_STREAK, 0))}
+├ Momentum: {ai_analysis.get('momentum', '⚖️ Neutral')}
+├ Next Trade Confidence: {ai_analysis.get('confidence', 50):.0f}%
+└ Trend: {ai_analysis.get('trend', '↔️ Ranging')}
 
 🧪 <b>STRESS SCENARIOS</b>
 ├ Current Risk: {balance_used_pct:.1f}% of capital at risk
@@ -572,7 +765,7 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
 
 ⚡ <b>LIVE MONITORING</b>
 ├ Active Positions: {len(active_positions)}
-├ Active Monitors: {active_monitor_count}
+├ Active Monitors: {active_monitor_count + mirror_active_monitor_count} (Primary: {active_monitor_count}, Mirror: {mirror_active_monitor_count})
 └ System Status: 🟢 All systems operational
 
 💡 <b>TRADING INSIGHTS</b>
@@ -580,17 +773,29 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
 ├ Best Trade: +${format_number(abs(float(stats_data.get(STATS_BEST_TRADE, 0))))}
 ├ Worst Trade: -${format_number(abs(float(stats_data.get(STATS_WORST_TRADE, 0))))}
 ├ Current Streak: {'🔥 ' + str(stats_data.get(STATS_WIN_STREAK, 0)) + ' wins' if stats_data.get(STATS_WIN_STREAK, 0) > 0 else '❄️ ' + str(stats_data.get(STATS_LOSS_STREAK, 0)) + ' losses' if stats_data.get(STATS_LOSS_STREAK, 0) > 0 else '⚖️ None'}
-└ {'🧠 AI analysis enabled' if stats_data.get('ai_enabled', False) else '💡 Enable AI for advanced insights'}
+└ {'🧠 AI analysis active' if ai_analysis else '💡 Enable AI for advanced insights'}
 
 📊 <b>PORTFOLIO OPTIMIZATION</b>
 ├ Positions: {len(active_positions)} symbols ({len(set(p.get('symbol', '') for p in active_positions))} unique)
 ├ Largest Position: {largest_position_pct:.1f}% of portfolio
 └ Risk Distribution: {'⚠️ Concentrated' if largest_position_pct > 30 else '✅ Balanced' if largest_position_pct < 20 else '🟡 Moderate'}
-
+"""
+        
+        # Add detailed AI analysis section if available
+        if ai_analysis and not ai_analysis.get('error'):
+            dashboard += f"""
+🧠 <b>ADVANCED AI ANALYSIS</b>
+├ 📊 Market Factors: Price {ai_analysis.get('market_data', {}).get('price_change_24h', 0):+.1f}% | Vol {ai_analysis.get('technical', {}).get('volatility', 0):.1f}%
+├ 📈 Technical: {ai_analysis.get('technical', {}).get('trend', 'N/A')} trend | Momentum {ai_analysis.get('technical', {}).get('momentum', 0):+.1f}%
+├ 💭 Sentiment: {ai_analysis.get('sentiment', {}).get('score', 50)}/100 ({ai_analysis.get('sentiment', {}).get('trend', 'N/A')})
+├ 📉 Profit Factor: {ai_analysis.get('performance_metrics', {}).get('profit_factor', 0):.2f} | Expectancy: ${ai_analysis.get('performance_metrics', {}).get('expectancy', 0):.2f}
+└ 🎯 AI Insight: {ai_analysis.get('ai_insights', 'Analysis based on market conditions')[:70]}...
+"""
+        
+        dashboard += f"""
 ⚖️ <b>ACTIVE MANAGEMENT</b>
-├ Total Monitors: {active_monitor_count} running
-├ Fast Monitors: {fast_monitor_count} active
-├ Conservative: {conservative_monitor_count} active
+├ Primary Monitors: {active_monitor_count} ({fast_monitor_count}F/{conservative_monitor_count}C)
+├ Mirror Monitors: {mirror_active_monitor_count} ({mirror_fast_monitor_count}F/{mirror_conservative_monitor_count}C)
 ├ Trade History: C:{stats_data.get(STATS_CONSERVATIVE_TRADES, 0)} F:{stats_data.get(STATS_FAST_TRADES, 0)}
 ├ Avg Position: ${(total_margin_used/len(active_positions) if len(active_positions) > 0 else 0):.0f}
 ├ Open Orders: {len(all_orders)} active
@@ -602,8 +807,8 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
         return dashboard
         
     except Exception as e:
-        logger.error(f"Error building analytics dashboard: {e}")
-        return f"⚠️ Error loading analytics: {str(e)}"
+        logger.error(f"Error building analytics dashboard: {e}", exc_info=True)
+        return "⚠️ Dashboard temporarily unavailable. Please try /refresh"
 
 # Alias for compatibility
 build_mobile_dashboard_text = build_analytics_dashboard_text

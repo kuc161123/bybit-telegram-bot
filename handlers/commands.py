@@ -21,6 +21,7 @@ from utils.position_modes import (
     format_position_mode_help, get_position_mode_commands
 )
 from clients.bybit_helpers import get_all_positions
+from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 
@@ -398,6 +399,91 @@ async def check_mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.error(f"Error in check mode command: {e}")
         await processing_msg.edit_text(
             f"{get_emoji('error')} Error checking position mode: {str(e)}",
+            parse_mode=ParseMode.HTML
+        )
+
+async def cleanup_monitors_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clean up stuck monitors for closed positions"""
+    chat_id = update.effective_chat.id
+    
+    # Send processing message
+    processing_msg = await update.message.reply_text(
+        f"{get_emoji('loading')} Cleaning up stuck monitors...",
+        parse_mode=ParseMode.HTML
+    )
+    
+    try:
+        # Get bot data
+        bot_data = context.bot_data
+        
+        # Get all active positions
+        active_positions = await get_all_positions()
+        active_symbols = set()
+        
+        for pos in active_positions:
+            if float(pos.get('size', 0)) > 0:
+                symbol = pos.get('symbol')
+                if symbol:
+                    active_symbols.add(symbol)
+        
+        # Check monitors
+        monitor_tasks = bot_data.get('monitor_tasks', {})
+        monitors_removed = []
+        
+        # First pass: check all monitors regardless of 'active' status
+        for monitor_key in list(monitor_tasks.keys()):
+            monitor_data = monitor_tasks[monitor_key]
+            symbol = monitor_data.get('symbol')
+            if symbol:
+                if symbol not in active_symbols:
+                    # Remove stuck monitor completely
+                    del monitor_tasks[monitor_key]
+                    monitors_removed.append(f"{symbol} ({monitor_data.get('approach', 'unknown')})")
+                    logger.info(f"Removed monitor {monitor_key} - no active position")
+                elif not monitor_data.get('active', False):
+                    # Also remove inactive monitors
+                    del monitor_tasks[monitor_key]
+                    monitors_removed.append(f"{symbol} ({monitor_data.get('approach', 'unknown')}) - inactive")
+                    logger.info(f"Removed inactive monitor {monitor_key}")
+        
+        # Build response
+        if monitors_removed:
+            response = f"""
+{get_emoji('check')} <b>MONITOR CLEANUP COMPLETED</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{get_emoji('trash')} <b>Removed {len(monitors_removed)} stuck monitors:</b>
+"""
+            for monitor in monitors_removed:
+                response += f"• {monitor}\n"
+        else:
+            response = f"""
+{get_emoji('check')} <b>NO STUCK MONITORS FOUND</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+All monitors are tracking active positions.
+"""
+        
+        # Show active monitors
+        active_monitors = [f"{v['symbol']} ({v['approach']})" for k, v in monitor_tasks.items() if v.get('active', False)]
+        if active_monitors:
+            response += f"\n{get_emoji('chart')} <b>Active Monitors ({len(active_monitors)}):</b>\n"
+            for monitor in active_monitors:
+                response += f"• {monitor}\n"
+        
+        # Force persistence update after cleanup
+        try:
+            await context.update_persistence()
+            logger.info("Persistence updated after monitor cleanup")
+        except Exception as e:
+            logger.warning(f"Could not update persistence: {e}")
+        
+        await processing_msg.edit_text(response, parse_mode=ParseMode.HTML)
+        
+    except Exception as e:
+        logger.error(f"Error cleaning up monitors: {e}")
+        await processing_msg.edit_text(
+            f"{get_emoji('error')} Error cleaning up monitors: {str(e)}",
             parse_mode=ParseMode.HTML
         )
 

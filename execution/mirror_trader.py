@@ -8,7 +8,8 @@ import os
 import asyncio
 import logging
 import time
-from typing import Optional, Dict, Any, Tuple
+from datetime import datetime
+from typing import Optional, Dict, Any, Tuple, List
 from decimal import Decimal
 from pybit.unified_trading import HTTP
 
@@ -359,3 +360,162 @@ async def cancel_mirror_order(symbol: str, order_id: str) -> bool:
 def is_mirror_trading_enabled() -> bool:
     """Check if mirror trading is enabled and properly configured."""
     return ENABLE_MIRROR_TRADING and bybit_client_2 is not None
+
+async def get_mirror_wallet_balance() -> Tuple[Decimal, Decimal]:
+    """
+    Get USDT wallet balance from mirror account.
+    Returns (total_balance, available_balance)
+    """
+    if not ENABLE_MIRROR_TRADING or not bybit_client_2:
+        return (Decimal("0"), Decimal("0"))
+    
+    try:
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: bybit_client_2.get_wallet_balance(accountType="UNIFIED")
+        )
+        
+        if response and response.get("retCode") == 0:
+            result = response.get("result", {})
+            accounts = result.get("list", [])
+            
+            if accounts:
+                account = accounts[0]
+                # Get balance from account level
+                total_balance = Decimal(account.get("totalWalletBalance", "0"))
+                available_balance = Decimal(account.get("totalAvailableBalance", "0"))
+                
+                logger.debug(f"🪞 MIRROR: Account Balance - Total: {total_balance}, Available: {available_balance}")
+                
+                # Also check USDT coin details if needed
+                coins = account.get("coin", [])
+                for coin in coins:
+                    if coin.get("coin") == "USDT":
+                        # Use coin wallet balance if account level is zero
+                        coin_balance = Decimal(coin.get("walletBalance", "0"))
+                        if total_balance == 0 and coin_balance > 0:
+                            total_balance = coin_balance
+                        break
+                
+                return (total_balance, available_balance)
+        
+        return (Decimal("0"), Decimal("0"))
+        
+    except Exception as e:
+        logger.error(f"❌ MIRROR: Error fetching wallet balance: {e}")
+        return (Decimal("0"), Decimal("0"))
+
+async def get_mirror_positions() -> List[Dict]:
+    """
+    Get all open positions from mirror account with pagination.
+    """
+    if not ENABLE_MIRROR_TRADING or not bybit_client_2:
+        return []
+    
+    try:
+        all_positions = []
+        cursor = None
+        page_count = 0
+        max_pages = 10  # Safety limit
+        
+        logger.debug("🪞 MIRROR: Fetching all positions...")
+        
+        while page_count < max_pages:
+            page_count += 1
+            
+            # Build API parameters
+            params = {
+                "category": "linear",
+                "settleCoin": "USDT",
+                "limit": 200
+            }
+            
+            if cursor:
+                params["cursor"] = cursor
+            
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: bybit_client_2.get_positions(**params)
+            )
+            
+            if not response or response.get("retCode") != 0:
+                logger.error(f"❌ MIRROR: Failed to get positions page {page_count}: {response}")
+                break
+            
+            result = response.get("result", {})
+            page_positions = result.get("list", [])
+            next_cursor = result.get("nextPageCursor", "")
+            
+            # Add positions from this page
+            all_positions.extend(page_positions)
+            logger.debug(f"🪞 MIRROR: Page {page_count}: Found {len(page_positions)} positions")
+            
+            # Check if we have more pages
+            if not next_cursor or next_cursor == cursor:
+                break
+            
+            cursor = next_cursor
+        
+        # Filter active positions (size > 0)
+        active_positions = [p for p in all_positions if float(p.get('size', 0)) > 0]
+        logger.info(f"🪞 MIRROR: Total positions: {len(active_positions)}")
+        
+        return active_positions
+        
+    except Exception as e:
+        logger.error(f"❌ MIRROR: Error fetching positions: {e}")
+        return []
+
+async def calculate_mirror_pnl() -> Tuple[Decimal, Decimal]:
+    """
+    Calculate total realized and unrealized P&L for mirror account.
+    Returns (total_unrealized_pnl, total_realized_pnl_today)
+    """
+    if not ENABLE_MIRROR_TRADING or not bybit_client_2:
+        return (Decimal("0"), Decimal("0"))
+    
+    try:
+        # Get all active positions for unrealized P&L
+        positions = await get_mirror_positions()
+        total_unrealized_pnl = Decimal("0")
+        
+        for pos in positions:
+            unrealized_pnl = Decimal(str(pos.get('unrealisedPnl', '0')))
+            total_unrealized_pnl += unrealized_pnl
+        
+        # Get today's realized P&L
+        total_realized_pnl = Decimal("0")
+        try:
+            loop = asyncio.get_event_loop()
+            # Get closed P&L for today
+            response = await loop.run_in_executor(
+                None,
+                lambda: bybit_client_2.get_closed_pnl(
+                    category="linear",
+                    limit=200
+                )
+            )
+            
+            if response and response.get("retCode") == 0:
+                pnl_list = response.get("result", {}).get("list", [])
+                
+                # Sum up today's realized P&L
+                today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                today_timestamp = int(today_start.timestamp() * 1000)
+                
+                for pnl_entry in pnl_list:
+                    created_time = int(pnl_entry.get('createdTime', '0'))
+                    if created_time >= today_timestamp:
+                        closed_pnl = Decimal(str(pnl_entry.get('closedPnl', '0')))
+                        total_realized_pnl += closed_pnl
+        except Exception as e:
+            logger.warning(f"⚠️ MIRROR: Could not fetch realized P&L: {e}")
+        
+        logger.info(f"🪞 MIRROR: P&L - Unrealized: {total_unrealized_pnl}, Realized Today: {total_realized_pnl}")
+        return (total_unrealized_pnl, total_realized_pnl)
+        
+    except Exception as e:
+        logger.error(f"❌ MIRROR: Error calculating P&L: {e}")
+        return (Decimal("0"), Decimal("0"))

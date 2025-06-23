@@ -262,8 +262,15 @@ class ConservativePositionMerger(BasePositionMerger):
                     # Choose LOWER stop loss (more conservative)
                     merged_params['sl_price'] = min(existing_sl_price, new_sl_price)
                     logger.info(f"🛡️ LONG SL: Existing {existing_sl_price} vs New {new_sl_price} → Using {merged_params['sl_price']} (lower/safer)")
+                
+                # Track if SL changed
+                sl_changed = merged_params['sl_price'] != existing_sl_price
             else:
                 merged_params['sl_price'] = new_params.get('sl_price')
+                sl_changed = True  # No existing SL, so it's a change
+            
+            # Track TP changes
+            tps_changed = False
             
             # Calculate merged take profits
             merged_params['take_profits'] = []
@@ -298,6 +305,10 @@ class ConservativePositionMerger(BasePositionMerger):
                         merged_price = max(existing_tp['price'], Decimal(str(new_tp['price'])))
                         logger.info(f"🎯 LONG TP{i+1}: Existing {existing_tp['price']} vs New {new_tp['price']} → Using {merged_price} (higher/aggressive)")
                     
+                    # Track if TP changed
+                    if merged_price != existing_tp['price']:
+                        tps_changed = True
+                    
                     # Use the percentage allocation from new params
                     merged_params['take_profits'].append({
                         'price': merged_price,
@@ -306,6 +317,7 @@ class ConservativePositionMerger(BasePositionMerger):
                 elif new_tp:
                     # Only new TP exists
                     merged_params['take_profits'].append(new_tp)
+                    tps_changed = True  # New TP added
                 elif existing_tp:
                     # Only existing TP exists
                     merged_params['take_profits'].append({
@@ -318,7 +330,16 @@ class ConservativePositionMerger(BasePositionMerger):
             merged_params['qty_step'] = new_params.get('qty_step')
             merged_params['approach'] = 'conservative'
             
+            # Track if parameters changed
+            merged_params['sl_changed'] = sl_changed
+            merged_params['tps_changed'] = tps_changed
+            merged_params['parameters_changed'] = sl_changed or tps_changed
+            
             logger.info(f"✅ Calculated merged parameters for {merged_size} {side} {new_params['symbol']}")
+            if merged_params['parameters_changed']:
+                logger.info(f"📊 Parameters changed: SL={merged_params['sl_changed']}, TPs={merged_params['tps_changed']}")
+            else:
+                logger.info(f"📊 No parameter changes - keeping original SL and TPs")
             return merged_params
             
         except Exception as e:
