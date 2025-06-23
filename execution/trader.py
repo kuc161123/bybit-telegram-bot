@@ -41,6 +41,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Import execution summary module
+try:
+    from execution.execution_summary import execution_summary
+    EXECUTION_SUMMARY_AVAILABLE = True
+except ImportError:
+    EXECUTION_SUMMARY_AVAILABLE = False
+    logger.warning("Execution summary module not available")
+
 class TradeExecutor:
     """Enhanced trade executor with refined performance tracking and automatic position mode detection"""
     
@@ -1292,6 +1300,29 @@ class TradeExecutor:
             mirror_results = {"enabled": False, "limits": [], "tps": [], "sl": None, "errors": []}
             if MIRROR_TRADING_AVAILABLE and is_mirror_trading_enabled():
                 mirror_results["enabled"] = True
+                
+            # Initialize execution data for tracking
+            execution_data = {
+                'trade_id': trade_group_id,
+                'symbol': symbol,
+                'side': side,
+                'approach': 'conservative',
+                'leverage': leverage,
+                'margin_amount': float(margin_amount),
+                'position_size': float(final_sl_qty),
+                'entry_price': float(avg_limit_price),
+                'main_orders': [],
+                'mirror_orders': [],
+                'main_errors': [],
+                'mirror_errors': [],
+                'position_merged': False,
+                'merge_reason': 'N/A',
+                'tp_orders': [],
+                'sl_orders': [],
+                'market_orders': [],
+                'limit_orders': [],
+                'risk_reward_ratio': 0
+            }
             
             # FIXED: Place limit orders with automatic position mode detection and proper quantity rounding
             for i, limit_price in enumerate(limit_prices, 1):
@@ -1334,6 +1365,22 @@ class TradeExecutor:
                     }
                     self.logger.info(f"✅ Limit order {i} placed: {order_id}")
                     
+                    # Track execution data
+                    if order_type == "Market":
+                        execution_data['market_orders'].append({
+                            'order_id': order_id,
+                            'qty': float(qty_per_limit),
+                            'type': 'entry'
+                        })
+                    else:
+                        execution_data['limit_orders'].append({
+                            'order_id': order_id,
+                            'price': float(limit_price),
+                            'qty': float(qty_per_limit),
+                            'type': 'entry'
+                        })
+                    execution_data['main_orders'].append(order_id)
+                    
                     # MIRROR TRADING: Place limit/market order on second account
                     if mirror_results["enabled"]:
                         try:
@@ -1363,16 +1410,20 @@ class TradeExecutor:
                                 mirror_order_id = mirror_result.get("orderId", "")
                                 mirror_results["limits"].append({"order": i, "id": mirror_order_id, "success": True, "type": order_type})
                                 self.logger.info(f"✅ MIRROR: Limit order {i} placed: {mirror_order_id[:8]}...")
+                                execution_data['mirror_orders'].append(mirror_order_id)
                             else:
                                 mirror_results["limits"].append({"order": i, "success": False, "type": order_type})
                                 mirror_results["errors"].append(f"Limit order {i} failed")
+                                execution_data['mirror_errors'].append(f"Limit order {i} failed")
                         except Exception as e:
                             self.logger.error(f"❌ MIRROR: Failed to place limit order {i}: {e}")
                             mirror_results["limits"].append({"order": i, "success": False, "type": order_type})
                             mirror_results["errors"].append(f"Limit order {i} error: {str(e)}")
+                            execution_data['mirror_errors'].append(f"Limit order {i} error: {str(e)}")
                 else:
                     self.logger.warning(f"⚠️ Limit order {i} failed")
                     errors.append(f"Limit order {i} placement failed")
+                    execution_data['main_errors'].append(f"Limit order {i} placement failed")
             
             chat_data[LIMIT_ORDER_IDS] = limit_order_ids
             
@@ -1447,6 +1498,15 @@ class TradeExecutor:
                     self.logger.info(f"✅ TP{i} order placed: {order_id}")
                     placed_tp_count += 1
                     
+                    # Track TP order
+                    execution_data['tp_orders'].append({
+                        'order_id': order_id,
+                        'price': float(tp_price),
+                        'qty': float(tp_qty),
+                        'level': i,
+                        'percentage': int(tp_pct * 100)
+                    })
+                    
                     # MIRROR TRADING: Place TP order on second account
                     if mirror_results["enabled"]:
                         try:
@@ -1512,6 +1572,13 @@ class TradeExecutor:
                         "qty": final_sl_qty
                     }
                     self.logger.info(f"✅ SL order placed: {sl_order_id}")
+                    
+                    # Track SL order
+                    execution_data['sl_orders'].append({
+                        'order_id': sl_order_id,
+                        'price': float(sl_price),
+                        'qty': float(final_sl_qty)
+                    })
                     
                     # MIRROR TRADING: Place SL order on second account
                     if mirror_results["enabled"]:
@@ -1580,6 +1647,26 @@ class TradeExecutor:
                 "max_reward": str(max_reward),
                 "executed_at": time.time()
             }
+            
+            # Record execution summary if module is available
+            if EXECUTION_SUMMARY_AVAILABLE:
+                try:
+                    execution_data['risk_reward_ratio'] = float(risk_reward_ratio)
+                    execution_data['main_fill_status'] = 'pending'
+                    execution_data['mirror_fill_status'] = 'pending' if mirror_results["enabled"] else 'N/A'
+                    execution_data['main_execution_time'] = time.time() - start_time
+                    execution_data['mirror_execution_time'] = time.time() - start_time if mirror_results["enabled"] else 0
+                    execution_data['mirror_enabled'] = mirror_results["enabled"]
+                    execution_data['mirror_sync_status'] = 'synced' if mirror_results["enabled"] and not mirror_results["errors"] else 'partial' if mirror_results["enabled"] else 'N/A'
+                    execution_data['total_orders'] = len(limit_order_ids) + len(tp_order_ids) + (1 if sl_order_id else 0)
+                    execution_data['successful_orders'] = len(limit_order_ids) + len(tp_order_ids) + (1 if sl_order_id else 0)
+                    execution_data['failed_orders'] = len(errors)
+                    execution_data['avg_fill_time'] = (time.time() - start_time) / execution_data['total_orders'] if execution_data['total_orders'] > 0 else 0
+                    
+                    await execution_summary.record_execution(trade_group_id, execution_data)
+                    self.logger.info(f"✅ Execution summary recorded for trade {trade_group_id}")
+                except Exception as e:
+                    self.logger.error(f"Failed to record execution summary: {e}")
             
             # Start monitoring for this position
             try:
@@ -2695,6 +2782,29 @@ class TradeExecutor:
             if sl_result and sl_result.get("orderId"):
                 chat_data[SL_ORDER_ID] = sl_result.get("orderId")
                 self.logger.info(f"✅ Placed SL at {merged_params['sl_price']} for {sl_qty} qty")
+                
+            # Record merge decision to execution summary
+            if EXECUTION_SUMMARY_AVAILABLE:
+                try:
+                    merge_decision = {
+                        'merged': True,
+                        'reason': 'Same symbol and side position exists',
+                        'existing_size': float(merged_params['existing_size']),
+                        'new_size': float(add_qty),
+                        'approach': 'conservative',
+                        'parameters_changed': parameters_changed,
+                        'sl_changed': merged_params.get('sl_changed', False),
+                        'tp_changed': merged_params.get('tps_changed', False),
+                        'details': {
+                            'sl_selection': 'Conservative (safer) SL chosen',
+                            'tp_selection': 'Aggressive (better) TPs chosen',
+                            'limit_orders': 'Replaced' if parameters_changed else 'Preserved'
+                        }
+                    }
+                    await execution_summary.record_merge_decision(symbol, side, merge_decision)
+                    self.logger.info(f"✅ Merge decision recorded for {symbol} {side}")
+                except Exception as e:
+                    self.logger.error(f"Failed to record merge decision: {e}")
             
             # Mirror trading for merge
             mirror_results = {"market": None, "tps": [], "sl": None, "errors": []}
@@ -2741,6 +2851,70 @@ class TradeExecutor:
                 )
                 mirror_results["sl"] = mirror_sl
             
+            # Record merge execution to summary
+            if EXECUTION_SUMMARY_AVAILABLE:
+                try:
+                    execution_time_total = time.time() - start_time
+                    merge_execution_data = {
+                        'trade_id': trade_group_id,
+                        'symbol': symbol,
+                        'side': side,
+                        'approach': 'conservative',
+                        'leverage': leverage,
+                        'margin_amount': float(margin_amount),
+                        'position_size': float(merged_params['merged_size']),
+                        'entry_price': float(fill_price),
+                        'main_orders': [order_id] + new_limit_order_ids + tp_order_ids + ([chat_data.get(SL_ORDER_ID)] if chat_data.get(SL_ORDER_ID) else []),
+                        'main_fill_status': 'filled',
+                        'main_execution_time': execution_time_total,
+                        'main_errors': [],
+                        'position_merged': True,
+                        'merge_reason': 'Same symbol and side',
+                        'existing_position': {
+                            'size': float(merged_params['existing_size']),
+                            'orders': len(existing_data.get('orders', []))
+                        },
+                        'new_position': {
+                            'size': float(merged_params['merged_size']),
+                            'sl': float(merged_params['sl_price']),
+                            'tps': [{'price': float(tp['price']), 'pct': tp['percentage']} for tp in merged_params['take_profits']]
+                        },
+                        'merged_parameters': {
+                            'sl_changed': merged_params.get('sl_changed', False),
+                            'tps_changed': merged_params.get('tps_changed', False),
+                            'limit_orders_replaced': parameters_changed
+                        },
+                        'tp_orders': [{'order_id': oid, 'level': i+1} for i, oid in enumerate(tp_order_ids)],
+                        'sl_orders': [{'order_id': chat_data.get(SL_ORDER_ID)}] if chat_data.get(SL_ORDER_ID) else [],
+                        'market_orders': [{'order_id': order_id, 'qty': float(add_qty), 'type': 'merge_add'}],
+                        'limit_orders': [{'order_id': oid} for oid in new_limit_order_ids],
+                        'risk_reward_ratio': float(3.0),  # Default estimate
+                        'total_orders': 1 + len(new_limit_order_ids) + len(tp_order_ids) + (1 if chat_data.get(SL_ORDER_ID) else 0),
+                        'successful_orders': 1 + len(new_limit_order_ids) + len(tp_order_ids) + (1 if chat_data.get(SL_ORDER_ID) else 0),
+                        'failed_orders': 0,
+                        'avg_fill_time': execution_time_total / (1 + len(new_limit_order_ids) + len(tp_order_ids) + (1 if chat_data.get(SL_ORDER_ID) else 0)),
+                        'mirror_enabled': MIRROR_TRADING_AVAILABLE and is_mirror_trading_enabled(),
+                        'mirror_orders': [],
+                        'mirror_errors': mirror_results.get('errors', []),
+                        'mirror_fill_status': 'filled' if mirror_results.get('market') else 'failed',
+                        'mirror_sync_status': 'synced' if mirror_results.get('market') and not mirror_results.get('errors') else 'partial',
+                        'mirror_execution_time': execution_time_total
+                    }
+                    
+                    # Add mirror order IDs if available
+                    if mirror_results.get('market') and mirror_results['market'].get('orderId'):
+                        merge_execution_data['mirror_orders'].append(mirror_results['market']['orderId'])
+                    for tp in mirror_results.get('tps', []):
+                        if tp and tp.get('orderId'):
+                            merge_execution_data['mirror_orders'].append(tp['orderId'])
+                    if mirror_results.get('sl') and mirror_results['sl'].get('orderId'):
+                        merge_execution_data['mirror_orders'].append(mirror_results['sl']['orderId'])
+                        
+                    await execution_summary.record_execution(trade_group_id, merge_execution_data)
+                    self.logger.info(f"✅ Merge execution recorded for trade {trade_group_id}")
+                except Exception as e:
+                    self.logger.error(f"Failed to record merge execution: {e}")
+                    
             # Start monitoring
             monitor_started = False
             try:

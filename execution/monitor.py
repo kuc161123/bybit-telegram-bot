@@ -38,6 +38,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Import execution summary module
+try:
+    from execution.execution_summary import execution_summary
+    EXECUTION_SUMMARY_AVAILABLE = True
+except ImportError:
+    EXECUTION_SUMMARY_AVAILABLE = False
+    logger.warning("Execution summary module not available")
+
 def safe_decimal_conversion(value, default=Decimal("0")):
     """Safely convert value to Decimal with validation"""
     try:
@@ -1673,6 +1681,19 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                 # Check if monitoring should stop
                 if not chat_data.get(ACTIVE_MONITOR_TASK, {}).get("active"):
                     logger.info(f"🛑 {monitoring_mode} monitoring stopped for {symbol} (deactivated)")
+                    # Mark monitor as inactive in execution summary
+                    if EXECUTION_SUMMARY_AVAILABLE:
+                        try:
+                            monitor_id = f"{chat_id}_{symbol}_{approach}"
+                            await execution_summary.update_monitor_health(monitor_id, {
+                                'symbol': symbol,
+                                'approach': approach,
+                                'account': 'primary',
+                                'status': 'inactive',
+                                'last_check': time.time()
+                            })
+                        except Exception as e:
+                            logger.debug(f"Failed to mark monitor inactive: {e}")
                     break
                 
                 # PERFORMANCE: Smart position monitoring with change detection
@@ -1742,6 +1763,27 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                 if current_size > 0 and unrealized_pnl != 0:
                     last_known_pnl = unrealized_pnl
                     chat_data["last_known_pnl"] = str(last_known_pnl)  # Store for accurate calculation
+                    
+                # Report monitor health to execution summary
+                if EXECUTION_SUMMARY_AVAILABLE and monitoring_cycles % 10 == 0:  # Report every 10 cycles
+                    try:
+                        monitor_id = f"{chat_id}_{symbol}_{approach}"
+                        health_data = {
+                            'symbol': symbol,
+                            'approach': approach,
+                            'account': 'primary',
+                            'status': 'active',
+                            'last_check': time.time(),
+                            'errors': 0,
+                            'restarts': 0,
+                            'position_size': float(current_size),
+                            'unrealized_pnl': float(unrealized_pnl),
+                            'monitoring_mode': monitoring_mode,
+                            'cycles': monitoring_cycles
+                        }
+                        await execution_summary.update_monitor_health(monitor_id, health_data)
+                    except Exception as e:
+                        logger.debug(f"Failed to report monitor health: {e}")
                 
                 # ENHANCED: Conservative/GGShot approach monitoring with dual TP1 logic
                 if ((approach == "conservative" or approach == "ggshot") and 
@@ -1941,6 +1983,23 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                 
             except Exception as e:
                 logger.error(f"❌ Error in {monitoring_mode} monitor loop: {e}", exc_info=True)
+                # Report error to execution summary
+                if EXECUTION_SUMMARY_AVAILABLE:
+                    try:
+                        monitor_id = f"{chat_id}_{symbol}_{approach}"
+                        health_data = await execution_summary._monitor_health.get(monitor_id, {})
+                        error_count = health_data.get('errors', 0) + 1
+                        await execution_summary.update_monitor_health(monitor_id, {
+                            'symbol': symbol,
+                            'approach': approach,
+                            'account': 'primary',
+                            'status': 'error',
+                            'last_check': time.time(),
+                            'errors': error_count,
+                            'last_error': str(e)
+                        })
+                    except Exception as health_error:
+                        logger.debug(f"Failed to report monitor error: {health_error}")
                 await asyncio.sleep(15)  # Wait longer on error
         
     finally:
@@ -2092,6 +2151,19 @@ async def monitor_mirror_position_loop_enhanced(ctx_app, chat_id: int, chat_data
                 mirror_task_info = chat_data.get(MIRROR_ACTIVE_MONITOR_TASK, {})
                 if not mirror_task_info.get("active", True):
                     logger.info(f"🛑 {monitoring_mode} monitoring stopped for {symbol} (deactivated)")
+                    # Mark mirror monitor as inactive in execution summary
+                    if EXECUTION_SUMMARY_AVAILABLE:
+                        try:
+                            monitor_id = f"{chat_id}_{symbol}_{approach}_mirror"
+                            await execution_summary.update_monitor_health(monitor_id, {
+                                'symbol': symbol,
+                                'approach': approach,
+                                'account': 'mirror',
+                                'status': 'inactive',
+                                'last_check': time.time()
+                            })
+                        except Exception as e:
+                            logger.debug(f"Failed to mark mirror monitor inactive: {e}")
                     break
                 
                 # Get mirror position data
@@ -2144,6 +2216,27 @@ async def monitor_mirror_position_loop_enhanced(ctx_app, chat_id: int, chat_data
                 if current_size > 0 and unrealized_pnl != 0:
                     last_known_pnl = unrealized_pnl
                     chat_data["last_known_mirror_pnl"] = str(last_known_pnl)
+                    
+                # Report mirror monitor health to execution summary
+                if EXECUTION_SUMMARY_AVAILABLE and monitoring_cycles % 10 == 0:  # Report every 10 cycles
+                    try:
+                        monitor_id = f"{chat_id}_{symbol}_{approach}_mirror"
+                        health_data = {
+                            'symbol': symbol,
+                            'approach': approach,
+                            'account': 'mirror',
+                            'status': 'active',
+                            'last_check': time.time(),
+                            'errors': 0,
+                            'restarts': 0,
+                            'position_size': float(current_size),
+                            'unrealized_pnl': float(unrealized_pnl),
+                            'monitoring_mode': monitoring_mode,
+                            'cycles': monitoring_cycles
+                        }
+                        await execution_summary.update_monitor_health(monitor_id, health_data)
+                    except Exception as e:
+                        logger.debug(f"Failed to report mirror monitor health: {e}")
                 
                 # Position closure detection
                 if current_size == 0:

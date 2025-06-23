@@ -792,6 +792,132 @@ async def build_analytics_dashboard_text(chat_data: Any, bot_data: Any) -> str:
 └ 🎯 AI Insight: {ai_analysis.get('ai_insights', 'Analysis based on market conditions')[:70]}...
 """
         
+        # Add execution summary section
+        try:
+            from execution.execution_summary import execution_summary
+            
+            # Get monitor summary
+            monitor_summary = await execution_summary.get_monitor_summary()
+            monitor_counts = monitor_summary.get('counts', {})
+            monitor_details = monitor_summary.get('details', [])
+            
+            # Get execution stats
+            exec_stats = await execution_summary.get_execution_stats()
+            
+            # Get latest executions
+            latest_executions = await execution_summary.get_latest_executions(3)
+            
+            dashboard += f"""
+🎯 <b>MONITOR OVERVIEW</b>
+┌─────────────────────────────────────
+│ <b>PRIMARY ACCOUNT</b>
+├ ⚡ Fast: {monitor_counts['primary']['fast']} monitors
+├ 🛡️ Conservative: {monitor_counts['primary']['conservative']} monitors
+├ 📸 GGShot: {monitor_counts['primary']['ggshot']} monitors
+└ 📊 Total: {monitor_counts['primary']['total']} active
+"""
+            
+            if mirror_trading_enabled:
+                dashboard += f"""
+│ <b>MIRROR ACCOUNT</b>
+├ ⚡ Fast: {monitor_counts['mirror']['fast']} monitors
+├ 🛡️ Conservative: {monitor_counts['mirror']['conservative']} monitors
+├ 📸 GGShot: {monitor_counts['mirror']['ggshot']} monitors
+└ 📊 Total: {monitor_counts['mirror']['total']} active
+"""
+            
+            # Add monitor details
+            if monitor_details:
+                dashboard += f"\n│ <b>ACTIVE MONITORS</b>\n"
+                for i, monitor in enumerate(monitor_details[:5]):  # Show top 5
+                    status_emoji = "🟢" if monitor['status'] == 'active' else "🟡" if monitor['status'] == 'error' else "⚫"
+                    account_tag = "🪞" if monitor['account'] == 'mirror' else "📍"
+                    approach_tag = monitor['approach'][:1].upper()
+                    pnl = monitor.get('pnl', 0)
+                    if pnl != 0:
+                        pnl_str = f"+${format_number(pnl)}" if pnl > 0 else f"-${format_number(abs(pnl))}"
+                    else:
+                        pnl_str = "$0"
+                    prefix = "├" if i < len(monitor_details[:5]) - 1 else "└"
+                    dashboard += f"{prefix} {status_emoji} {monitor['symbol']} ({approach_tag}) {account_tag} P&L: {pnl_str}\n"
+                if len(monitor_details) > 5:
+                    dashboard += f"  └ ...and {len(monitor_details) - 5} more\n"
+            
+            # Build execution summary section
+            exec_summary = """
+📋 <b>EXECUTION SUMMARY</b>
+├ Total Executions: {}
+├ Success Rate: {:.1f}%
+├ Order Fill Rate: {:.1f}%/{} orders
+""".format(
+                exec_stats['total_trades'],
+                exec_stats['success_rate'],
+                exec_stats['order_success_rate'],
+                exec_stats['total_orders']
+            )
+            
+            # Add position merges
+            if exec_stats['total_trades'] > 0:
+                merge_pct = exec_stats['total_merges'] / exec_stats['total_trades'] * 100
+                exec_summary += f"├ Position Merges: {exec_stats['total_merges']} ({merge_pct:.0f}% of trades)\n"
+            else:
+                exec_summary += f"├ Position Merges: {exec_stats['total_merges']}\n"
+            
+            exec_summary += f"├ Main Exec Time: {exec_stats['avg_main_exec_time']:.2f}s avg\n"
+            
+            if mirror_trading_enabled and exec_stats['avg_mirror_exec_time'] > 0:
+                exec_summary += f"├ Mirror Exec Time: {exec_stats['avg_mirror_exec_time']:.2f}s avg\n"
+                exec_summary += f"├ Mirror Sync: {exec_stats.get('mirror_sync_rate', 0):.1f}% synced\n"
+            
+            # Add approach breakdown
+            if exec_stats['total_trades'] > 0:
+                fast_pct = exec_stats['approaches']['fast'] / exec_stats['total_trades'] * 100
+                cons_pct = exec_stats['approaches']['conservative'] / exec_stats['total_trades'] * 100
+                gg_pct = exec_stats['approaches']['ggshot'] / exec_stats['total_trades'] * 100
+                exec_summary += f"├ Fast Trades: {exec_stats['approaches']['fast']} ({fast_pct:.0f}%)\n"
+                exec_summary += f"├ Conservative: {exec_stats['approaches']['conservative']} ({cons_pct:.0f}%)\n"
+                exec_summary += f"└ GGShot: {exec_stats['approaches']['ggshot']} ({gg_pct:.0f}%)\n"
+            else:
+                exec_summary += f"├ Fast Trades: {exec_stats['approaches']['fast']}\n"
+                exec_summary += f"├ Conservative: {exec_stats['approaches']['conservative']}\n"
+                exec_summary += f"└ GGShot: {exec_stats['approaches']['ggshot']}\n"
+            
+            dashboard += exec_summary
+            
+            # Add latest executions
+            if latest_executions:
+                dashboard += f"\n🚀 <b>RECENT EXECUTIONS</b>\n"
+                for i, exec_data in enumerate(latest_executions):
+                    time_ago = int((time.time() - exec_data['timestamp']) / 60)
+                    if time_ago < 1:
+                        time_str = "just now"
+                    elif time_ago == 1:
+                        time_str = "1 min ago"
+                    elif time_ago < 60:
+                        time_str = f"{time_ago} mins ago"
+                    elif time_ago < 120:
+                        time_str = "1 hour ago"
+                    else:
+                        time_str = f"{int(time_ago/60)} hours ago"
+                    
+                    status_emoji = "✅" if exec_data['metrics']['failed_orders'] == 0 else "⚠️"
+                    merge_tag = "🔄" if exec_data['merge_info']['position_merged'] else ""
+                    mirror_tag = "🪞" if exec_data['mirror_account']['enabled'] else ""
+                    
+                    side_emoji = "📈" if exec_data['side'] == 'Buy' else "📉"
+                    approach_short = exec_data['approach'][:1].upper()
+                    
+                    prefix = "├" if i < len(latest_executions) - 1 else "└"
+                    dashboard += f"{prefix} {status_emoji} {exec_data['symbol']} {side_emoji} ({approach_short}) {merge_tag}{mirror_tag} - {time_str}\n"
+                    
+                    # Add sub-details for merges
+                    if exec_data['merge_info']['position_merged']:
+                        sub_prefix = "│ " if i < len(latest_executions) - 1 else "  "
+                        dashboard += f"{sub_prefix}  └ Merged: {exec_data['merge_info']['merge_reason']}\n"
+            
+        except Exception as e:
+            logger.warning(f"Could not load execution summary: {e}")
+        
         dashboard += f"""
 ⚖️ <b>ACTIVE MANAGEMENT</b>
 ├ Primary Monitors: {active_monitor_count} ({fast_monitor_count}F/{conservative_monitor_count}C)
