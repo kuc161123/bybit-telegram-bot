@@ -19,7 +19,7 @@ import hashlib
 import json
 
 from config.constants import *
-from config.settings import POSITION_MONITOR_INTERVAL
+from config.settings import POSITION_MONITOR_INTERVAL, ENABLE_MIRROR_TRADING
 from clients.bybit_helpers import (
     get_position_info, get_order_info, 
     cancel_order_with_retry, amend_order_with_retry
@@ -27,6 +27,14 @@ from clients.bybit_helpers import (
 from utils.formatters import get_emoji, format_decimal_or_na
 from utils.helpers import value_adjusted_to_step, safe_decimal_conversion
 from utils.alert_helpers import send_trade_alert, send_position_closed_summary
+
+# Import mirror trading components
+try:
+    from execution.mirror_trader import bybit_client_2, is_mirror_trading_enabled
+    MIRROR_TRADING_AVAILABLE = True
+except ImportError:
+    MIRROR_TRADING_AVAILABLE = False
+    bybit_client_2 = None
 
 logger = logging.getLogger(__name__)
 
@@ -220,16 +228,18 @@ _task_registry = TaskRegistry()
 async def register_monitor_task(chat_id: int, symbol: str, task, metadata: Dict[str, Any] = None):
     """Register a monitor task for tracking"""
     approach = metadata.get('approach', 'fast') if metadata else 'fast'
-    task_key = f"{chat_id}_{symbol}_{approach}"
+    account_type = metadata.get('account_type', ACCOUNT_TYPE_PRIMARY) if metadata else ACCOUNT_TYPE_PRIMARY
+    task_key = f"{chat_id}_{symbol}_{approach}_{account_type}"
     enhanced_metadata = {
         "chat_id": chat_id,
         "symbol": symbol,
         "approach": approach,
+        "account_type": account_type,
         "type": "position_monitor",
         **(metadata or {})
     }
     _task_registry.register_task(task_key, task, enhanced_metadata)
-    logger.info(f"📋 Registered monitor task for {symbol} ({approach}) in chat {chat_id}")
+    logger.info(f"📋 Registered {account_type} monitor task for {symbol} ({approach}) in chat {chat_id}")
     
     # Also store in bot_data for dashboard access
     try:
@@ -241,33 +251,49 @@ async def register_monitor_task(chat_id: int, symbol: str, task, metadata: Dict[
     except:
         pass
 
-async def unregister_monitor_task(chat_id: int, symbol: str, approach: str = None):
+async def unregister_monitor_task(chat_id: int, symbol: str, approach: str = None, account_type: str = None):
     """Unregister a monitor task"""
     # If approach not specified, try to get it from chat_data or unregister both
-    if approach:
-        task_key = f"{chat_id}_{symbol}_{approach}"
+    if approach and account_type:
+        task_key = f"{chat_id}_{symbol}_{approach}_{account_type}"
         _task_registry.unregister_task(task_key)
-        logger.info(f"📋 Unregistered monitor task for {symbol} ({approach}) in chat {chat_id}")
-    else:
-        # Try both approaches if not specified
-        for app in ['fast', 'conservative']:
-            task_key = f"{chat_id}_{symbol}_{app}"
+        logger.info(f"📋 Unregistered {account_type} monitor task for {symbol} ({approach}) in chat {chat_id}")
+    elif approach:
+        # Try both account types if account_type not specified
+        for acc_type in [ACCOUNT_TYPE_PRIMARY, ACCOUNT_TYPE_MIRROR]:
+            task_key = f"{chat_id}_{symbol}_{approach}_{acc_type}"
             if task_key in _task_registry._tasks:
                 _task_registry.unregister_task(task_key)
-                logger.info(f"📋 Unregistered monitor task for {symbol} ({app}) in chat {chat_id}")
+                logger.info(f"📋 Unregistered {acc_type} monitor task for {symbol} ({approach}) in chat {chat_id}")
+    else:
+        # Try all combinations if neither specified
+        for app in ['fast', 'conservative']:
+            for acc_type in [ACCOUNT_TYPE_PRIMARY, ACCOUNT_TYPE_MIRROR]:
+                task_key = f"{chat_id}_{symbol}_{app}_{acc_type}"
+                if task_key in _task_registry._tasks:
+                    _task_registry.unregister_task(task_key)
+                    logger.info(f"📋 Unregistered {acc_type} monitor task for {symbol} ({app}) in chat {chat_id}")
 
-async def get_monitor_task_status(chat_id: int, symbol: str, approach: str = None) -> Dict:
+async def get_monitor_task_status(chat_id: int, symbol: str, approach: str = None, account_type: str = None) -> Dict:
     """Get the status of a monitor task"""
-    if approach:
-        task_key = f"{chat_id}_{symbol}_{approach}"
+    if approach and account_type:
+        task_key = f"{chat_id}_{symbol}_{approach}_{account_type}"
         return _task_registry.get_task_status(task_key)
-    
-    # If no approach specified, check both
-    for app in ['fast', 'conservative']:
-        task_key = f"{chat_id}_{symbol}_{app}"
-        status = _task_registry.get_task_status(task_key)
-        if status.get('exists') and status.get('running'):
-            return status
+    elif approach:
+        # Check both account types if account_type not specified
+        for acc_type in [ACCOUNT_TYPE_PRIMARY, ACCOUNT_TYPE_MIRROR]:
+            task_key = f"{chat_id}_{symbol}_{approach}_{acc_type}"
+            status = _task_registry.get_task_status(task_key)
+            if status.get('exists') and status.get('running'):
+                return status
+    else:
+        # If no approach specified, check all combinations
+        for app in ['fast', 'conservative']:
+            for acc_type in [ACCOUNT_TYPE_PRIMARY, ACCOUNT_TYPE_MIRROR]:
+                task_key = f"{chat_id}_{symbol}_{app}_{acc_type}"
+                status = _task_registry.get_task_status(task_key)
+                if status.get('exists') and status.get('running'):
+                    return status
     
     # Return not found status
     return {"exists": False, "running": False, "task_key": f"{chat_id}_{symbol}_unknown"}
@@ -276,6 +302,75 @@ def get_monitoring_mode(chat_data: dict) -> str:
     """Get the monitoring mode description - all trades are bot trades now"""
     approach = chat_data.get(TRADING_APPROACH, "fast")
     return f"BOT-{approach.upper()}"
+
+# =============================================
+# MIRROR ACCOUNT POSITION MONITORING FUNCTIONS
+# =============================================
+
+async def get_mirror_position_info(symbol: str) -> Optional[List[Dict]]:
+    """Get position information from mirror account"""
+    if not MIRROR_TRADING_AVAILABLE or not bybit_client_2:
+        return []
+    
+    try:
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: bybit_client_2.get_positions(
+                category="linear",
+                symbol=symbol
+            )
+        )
+        
+        if response and response.get("retCode") == 0:
+            result = response.get("result", {})
+            positions = result.get("list", [])
+            return positions
+        
+        return []
+        
+    except Exception as e:
+        logger.error(f"Error fetching mirror position info for {symbol}: {e}")
+        return []
+
+async def get_mirror_order_info(symbol: str, order_id: str) -> Optional[Dict]:
+    """Get order information from mirror account"""
+    if not MIRROR_TRADING_AVAILABLE or not bybit_client_2:
+        return None
+    
+    try:
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: bybit_client_2.get_order_history(
+                category="linear",
+                symbol=symbol,
+                orderId=order_id
+            )
+        )
+        
+        if response and response.get("retCode") == 0:
+            orders = response.get("result", {}).get("list", [])
+            if orders:
+                return orders[0]
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error fetching mirror order info: {e}")
+        return None
+
+async def cancel_mirror_order_with_retry(symbol: str, order_id: str) -> bool:
+    """Cancel order on mirror account with retry logic"""
+    if not MIRROR_TRADING_AVAILABLE or not bybit_client_2:
+        return False
+    
+    try:
+        from execution.mirror_trader import cancel_mirror_order
+        return await cancel_mirror_order(symbol, order_id)
+    except Exception as e:
+        logger.error(f"Error cancelling mirror order: {e}")
+        return False
 
 # =============================================
 # ENHANCED: CONSERVATIVE APPROACH ORDER MANAGEMENT (ONLY FOR FULL MONITORING)
@@ -907,6 +1002,17 @@ async def calculate_accurate_pnl(position_data: dict, chat_data: dict) -> Decima
     try:
         pnl = Decimal("0")
         
+        # Check if position_data is valid
+        if not position_data:
+            logger.warning("⚠️ No position data provided for P&L calculation")
+            # Try to use last known P&L from chat data
+            last_known_pnl = chat_data.get("last_known_pnl")
+            if last_known_pnl:
+                pnl = safe_decimal_conversion(last_known_pnl)
+                logger.info(f"📊 P&L from last known (no position data): {pnl}")
+                return pnl
+            return Decimal("0")
+        
         # Method 1: Use cumRealisedPnl (most accurate for closed positions)
         cum_realised_pnl = position_data.get("cumRealisedPnl")
         if cum_realised_pnl and str(cum_realised_pnl) != "0":
@@ -932,11 +1038,15 @@ async def calculate_accurate_pnl(position_data: dict, chat_data: dict) -> Decima
         entry_price = safe_decimal_conversion(position_data.get("avgPrice", "0"))
         mark_price = safe_decimal_conversion(position_data.get("markPrice", "0"))
         size = safe_decimal_conversion(position_data.get("size", "0"))
-        side = position_data.get("side", "")
+        side = position_data.get("side", chat_data.get(SIDE, ""))
         
         # If size is 0, try to get from chat data
         if size == 0:
             size = safe_decimal_conversion(chat_data.get(LAST_KNOWN_POSITION_SIZE, "0"))
+        
+        # If entry price is 0, try to get from chat data
+        if entry_price == 0:
+            entry_price = safe_decimal_conversion(chat_data.get(PRIMARY_ENTRY_PRICE, "0"))
         
         if entry_price > 0 and mark_price > 0 and size > 0:
             if side == "Buy":
@@ -969,8 +1079,12 @@ async def update_performance_stats_on_close(ctx_app, chat_data: dict, position_d
     All positions are bot trades now
     """
     try:
-        # Get bot data
+        # Get bot data - CRITICAL: Use the application's bot_data directly
         bot_data = ctx_app.bot_data
+        
+        # Log the application instance for debugging
+        logger.info(f"📊 Using application instance: {type(ctx_app).__name__}")
+        logger.info(f"📊 Application has bot_data: {hasattr(ctx_app, 'bot_data')}")
         
         monitoring_mode = get_monitoring_mode(chat_data)
         is_external = False  # All positions are bot trades now
@@ -1026,6 +1140,9 @@ async def update_performance_stats_on_close(ctx_app, chat_data: dict, position_d
             'stats_total_wins_pnl': Decimal("0"),
             'stats_total_losses_pnl': Decimal("0"),
             'stats_max_drawdown': Decimal("0"),
+            'stats_peak_equity': Decimal("0"),
+            'stats_current_drawdown': Decimal("0"),
+            'recent_trade_pnls': [],  # List of recent trade P&Ls for trend chart
             'bot_start_time': time.time()
         }
         
@@ -1133,6 +1250,36 @@ async def update_performance_stats_on_close(ctx_app, chat_data: dict, position_d
             if pnl < bot_data[STATS_WORST_TRADE]:
                 bot_data[STATS_WORST_TRADE] = pnl
                 logger.info(f"📉 New worst trade: {pnl}")
+            
+            # Track recent trade P&Ls for trend chart
+            recent_pnls = bot_data.get('recent_trade_pnls', [])
+            recent_pnls.append(float(pnl))
+            # Keep only last 30 trades
+            if len(recent_pnls) > 30:
+                recent_pnls = recent_pnls[-30:]
+            bot_data['recent_trade_pnls'] = recent_pnls
+            logger.info(f"📈 Added to recent trades trend (now {len(recent_pnls)} trades)")
+            
+            # Update max drawdown tracking
+            current_equity = bot_data.get(STATS_TOTAL_PNL, Decimal("0"))
+            peak_equity = bot_data.get('stats_peak_equity', Decimal("0"))
+            
+            # Update peak equity if we have a new high
+            if current_equity > peak_equity:
+                bot_data['stats_peak_equity'] = current_equity
+                peak_equity = current_equity
+                logger.info(f"🏔️ New peak equity: {peak_equity}")
+            
+            # Calculate current drawdown from peak
+            if peak_equity > 0:
+                current_drawdown = ((peak_equity - current_equity) / peak_equity * 100)
+                bot_data['stats_current_drawdown'] = current_drawdown
+                
+                # Update max drawdown if current is larger
+                max_drawdown = bot_data.get('stats_max_drawdown', Decimal("0"))
+                if current_drawdown > max_drawdown:
+                    bot_data['stats_max_drawdown'] = current_drawdown
+                    logger.info(f"📉 New max drawdown: {current_drawdown:.2f}%")
         
         # Mark trade as processed
         await _trade_history.mark_trade_processed(trade_id, trade_details)
@@ -1176,10 +1323,31 @@ async def update_performance_stats_on_close(ctx_app, chat_data: dict, position_d
             logger.info(f"   Fast Trades: {fast_trades}")
             logger.info(f"   TP1 Cancellations: {conservative_cancellations}")
         
-        # FIXED: Force immediate persistence - multiple attempts
+        # FIXED: Force immediate persistence with verification
         logger.info(f"🔄 FORCING IMMEDIATE PERSISTENCE...")
         
+        # Log current stats before persistence
+        logger.info(f"📊 STATS BEFORE PERSISTENCE:")
+        logger.info(f"   Total Trades: {bot_data.get(STATS_TOTAL_TRADES, 0)}")
+        logger.info(f"   Total Wins: {bot_data.get(STATS_TOTAL_WINS, 0)}")
+        logger.info(f"   Total Losses: {bot_data.get(STATS_TOTAL_LOSSES, 0)}")
+        logger.info(f"   Total P&L: {bot_data.get(STATS_TOTAL_PNL, 0)}")
+        logger.info(f"   Wins P&L: {bot_data.get('stats_total_wins_pnl', 0)}")
+        logger.info(f"   Losses P&L: {bot_data.get('stats_total_losses_pnl', 0)}")
+        
         try:
+            # Check bot_data reference
+            logger.info(f"📊 Bot data object ID: {id(bot_data)}")
+            logger.info(f"📊 ctx_app bot_data ID: {id(ctx_app.bot_data)}")
+            
+            # Ensure we're modifying the right bot_data
+            if id(bot_data) != id(ctx_app.bot_data):
+                logger.warning(f"⚠️ Bot data mismatch! Using ctx_app.bot_data directly")
+                # Copy all stats to ctx_app.bot_data
+                for key in [STATS_TOTAL_TRADES, STATS_TOTAL_WINS, STATS_TOTAL_LOSSES, 
+                           STATS_TOTAL_PNL, 'stats_total_wins_pnl', 'stats_total_losses_pnl']:
+                    ctx_app.bot_data[key] = bot_data.get(key)
+            
             # Method 1: Direct persistence call
             await ctx_app.update_persistence()
             logger.info(f"✅ Persistence update 1 completed")
@@ -1190,15 +1358,23 @@ async def update_performance_stats_on_close(ctx_app, chat_data: dict, position_d
             logger.info(f"✅ Persistence update 2 completed")
             
             # Method 3: Mark bot data as dirty to force update
-            ctx_app._bot_data_dirty = True
-            await asyncio.sleep(0.1)
-            await ctx_app.update_persistence()
-            logger.info(f"✅ Persistence update 3 completed (dirty flag)")
+            if hasattr(ctx_app, '_bot_data_dirty'):
+                ctx_app._bot_data_dirty = True
+                await asyncio.sleep(0.1)
+                await ctx_app.update_persistence()
+                logger.info(f"✅ Persistence update 3 completed (dirty flag)")
+            
+            # Verify persistence by checking bot_data again
+            logger.info(f"📊 STATS AFTER PERSISTENCE:")
+            logger.info(f"   Total Trades: {ctx_app.bot_data.get(STATS_TOTAL_TRADES, 0)}")
+            logger.info(f"   Total Wins: {ctx_app.bot_data.get(STATS_TOTAL_WINS, 0)}")
+            logger.info(f"   Total Losses: {ctx_app.bot_data.get(STATS_TOTAL_LOSSES, 0)}")
+            logger.info(f"   Total P&L: {ctx_app.bot_data.get(STATS_TOTAL_PNL, 0)}")
             
             logger.info(f"✅ Performance stats FORCE PERSISTED successfully (Trade ID: {trade_id})")
             
         except Exception as e:
-            logger.error(f"❌ Error force persisting stats: {e}")
+            logger.error(f"❌ Error force persisting stats: {e}", exc_info=True)
             # Try one more time with a longer delay
             try:
                 await asyncio.sleep(1)
@@ -1268,17 +1444,151 @@ async def start_position_monitoring(ctx_app, chat_id: int, chat_data: dict):
         
         # Store by approach type for easy counting
         monitor_key = f"{chat_id}_{symbol}_{approach}"
-        bot_data['monitor_tasks'][monitor_key] = {
-            'chat_id': chat_id,
-            'symbol': symbol,
-            'approach': approach,
-            'monitoring_mode': monitoring_mode,
-            'started_at': time.time(),
-            'active': True
-        }
-        logger.info(f"📊 Added monitor to bot_data: {approach} approach for {symbol}")
+        
+        # Validation: Check for existing monitor with same key
+        if monitor_key in bot_data['monitor_tasks']:
+            existing_monitor = bot_data['monitor_tasks'][monitor_key]
+            if existing_monitor.get('active', False):
+                logger.warning(f"⚠️ Monitor already exists for {monitor_key}. Updating instead of creating duplicate.")
+                # Update the existing monitor with new information
+                existing_monitor.update({
+                    'monitoring_mode': monitoring_mode,
+                    'updated_at': time.time(),
+                    'active': True
+                })
+                logger.info(f"📊 Updated existing monitor: {approach} approach for {symbol}")
+            else:
+                # Reactivate inactive monitor
+                existing_monitor.update({
+                    'monitoring_mode': monitoring_mode,
+                    'restarted_at': time.time(),
+                    'active': True
+                })
+                logger.info(f"📊 Reactivated monitor: {approach} approach for {symbol}")
+        else:
+            # Create new monitor
+            bot_data['monitor_tasks'][monitor_key] = {
+                'chat_id': chat_id,
+                'symbol': symbol,
+                'approach': approach,
+                'monitoring_mode': monitoring_mode,
+                'started_at': time.time(),
+                'active': True
+            }
+            logger.info(f"📊 Created new monitor: {approach} approach for {symbol}")
+        
+        # Log monitor separation validation
+        same_symbol_monitors = [k for k in bot_data['monitor_tasks'].keys() 
+                              if k.startswith(f"{chat_id}_{symbol}_")]
+        if len(same_symbol_monitors) > 1:
+            approaches = [bot_data['monitor_tasks'][k].get('approach') for k in same_symbol_monitors]
+            logger.info(f"✅ Monitor separation validated: {symbol} has {len(same_symbol_monitors)} monitors with approaches: {approaches}")
     
     logger.info(f"✅ {monitoring_mode} position monitoring started for {symbol} in chat {chat_id}")
+
+async def start_mirror_position_monitoring(ctx_app, chat_id: int, chat_data: dict):
+    """
+    Start monitoring a mirror account position
+    """
+    if not is_mirror_trading_enabled():
+        logger.info(f"Mirror trading not enabled, skipping mirror monitoring")
+        return
+    
+    monitoring_mode = get_monitoring_mode(chat_data)
+    logger.info(f"🔄 Starting MIRROR {monitoring_mode} position monitoring for chat {chat_id}")
+    
+    # Validate required data
+    symbol = chat_data.get(SYMBOL)
+    if not symbol:
+        logger.error(f"❌ No symbol found for mirror monitoring in chat {chat_id}")
+        return
+    
+    approach = chat_data.get(TRADING_APPROACH, "fast")
+    
+    logger.info(f"📊 Mirror Monitoring: {approach} approach, Mode: {monitoring_mode}")
+    
+    # Check if mirror monitor is already running for this approach
+    task_status = await get_monitor_task_status(chat_id, symbol, approach, ACCOUNT_TYPE_MIRROR)
+    if task_status.get("running", False):
+        logger.info(f"⚠️ MIRROR {monitoring_mode} monitor already running for {symbol} ({approach}) in chat {chat_id}")
+        return
+    
+    # Create a copy of chat_data for mirror monitoring to avoid interference
+    mirror_chat_data = chat_data.copy()
+    
+    # Store mirror monitoring info
+    task_info = {
+        "chat_id": chat_id,
+        "symbol": symbol,
+        "approach": approach,
+        "account_type": ACCOUNT_TYPE_MIRROR,
+        "active": True,
+        "started_at": time.time(),
+        "monitoring_mode": f"MIRROR-{monitoring_mode}"
+    }
+    
+    if MIRROR_ACTIVE_MONITOR_TASK not in mirror_chat_data:
+        mirror_chat_data[MIRROR_ACTIVE_MONITOR_TASK] = {}
+    
+    mirror_chat_data[MIRROR_ACTIVE_MONITOR_TASK] = task_info
+    
+    # Create mirror monitoring task with proper metadata
+    metadata = {
+        "symbol": symbol,
+        "approach": approach,
+        "monitoring_mode": f"MIRROR-{monitoring_mode}",
+        "account_type": ACCOUNT_TYPE_MIRROR
+    }
+    
+    # Create mirror monitoring task
+    monitor_task = asyncio.create_task(monitor_mirror_position_loop_enhanced(ctx_app, chat_id, mirror_chat_data))
+    
+    # Register task in global registry with metadata
+    await register_monitor_task(chat_id, symbol, monitor_task, metadata)
+    
+    # Also store in bot_data for dashboard access
+    if ctx_app and hasattr(ctx_app, 'bot_data'):
+        bot_data = ctx_app.bot_data
+        if 'monitor_tasks' not in bot_data:
+            bot_data['monitor_tasks'] = {}
+        
+        # Store by approach type and account for easy counting
+        monitor_key = f"{chat_id}_{symbol}_{approach}_{ACCOUNT_TYPE_MIRROR}"
+        
+        # Validation: Check for existing mirror monitor with same key
+        if monitor_key in bot_data['monitor_tasks']:
+            existing_monitor = bot_data['monitor_tasks'][monitor_key]
+            if existing_monitor.get('active', False):
+                logger.warning(f"⚠️ MIRROR monitor already exists for {monitor_key}. Updating instead of creating duplicate.")
+                # Update the existing monitor
+                existing_monitor.update({
+                    'monitoring_mode': f"MIRROR-{monitoring_mode}",
+                    'updated_at': time.time(),
+                    'active': True
+                })
+                logger.info(f"📊 Updated existing MIRROR monitor: {approach} approach for {symbol}")
+            else:
+                # Reactivate inactive mirror monitor
+                existing_monitor.update({
+                    'monitoring_mode': f"MIRROR-{monitoring_mode}",
+                    'restarted_at': time.time(),
+                    'active': True
+                })
+                logger.info(f"📊 Reactivated MIRROR monitor: {approach} approach for {symbol}")
+        else:
+            # Create new mirror monitor
+            bot_data['monitor_tasks'][monitor_key] = {
+                'chat_id': chat_id,
+                'symbol': symbol,
+                'approach': approach,
+                'account_type': ACCOUNT_TYPE_MIRROR,
+                'monitoring_mode': f"MIRROR-{monitoring_mode}",
+                'started_at': time.time(),
+                'active': True
+            }
+            logger.info(f"📊 Created new MIRROR monitor: {approach} approach for {symbol}")
+    
+    logger.info(f"✅ MIRROR {monitoring_mode} position monitoring started for {symbol} in chat {chat_id}")
 
 async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict):
     """
@@ -1376,9 +1686,23 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                             break
                 
                 if not position:
-                    logger.warning(f"⚠️ No position data for {symbol} (cycle {monitoring_cycles})")
-                    await asyncio.sleep(5)
-                    continue
+                    # Check if we had a position before (manual close detection)
+                    if last_position_size and last_position_size > 0:
+                        logger.info(f"📊 Position appears to be manually closed for {symbol}")
+                        # Create a synthetic position data for closure handling
+                        position = {
+                            "size": "0",
+                            "markPrice": str(last_position_data.get("markPrice", "0")) if last_position_data else "0",
+                            "side": last_position_data.get("side", "") if last_position_data else "",
+                            "avgPrice": str(last_position_data.get("avgPrice", "0")) if last_position_data else "0",
+                            "unrealisedPnl": "0",
+                            "cumRealisedPnl": str(last_known_pnl) if last_known_pnl else "0"
+                        }
+                        # Process this as a position closure
+                    else:
+                        logger.warning(f"⚠️ No position data for {symbol} (cycle {monitoring_cycles})")
+                        await asyncio.sleep(5)
+                        continue
                 
                 # PERFORMANCE: Cache position data to detect changes and reduce processing
                 current_size = safe_decimal_conversion(position.get("size", "0"))
@@ -1489,8 +1813,14 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                         close_reason = "MANUAL_CLOSE"
                         final_pnl = last_known_pnl
                         
-                        # REFINED: Better P&L calculation
-                        final_pnl = await calculate_accurate_pnl(position, chat_data)
+                        # REFINED: Better P&L calculation - use last_position_data if position is empty
+                        position_for_pnl = last_position_data if last_position_data else position
+                        if position_for_pnl:
+                            final_pnl = await calculate_accurate_pnl(position_for_pnl, chat_data)
+                        else:
+                            # Fallback to last known P&L
+                            final_pnl = last_known_pnl
+                        logger.info(f"📊 Position closed - Final P&L calculated: {final_pnl}")
                         
                         # Determine close reason based on approach and flags
                         if approach == "fast":
@@ -1511,8 +1841,22 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                             cancelled_orders = await cancel_remaining_orders(chat_data, symbol, 'SL')
                         
                         # Update performance stats (for ALL monitoring types)
+                        logger.info(f"📊 Calling update_performance_stats_on_close - Reason: {close_reason}, P&L: {final_pnl}")
+                        # Make sure we have valid position data for stats update
+                        stats_position_data = last_position_data or position
+                        if not stats_position_data or stats_position_data.get("size") == "0":
+                            # Create synthetic position data for stats
+                            stats_position_data = {
+                                "symbol": symbol,
+                                "side": side,
+                                "size": str(last_position_size) if last_position_size else "0",
+                                "avgPrice": str(entry_price) if entry_price else "0",
+                                "markPrice": str(current_price) if current_price else "0",
+                                "cumRealisedPnl": str(final_pnl) if final_pnl else "0",
+                                "unrealisedPnl": "0"
+                            }
                         await update_performance_stats_on_close(
-                            ctx_app, chat_data, last_position_data or position, close_reason, final_pnl
+                            ctx_app, chat_data, stats_position_data, close_reason, final_pnl
                         )
                         
                         # Send position closed summary alert
@@ -1562,6 +1906,19 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                         
                         # Stop monitoring
                         logger.info(f"✅ {monitoring_mode} monitoring completed for {symbol}")
+                        
+                        # Mark monitor as inactive in chat data
+                        if ACTIVE_MONITOR_TASK in chat_data:
+                            chat_data[ACTIVE_MONITOR_TASK]["active"] = False
+                        
+                        # Clean up monitor from bot_data immediately
+                        if ctx_app and hasattr(ctx_app, 'bot_data'):
+                            bot_data = ctx_app.bot_data
+                            monitor_key = f"{chat_id}_{symbol}_{approach}"
+                            if 'monitor_tasks' in bot_data and monitor_key in bot_data['monitor_tasks']:
+                                bot_data['monitor_tasks'][monitor_key]['active'] = False
+                                logger.info(f"📊 Marked monitor as inactive in bot_data: {monitor_key}")
+                        
                         break
                 
                 else:
@@ -1597,22 +1954,37 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
         approach = chat_data.get(TRADING_APPROACH, 'fast')
         await unregister_monitor_task(chat_id, symbol, approach)
         
-        # Remove from bot_data if available
+        # Remove from bot_data if available - ENHANCED cleanup
         if ctx_app and hasattr(ctx_app, 'bot_data'):
             bot_data = ctx_app.bot_data
             approach = chat_data.get(TRADING_APPROACH, 'fast')
             monitor_key = f"{chat_id}_{symbol}_{approach}"
-            if 'monitor_tasks' in bot_data and monitor_key in bot_data['monitor_tasks']:
-                # Mark as inactive first
-                bot_data['monitor_tasks'][monitor_key]['active'] = False
-                # Then delete
-                del bot_data['monitor_tasks'][monitor_key]
-                logger.info(f"📊 Cleaned up monitor from bot_data: {symbol} ({approach})")
+            
+            # Check and remove from monitor_tasks
+            if 'monitor_tasks' in bot_data:
+                if monitor_key in bot_data['monitor_tasks']:
+                    # Mark as inactive first
+                    bot_data['monitor_tasks'][monitor_key]['active'] = False
+                    # Then delete completely
+                    del bot_data['monitor_tasks'][monitor_key]
+                    logger.info(f"📊 Cleaned up monitor from bot_data: {symbol} ({approach})")
+                
+                # Also check for any other monitors for same symbol (edge case)
+                keys_to_remove = []
+                for key in bot_data['monitor_tasks']:
+                    if key.startswith(f"{chat_id}_{symbol}_"):
+                        keys_to_remove.append(key)
+                
+                for key in keys_to_remove:
+                    if key != monitor_key and key in bot_data['monitor_tasks']:
+                        del bot_data['monitor_tasks'][key]
+                        logger.info(f"📊 Also cleaned up related monitor: {key}")
                 
                 # Force persistence update
                 try:
                     if hasattr(ctx_app, 'update_persistence'):
                         await ctx_app.update_persistence()
+                        logger.info(f"✅ Persistence updated after monitor cleanup")
                 except Exception as e:
                     logger.warning(f"Could not update persistence: {e}")
         
@@ -1624,6 +1996,214 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
         gc.collect()
         
         logger.info(f"🧹 Memory cleanup completed for {symbol} monitor")
+
+async def monitor_mirror_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict):
+    """
+    Mirror account monitoring loop - monitors positions on the second Bybit account
+    Reuses the same monitoring logic as primary account but queries mirror account data
+    
+    IMPORTANT: Mirror account monitoring operates silently without sending Telegram alerts.
+    This prevents duplicate notifications since users are already alerted about main account activity.
+    All position changes, TP/SL hits, and closures are logged but not sent as user notifications.
+    """
+    symbol = chat_data.get(SYMBOL)
+    position_idx = chat_data.get(POSITION_IDX, 0)
+    approach = chat_data.get(TRADING_APPROACH, "fast")
+    monitoring_mode = f"MIRROR-{get_monitoring_mode(chat_data)}"
+    
+    # Store chat_id in chat_data for easy access in alert functions
+    chat_data['_chat_id'] = chat_id
+    
+    if not symbol:
+        logger.error(f"❌ No symbol found for mirror monitoring in chat {chat_id}")
+        return
+    
+    logger.info(f"🔄 Starting {monitoring_mode} monitoring loop for {symbol} in chat {chat_id}")
+    
+    # Log mirror alert configuration
+    if not ENABLE_MIRROR_ALERTS:
+        logger.info(f"📵 Mirror account alerts are DISABLED - all events will be logged only")
+    
+    # Monitoring state
+    tp1_hit = False
+    sl_moved_to_breakeven = False
+    position_closed = False
+    last_position_size = None
+    last_position_data = None
+    last_known_pnl = Decimal("0")
+    monitoring_cycles = 0
+    position_history = []
+    max_history_size = 10
+    
+    # Approach specific tracking
+    conservative_tp1_cancelled = False
+    fast_tp_hit = False
+    fast_sl_hit = False
+    
+    # Get stored order IDs (with _MIRROR suffix)
+    if approach == "conservative":
+        # Mirror orders have _MIRROR suffix
+        limit_order_ids = [f"{oid}_MIRROR" for oid in chat_data.get(LIMIT_ORDER_IDS, []) if oid]
+        tp_order_ids = [f"{oid}_MIRROR" for oid in chat_data.get(CONSERVATIVE_TP_ORDER_IDS, []) if oid]
+        sl_order_id = chat_data.get(CONSERVATIVE_SL_ORDER_ID)
+        if sl_order_id:
+            sl_order_id = f"{sl_order_id}_MIRROR"
+        logger.info(f"📋 Mirror Conservative monitoring - Limits: {len(limit_order_ids)}, TPs: {len(tp_order_ids)}, SL: {bool(sl_order_id)}")
+    else:
+        tp_order_id = chat_data.get("tp_order_id")
+        if tp_order_id:
+            tp_order_id = f"{tp_order_id}_MIRROR"
+        sl_order_id = chat_data.get(SL_ORDER_ID) or chat_data.get("sl_order_id")
+        if sl_order_id:
+            sl_order_id = f"{sl_order_id}_MIRROR"
+        logger.info(f"📋 Mirror Fast monitoring - TP: {tp_order_id}, SL: {sl_order_id}")
+    
+    # Get initial mirror position
+    try:
+        positions = await get_mirror_position_info(symbol)
+        initial_position = None
+        if positions:
+            for pos in positions:
+                if float(pos.get("size", 0)) > 0:
+                    initial_position = pos
+                    break
+        
+        if initial_position:
+            last_position_size = safe_decimal_conversion(initial_position.get("size", "0"))
+            last_position_data = initial_position.copy()
+            chat_data[LAST_KNOWN_POSITION_SIZE] = last_position_size
+            logger.info(f"📊 Initial MIRROR position: {symbol} - {initial_position.get('side')} {last_position_size}")
+        else:
+            logger.warning(f"⚠️ No initial MIRROR position found for {symbol}")
+    except Exception as e:
+        logger.error(f"❌ Error getting initial MIRROR position for {symbol}: {e}")
+    
+    try:
+        while True:
+            try:
+                monitoring_cycles += 1
+                
+                # Memory cleanup
+                if monitoring_cycles % 100 == 0:
+                    gc.collect()
+                    logger.debug(f"Memory cleanup performed for MIRROR {symbol} monitor")
+                
+                # Check if monitoring should stop
+                mirror_task_info = chat_data.get(MIRROR_ACTIVE_MONITOR_TASK, {})
+                if not mirror_task_info.get("active", True):
+                    logger.info(f"🛑 {monitoring_mode} monitoring stopped for {symbol} (deactivated)")
+                    break
+                
+                # Get mirror position data
+                positions = await get_mirror_position_info(symbol)
+                position = None
+                if positions:
+                    for pos in positions:
+                        if float(pos.get("size", 0)) > 0:
+                            position = pos
+                            break
+                
+                if not position:
+                    logger.warning(f"⚠️ No MIRROR position data for {symbol} (cycle {monitoring_cycles})")
+                    await asyncio.sleep(5)
+                    continue
+                
+                # Cache position data
+                current_size = safe_decimal_conversion(position.get("size", "0"))
+                current_price = safe_decimal_conversion(position.get("markPrice", "0"))
+                position_key = f"{symbol}_{current_size}_{current_price}"
+                
+                last_position_key = chat_data.get("_last_mirror_position_key")
+                if last_position_key == position_key and monitoring_cycles % 5 != 0:
+                    await asyncio.sleep(POSITION_MONITOR_INTERVAL)
+                    continue
+                
+                chat_data["_last_mirror_position_key"] = position_key
+                
+                # Process position data
+                current_size = safe_decimal_conversion(position.get("size", "0"))
+                current_price = safe_decimal_conversion(position.get("markPrice", "0"))
+                side = position.get("side")
+                entry_price = safe_decimal_conversion(position.get("avgPrice", "0"))
+                unrealized_pnl = safe_decimal_conversion(position.get("unrealisedPnl", "0"))
+                cum_realised_pnl = safe_decimal_conversion(position.get("cumRealisedPnl", "0"))
+                
+                # Track position history
+                position_history.append({
+                    "time": time.time(),
+                    "size": current_size,
+                    "unrealisedPnl": unrealized_pnl,
+                    "cumRealisedPnl": cum_realised_pnl,
+                    "markPrice": current_price
+                })
+                
+                if len(position_history) > max_history_size:
+                    position_history.pop(0)
+                
+                # Update last known P&L
+                if current_size > 0 and unrealized_pnl != 0:
+                    last_known_pnl = unrealized_pnl
+                    chat_data["last_known_mirror_pnl"] = str(last_known_pnl)
+                
+                # Position closure detection
+                if current_size == 0:
+                    if not position_closed and last_position_size and last_position_size > 0:
+                        logger.info(f"🎯 MIRROR POSITION CLOSED DETECTED for {symbol}")
+                        
+                        # Log closure but don't update primary account stats
+                        close_reason = "MANUAL_CLOSE"
+                        final_pnl = last_known_pnl
+                        
+                        logger.info(f"📊 MIRROR Position closed: {symbol} - Reason: {close_reason}, P&L: {final_pnl}")
+                        
+                        # NOTE: No Telegram alerts are sent for mirror account positions
+                        # This is intentional to prevent duplicate notifications (ENABLE_MIRROR_ALERTS=False)
+                        
+                        position_closed = True
+                        break
+                
+                # Update tracking variables
+                last_position_size = current_size
+                last_position_data = position.copy()
+                
+                # Sleep before next iteration
+                await asyncio.sleep(POSITION_MONITOR_INTERVAL)
+                
+            except asyncio.CancelledError:
+                logger.info(f"🛑 MIRROR Monitor task cancelled for {symbol}")
+                break
+            except Exception as e:
+                logger.error(f"❌ Error in MIRROR monitoring loop for {symbol}: {e}", exc_info=True)
+                await asyncio.sleep(POSITION_MONITOR_INTERVAL)
+    
+    except Exception as e:
+        logger.error(f"❌ Fatal error in MIRROR monitoring for {symbol}: {e}", exc_info=True)
+    
+    finally:
+        # Cleanup
+        logger.info(f"🧹 Cleaning up MIRROR monitoring for {symbol}")
+        
+        # Update mirror task status
+        if MIRROR_ACTIVE_MONITOR_TASK in chat_data:
+            chat_data[MIRROR_ACTIVE_MONITOR_TASK]["active"] = False
+        
+        # Unregister mirror monitor task
+        await unregister_monitor_task(chat_id, symbol, approach, ACCOUNT_TYPE_MIRROR)
+        
+        # Clear from bot_data
+        if ctx_app and hasattr(ctx_app, 'bot_data'):
+            bot_data = ctx_app.bot_data
+            monitor_key = f"{chat_id}_{symbol}_{approach}_{ACCOUNT_TYPE_MIRROR}"
+            if 'monitor_tasks' in bot_data and monitor_key in bot_data['monitor_tasks']:
+                del bot_data['monitor_tasks'][monitor_key]
+                logger.info(f"📊 Removed MIRROR monitor from bot_data: {approach} approach for {symbol}")
+        
+        # Memory cleanup
+        position_history.clear()
+        last_position_data = None
+        gc.collect()
+        
+        logger.info(f"🧹 MIRROR memory cleanup completed for {symbol} monitor")
 
 async def move_sl_to_breakeven(chat_data: dict, symbol: str, entry_price: Decimal, 
                               side: str, position_idx: int):
@@ -1700,6 +2280,41 @@ async def stop_position_monitoring(chat_data: dict, ctx_app=None):
         
         monitoring_mode = task_info.get("monitoring_mode", "UNKNOWN")
         chat_data[ACTIVE_MONITOR_TASK] = {}
+        logger.info(f"🛑 {monitoring_mode} position monitoring stopped")
+
+async def stop_mirror_position_monitoring(chat_data: dict, ctx_app=None):
+    """Stop monitoring for a mirror account position"""
+    if MIRROR_ACTIVE_MONITOR_TASK in chat_data:
+        task_info = chat_data[MIRROR_ACTIVE_MONITOR_TASK]
+        task_info["active"] = False
+        
+        # Also unregister from global registry
+        symbol = task_info.get("symbol", "")
+        chat_id = task_info.get("chat_id", 0)
+        if symbol and chat_id:
+            approach = task_info.get("approach", "fast")
+            await unregister_monitor_task(chat_id, symbol, approach, ACCOUNT_TYPE_MIRROR)
+            
+            # Remove from bot_data monitor_tasks
+            if ctx_app and hasattr(ctx_app, 'bot_data'):
+                bot_data = ctx_app.bot_data
+                monitor_key = f"{chat_id}_{symbol}_{approach}_{ACCOUNT_TYPE_MIRROR}"
+                if 'monitor_tasks' in bot_data and monitor_key in bot_data['monitor_tasks']:
+                    # Mark as inactive first
+                    bot_data['monitor_tasks'][monitor_key]['active'] = False
+                    # Then delete
+                    del bot_data['monitor_tasks'][monitor_key]
+                    logger.info(f"📊 Removed MIRROR monitor from bot_data: {symbol} ({approach})")
+                    
+                    # Force persistence update
+                    try:
+                        if hasattr(ctx_app, 'update_persistence'):
+                            await ctx_app.update_persistence()
+                    except Exception as e:
+                        logger.warning(f"Could not update persistence: {e}")
+        
+        monitoring_mode = task_info.get("monitoring_mode", "MIRROR-UNKNOWN")
+        chat_data[MIRROR_ACTIVE_MONITOR_TASK] = {}
         logger.info(f"🛑 {monitoring_mode} position monitoring stopped")
 
 def get_monitoring_status(chat_data: dict) -> dict:

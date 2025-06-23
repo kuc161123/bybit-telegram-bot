@@ -215,6 +215,20 @@ STATS_CONSERVATIVE_TP1_CANCELLATIONS = 'stats_conservative_tp1_cancellations'
 STATS_LAST_RESET = 'stats_last_reset_timestamp'
 
 # =============================================
+# BOT DATA KEYS - MIRROR ACCOUNT MONITORING
+# =============================================
+# Account Types
+ACCOUNT_TYPE_PRIMARY = "primary"
+ACCOUNT_TYPE_MIRROR = "mirror"
+
+# Mirror Monitoring Keys
+MIRROR_MONITOR_TASK = "mirror_monitor_task"
+MIRROR_ACTIVE_MONITOR_TASK = "mirror_active_monitor_task"
+
+# Mirror Alert Settings
+ENABLE_MIRROR_ALERTS = False  # Disable alerts for mirror account positions to prevent duplicate notifications
+
+# =============================================
 # BOT DATA KEYS - EXTERNAL POSITION STATS
 # =============================================
 STATS_EXTERNAL_TRADES = "stats_external_trades"
@@ -424,5 +438,10 @@ __all__ = [
     'HANDLE_MANUAL_MARGIN_SETUP_FIXED_AMOUNT',
     'HANDLE_MANUAL_MARGIN_SETUP_PERCENTAGE_VALUE',
     'HANDLE_MANUAL_LEVERAGE_SETUP', 'HANDLE_MANUAL_STRATEGY_SETUP',
-    'REVIEW_TRADE_WITH_FINAL_PARAMS'
+    'REVIEW_TRADE_WITH_FINAL_PARAMS',
+    
+    # Mirror Account Monitoring
+    'ACCOUNT_TYPE_PRIMARY', 'ACCOUNT_TYPE_MIRROR',
+    'MIRROR_MONITOR_TASK', 'MIRROR_ACTIVE_MONITOR_TASK',
+    'ENABLE_MIRROR_ALERTS'
 ]
