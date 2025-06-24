@@ -46,6 +46,9 @@ except ImportError:
     EXECUTION_SUMMARY_AVAILABLE = False
     logger.warning("Execution summary module not available")
 
+# Import get_all_positions for checking active positions
+from clients.bybit_helpers import get_all_positions
+
 def safe_decimal_conversion(value, default=Decimal("0")):
     """Safely convert value to Decimal with validation"""
     try:
@@ -718,26 +721,44 @@ async def check_tp_hit_and_cancel_sl(chat_data: dict, symbol: str, current_price
         
         tp_price = safe_decimal_conversion(tp_price)
         
-        # Check if current price has hit TP
-        tp_triggered = False
+        # Get TP order ID
+        tp_order_id = chat_data.get("tp_order_id")
+        if not tp_order_id:
+            logger.warning(f"No TP order ID found for fast approach monitoring")
+            return False
         
-        if side == "Buy":
-            tp_triggered = current_price >= tp_price
-        elif side == "Sell":
-            tp_triggered = current_price <= tp_price
+        # Check actual TP order status on Bybit
+        tp_order_info = await get_order_info(symbol, tp_order_id)
+        if not tp_order_info:
+            logger.warning(f"Could not get TP order info for {tp_order_id}")
+            return False
         
-        if tp_triggered:
-            logger.info(f"🎯 FAST APPROACH: TP HIT at {current_price} (target: {tp_price}) for {symbol}")
+        tp_status = tp_order_info.get("orderStatus", "")
+        
+        # Only proceed if TP order is actually filled
+        if tp_status in ["Filled", "PartiallyFilled"]:
+            logger.info(f"🎯 FAST APPROACH: TP ORDER FILLED (status: {tp_status}) for {symbol}")
+            
+            # Get actual fill price from order info
+            avg_fill_price = safe_decimal_conversion(tp_order_info.get("avgPrice", "0"))
+            if avg_fill_price == 0:
+                avg_fill_price = safe_decimal_conversion(tp_order_info.get("price", current_price))
+            
+            # Get actual filled quantity
+            filled_qty = safe_decimal_conversion(tp_order_info.get("cumExecQty", "0"))
+            if filled_qty == 0:
+                filled_qty = safe_decimal_conversion(chat_data.get(LAST_KNOWN_POSITION_SIZE, "0"))
             
             # Get position info for alert
             entry_price = safe_decimal_conversion(chat_data.get(PRIMARY_ENTRY_PRICE, "0"))
-            position_size = safe_decimal_conversion(chat_data.get(LAST_KNOWN_POSITION_SIZE, "0"))
             
-            # Calculate P&L
+            # Calculate P&L based on actual fill
             if side == "Buy":
-                pnl = (current_price - entry_price) * position_size
+                pnl = (avg_fill_price - entry_price) * filled_qty
             else:  # Sell
-                pnl = (entry_price - current_price) * position_size
+                pnl = (entry_price - avg_fill_price) * filled_qty
+            
+            logger.info(f"💰 Actual P&L calculated: Entry={entry_price}, Fill={avg_fill_price}, Qty={filled_qty}, P&L={pnl}")
             
             # Cancel SL order
             cancelled_orders = []
@@ -768,14 +789,18 @@ async def check_tp_hit_and_cancel_sl(chat_data: dict, symbol: str, current_price
                         approach=approach,
                         pnl=pnl,
                         entry_price=entry_price,
-                        current_price=current_price,
-                        position_size=position_size,
+                        current_price=avg_fill_price,  # Use actual fill price, not market price
+                        position_size=filled_qty,       # Use actual filled quantity
                         cancelled_orders=cancelled_orders
                     )
             
             # Mark TP as processed
             chat_data["tp_hit_processed"] = True
             return True
+        else:
+            # TP order not filled yet, log status for debugging
+            if tp_status and tp_status != "New":
+                logger.debug(f"Fast TP order {tp_order_id} status: {tp_status} (not filled yet)")
         
         return False
         
@@ -800,33 +825,44 @@ async def check_sl_hit_and_cancel_tp(chat_data: dict, symbol: str, current_price
         if chat_data.get("sl_hit_processed", False):
             return False
         
-        # Get SL price
-        sl_price = chat_data.get(SL_PRICE)
-        if not sl_price:
+        # Get SL order ID
+        sl_order_id = chat_data.get(SL_ORDER_ID) or chat_data.get("sl_order_id")
+        if not sl_order_id:
+            logger.warning(f"No SL order ID found for fast approach monitoring")
             return False
         
-        sl_price = safe_decimal_conversion(sl_price)
+        # Check actual SL order status on Bybit
+        sl_order_info = await get_order_info(symbol, sl_order_id)
+        if not sl_order_info:
+            logger.warning(f"Could not get SL order info for {sl_order_id}")
+            return False
         
-        # Check if current price has hit SL
-        sl_triggered = False
+        sl_status = sl_order_info.get("orderStatus", "")
         
-        if side == "Buy":
-            sl_triggered = current_price <= sl_price
-        elif side == "Sell":
-            sl_triggered = current_price >= sl_price
-        
-        if sl_triggered:
-            logger.info(f"🛡️ FAST APPROACH: SL HIT at {current_price} (target: {sl_price}) for {symbol}")
+        # Only proceed if SL order is actually filled
+        if sl_status in ["Filled", "PartiallyFilled"]:
+            logger.info(f"🛡️ FAST APPROACH: SL ORDER FILLED (status: {sl_status}) for {symbol}")
+            
+            # Get actual fill price from order info
+            avg_fill_price = safe_decimal_conversion(sl_order_info.get("avgPrice", "0"))
+            if avg_fill_price == 0:
+                avg_fill_price = safe_decimal_conversion(sl_order_info.get("price", current_price))
+            
+            # Get actual filled quantity
+            filled_qty = safe_decimal_conversion(sl_order_info.get("cumExecQty", "0"))
+            if filled_qty == 0:
+                filled_qty = safe_decimal_conversion(chat_data.get(LAST_KNOWN_POSITION_SIZE, "0"))
             
             # Get position info for alert
             entry_price = safe_decimal_conversion(chat_data.get(PRIMARY_ENTRY_PRICE, "0"))
-            position_size = safe_decimal_conversion(chat_data.get(LAST_KNOWN_POSITION_SIZE, "0"))
             
-            # Calculate P&L (negative for SL)
+            # Calculate P&L based on actual fill (negative for SL)
             if side == "Buy":
-                pnl = (current_price - entry_price) * position_size
+                pnl = (avg_fill_price - entry_price) * filled_qty
             else:  # Sell
-                pnl = (entry_price - current_price) * position_size
+                pnl = (entry_price - avg_fill_price) * filled_qty
+            
+            logger.info(f"💰 Actual SL P&L calculated: Entry={entry_price}, Fill={avg_fill_price}, Qty={filled_qty}, P&L={pnl}")
             
             # Cancel TP order
             cancelled_orders = []
@@ -868,8 +904,8 @@ async def check_sl_hit_and_cancel_tp(chat_data: dict, symbol: str, current_price
                         approach=approach,
                         pnl=pnl,
                         entry_price=entry_price,
-                        current_price=current_price,
-                        position_size=position_size,
+                        current_price=avg_fill_price,  # Use actual fill price, not market price
+                        position_size=filled_qty,       # Use actual filled quantity
                         cancelled_orders=cancelled_orders
                     )
             
@@ -880,6 +916,10 @@ async def check_sl_hit_and_cancel_tp(chat_data: dict, symbol: str, current_price
             # Mark SL as processed
             chat_data["sl_hit_processed"] = True
             return True
+        else:
+            # SL order not filled yet, log status for debugging
+            if sl_status and sl_status != "New":
+                logger.debug(f"Fast SL order {sl_order_id} status: {sl_status} (not filled yet)")
         
         return False
         
@@ -1021,50 +1061,48 @@ async def calculate_accurate_pnl(position_data: dict, chat_data: dict) -> Decima
                 return pnl
             return Decimal("0")
         
-        # Method 1: Use cumRealisedPnl (most accurate for closed positions)
-        cum_realised_pnl = position_data.get("cumRealisedPnl")
-        if cum_realised_pnl and str(cum_realised_pnl) != "0":
-            pnl = safe_decimal_conversion(cum_realised_pnl)
-            logger.info(f"📊 P&L from cumRealisedPnl: {pnl}")
-            return pnl
-        
-        # Method 2: Use unrealisedPnl (for positions being closed)
-        unrealized_pnl = position_data.get("unrealisedPnl")
-        if unrealized_pnl and str(unrealized_pnl) != "0":
-            pnl = safe_decimal_conversion(unrealized_pnl)
-            logger.info(f"📊 P&L from unrealisedPnl: {pnl}")
-            return pnl
-        
-        # Method 3: Use closedPnl if available
-        closed_pnl = position_data.get("closedPnl")
-        if closed_pnl and str(closed_pnl) != "0":
-            pnl = safe_decimal_conversion(closed_pnl)
-            logger.info(f"📊 P&L from closedPnl: {pnl}")
-            return pnl
-        
-        # Method 4: Calculate from entry/exit prices
+        # Method 1: Calculate from entry/exit prices (most accurate for individual trades)
         entry_price = safe_decimal_conversion(position_data.get("avgPrice", "0"))
         mark_price = safe_decimal_conversion(position_data.get("markPrice", "0"))
         size = safe_decimal_conversion(position_data.get("size", "0"))
         side = position_data.get("side", chat_data.get(SIDE, ""))
         
-        # If size is 0, try to get from chat data
-        if size == 0:
-            size = safe_decimal_conversion(chat_data.get(LAST_KNOWN_POSITION_SIZE, "0"))
+        # Get approach-specific keys to avoid shared data issues between fast/conservative
+        approach = chat_data.get(TRADING_APPROACH, "fast")
+        size_key = f"{approach}_position_size" if approach != "fast" else LAST_KNOWN_POSITION_SIZE
+        entry_key = f"{approach}_entry_price" if approach != "fast" else PRIMARY_ENTRY_PRICE
         
-        # If entry price is 0, try to get from chat data
+        # If size is 0, try to get from approach-specific chat data (position was just closed)
+        if size == 0:
+            size = safe_decimal_conversion(chat_data.get(size_key, "0"))
+            # Fallback to general key if approach-specific not found
+            if size == 0:
+                size = safe_decimal_conversion(chat_data.get(LAST_KNOWN_POSITION_SIZE, "0"))
+        
+        # If entry price is 0, try to get from approach-specific chat data
         if entry_price == 0:
-            entry_price = safe_decimal_conversion(chat_data.get(PRIMARY_ENTRY_PRICE, "0"))
+            entry_price = safe_decimal_conversion(chat_data.get(entry_key, "0"))
+            # Fallback to general key if approach-specific not found
+            if entry_price == 0:
+                entry_price = safe_decimal_conversion(chat_data.get(PRIMARY_ENTRY_PRICE, "0"))
         
         if entry_price > 0 and mark_price > 0 and size > 0:
             if side == "Buy":
                 pnl = (mark_price - entry_price) * size
             else:  # Sell/Short
                 pnl = (entry_price - mark_price) * size
-            logger.info(f"📊 P&L calculated manually: {pnl}")
+            logger.info(f"📊 P&L calculated from prices: Entry={entry_price}, Exit={mark_price}, Size={size}, P&L={pnl}")
             return pnl
         
-        # Method 5: Use last known P&L from chat data
+        # Method 2: Use unrealisedPnl ONLY if we couldn't calculate from individual prices
+        # NOTE: unrealisedPnl is cumulative for the entire position and may not reflect individual trade P&L
+        unrealized_pnl = position_data.get("unrealisedPnl")
+        if unrealized_pnl and str(unrealized_pnl) != "0":
+            pnl = safe_decimal_conversion(unrealized_pnl)
+            logger.warning(f"📊 P&L from unrealisedPnl (cumulative): {pnl} - May not reflect individual trade P&L")
+            return pnl
+        
+        # Method 3: Use last known P&L from chat data
         last_known_pnl = chat_data.get("last_known_pnl")
         if last_known_pnl:
             pnl = safe_decimal_conversion(last_known_pnl)
@@ -1661,7 +1699,11 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
         if initial_position:
             last_position_size = safe_decimal_conversion(initial_position.get("size", "0"))
             last_position_data = initial_position.copy()
+            # Store both general and approach-specific position size
             chat_data[LAST_KNOWN_POSITION_SIZE] = last_position_size
+            approach = chat_data.get(TRADING_APPROACH, "fast")
+            if approach != "fast":
+                chat_data[f"{approach}_position_size"] = last_position_size
             logger.info(f"📊 Initial position: {symbol} - {initial_position.get('side')} {last_position_size}")
         else:
             logger.warning(f"⚠️ No initial position found for {symbol}")
@@ -1887,12 +1929,19 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                         # Make sure we have valid position data for stats update
                         stats_position_data = last_position_data or position
                         if not stats_position_data or stats_position_data.get("size") == "0":
-                            # Create synthetic position data for stats
+                            # Get approach-specific entry price and position size for accurate individual trade stats
+                            approach_entry_key = f"{approach}_entry_price" if approach != "fast" else PRIMARY_ENTRY_PRICE
+                            approach_size_key = f"{approach}_position_size" if approach != "fast" else LAST_KNOWN_POSITION_SIZE
+                            
+                            approach_entry_price = safe_decimal_conversion(chat_data.get(approach_entry_key, entry_price))
+                            approach_position_size = safe_decimal_conversion(chat_data.get(approach_size_key, last_position_size))
+                            
+                            # Create synthetic position data for stats using approach-specific values
                             stats_position_data = {
                                 "symbol": symbol,
                                 "side": side,
-                                "size": str(last_position_size) if last_position_size else "0",
-                                "avgPrice": str(entry_price) if entry_price else "0",
+                                "size": str(approach_position_size) if approach_position_size else "0",
+                                "avgPrice": str(approach_entry_price) if approach_entry_price else "0",
                                 "markPrice": str(current_price) if current_price else "0",
                                 "cumRealisedPnl": str(final_pnl) if final_pnl else "0",
                                 "unrealisedPnl": "0"
@@ -1918,15 +1967,22 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                                 if exit_price == 0:
                                     exit_price = current_price
                                 
+                                # Get approach-specific entry price for alert
+                                approach_entry_key = f"{approach}_entry_price" if approach != "fast" else PRIMARY_ENTRY_PRICE
+                                approach_size_key = f"{approach}_position_size" if approach != "fast" else LAST_KNOWN_POSITION_SIZE
+                                
+                                alert_entry_price = safe_decimal_conversion(chat_data.get(approach_entry_key, entry_price))
+                                alert_position_size = safe_decimal_conversion(chat_data.get(approach_size_key, last_position_size))
+                                
                                 await send_position_closed_summary(
                                     bot=ctx_app.bot,
                                     chat_id=chat_id,
                                     symbol=symbol,
                                     side=side,
                                     approach=approach,
-                                    entry_price=entry_price,
+                                    entry_price=alert_entry_price,
                                     exit_price=exit_price,
-                                    position_size=last_position_size,
+                                    position_size=alert_position_size,
                                     pnl=final_pnl,
                                     close_reason=close_reason,
                                     duration_minutes=duration_minutes
@@ -1953,6 +2009,18 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                         if ACTIVE_MONITOR_TASK in chat_data:
                             chat_data[ACTIVE_MONITOR_TASK]["active"] = False
                         
+                        # Stop auto-refresh if no more positions
+                        try:
+                            from handlers.commands import stop_auto_refresh
+                            positions = await get_position_info(symbol, None)
+                            all_positions = await get_all_positions()
+                            active_count = len([p for p in all_positions if float(p.get('size', 0)) > 0])
+                            if active_count == 0:
+                                await stop_auto_refresh(chat_id, ctx_app)
+                                logger.info(f"Stopped auto-refresh as no positions remain")
+                        except Exception as e:
+                            logger.debug(f"Could not stop auto-refresh: {e}")
+                        
                         # Clean up monitor from bot_data immediately
                         if ctx_app and hasattr(ctx_app, 'bot_data'):
                             bot_data = ctx_app.bot_data
@@ -1967,7 +2035,11 @@ async def monitor_position_loop_enhanced(ctx_app, chat_id: int, chat_data: dict)
                     # Position is still open - update tracking data
                     last_position_size = current_size
                     last_position_data = position.copy()
+                    # Store both general and approach-specific position size
                     chat_data[LAST_KNOWN_POSITION_SIZE] = current_size
+                    approach = chat_data.get(TRADING_APPROACH, "fast")
+                    if approach != "fast":
+                        chat_data[f"{approach}_position_size"] = current_size
                     
                     # Track P&L while position is open
                     if unrealized_pnl != 0:
@@ -2130,7 +2202,11 @@ async def monitor_mirror_position_loop_enhanced(ctx_app, chat_id: int, chat_data
         if initial_position:
             last_position_size = safe_decimal_conversion(initial_position.get("size", "0"))
             last_position_data = initial_position.copy()
+            # Store both general and approach-specific position size for mirror
             chat_data[LAST_KNOWN_POSITION_SIZE] = last_position_size
+            approach = chat_data.get(TRADING_APPROACH, "fast")
+            if approach != "fast":
+                chat_data[f"{approach}_position_size"] = last_position_size
             logger.info(f"📊 Initial MIRROR position: {symbol} - {initial_position.get('side')} {last_position_size}")
         else:
             logger.warning(f"⚠️ No initial MIRROR position found for {symbol}")

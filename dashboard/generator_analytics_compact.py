@@ -16,6 +16,14 @@ from utils.formatters import format_number, mobile_status_indicator
 from utils.cache import get_usdt_wallet_balance_cached, get_mirror_wallet_balance_cached
 from clients.bybit_helpers import get_all_positions
 
+# Import mirror trading components
+try:
+    from execution.mirror_trader import bybit_client_2, is_mirror_trading_enabled
+    MIRROR_TRADING_AVAILABLE = True
+except ImportError:
+    MIRROR_TRADING_AVAILABLE = False
+    bybit_client_2 = None
+
 logger = logging.getLogger(__name__)
 
 def calculate_profit_factor(stats_data: Dict) -> float:
@@ -301,15 +309,29 @@ async def build_analytics_dashboard_text(chat_data: Any, bot_data: Any) -> str:
         total_unrealized_pnl = sum(float(p.get('unrealisedPnl', 0)) for p in active_positions)
         
         # Calculate potential P&L from actual TP/SL orders
-        potential_profit_tp1 = 0
+        potential_profit_tp1 = 0  # Profit if TP1 orders execute (partial positions)
+        potential_profit_tp1_full = 0  # Profit if full positions reach TP1 price
         potential_profit_all_tp = 0
         potential_loss_sl = 0
         
-        # Get actual orders to find TP/SL prices
+        # Get actual orders to find TP/SL prices - fetch fresh data every time
         from clients.bybit_helpers import get_all_open_orders
         all_orders = await get_all_open_orders()
         
-        for pos in active_positions:
+        # Note: Mirror account orders are NOT included in P&L calculation
+        # Mirror P&L is shown separately in the mirror account section
+        
+        # Only use main account orders for P&L calculation - MIRROR POSITIONS ARE EXCLUDED
+        all_orders_combined = all_orders  # No longer including mirror_orders
+        
+        # Calculate P&L for MAIN ACCOUNT positions only
+        # Mirror account P&L is calculated separately and displayed in its own section
+        all_positions_for_pnl = active_positions.copy()
+        
+        # Log that we're only using main account positions for P&L calculation
+        logger.info(f"P&L Calculation: Using {len(all_positions_for_pnl)} main account positions only (excluding mirror positions)")
+        
+        for pos in all_positions_for_pnl:
             symbol = pos.get('symbol', '')
             position_size = float(pos.get('size', 0))
             avg_price = float(pos.get('avgPrice', 0))
@@ -323,7 +345,7 @@ async def build_analytics_dashboard_text(chat_data: Any, bot_data: Any) -> str:
             tp_orders = []
             sl_orders = []
             
-            for order in all_orders:
+            for order in all_orders_combined:
                 if order.get('symbol') == symbol:
                     order_side = order.get('side', '')
                     trigger_by = order.get('triggerBy', '')
@@ -358,6 +380,10 @@ async def build_analytics_dashboard_text(chat_data: Any, bot_data: Any) -> str:
                         tp_orders.append(order)
             
             # Calculate P&L from actual orders
+            # Log position and order details for verification
+            logger.debug(f"Position {symbol}: size={position_size}, avg_price={avg_price}, side={side}")
+            logger.debug(f"Found {len(tp_orders)} TP orders and {len(sl_orders)} SL orders")
+            
             if tp_orders:
                 # Sort TPs by price (ascending for sell, descending for buy)
                 def get_order_price(order):
@@ -386,12 +412,26 @@ async def build_analytics_dashboard_text(chat_data: Any, bot_data: Any) -> str:
                     # FIXED: Use actual quantity without dividing by leverage
                     # Position sizes from Bybit are already in base units
                     
+                    # Calculate TP1 profit for this position
+                    position_tp1_profit = 0
+                    position_tp1_profit_full = 0
+                    
                     if side == 'Buy':
                         # For long positions: profit = (exit_price - entry_price) * size
-                        potential_profit_tp1 += (tp1_price - avg_price) * tp1_qty
+                        position_tp1_profit = (tp1_price - avg_price) * tp1_qty
+                        position_tp1_profit_full = (tp1_price - avg_price) * position_size
                     else:
                         # For short positions: profit = (entry_price - exit_price) * size
-                        potential_profit_tp1 += (avg_price - tp1_price) * tp1_qty
+                        position_tp1_profit = (avg_price - tp1_price) * tp1_qty
+                        position_tp1_profit_full = (avg_price - tp1_price) * position_size
+                    
+                    potential_profit_tp1 += position_tp1_profit
+                    potential_profit_tp1_full += position_tp1_profit_full
+                    
+                    # Log individual TP1 calculation
+                    logger.warning(f"   TP1 calc for {symbol}: price={tp1_price}, qty={tp1_qty}, "
+                                 f"position_size={position_size}, side={side}, "
+                                 f"order_profit=${position_tp1_profit:.2f}, full_profit=${position_tp1_profit_full:.2f}")
                 
                 # All TPs profit (using correct P&L calculation without leverage)
                 for tp_order in tp_orders:
@@ -428,6 +468,46 @@ async def build_analytics_dashboard_text(chat_data: Any, bot_data: Any) -> str:
                         # For short positions: loss = (exit_price - entry_price) * position_size
                         potential_loss_sl += abs((sl_price - avg_price) * position_size)
         
+        # Log final P&L calculations for debugging
+        logger.info(f"Main Account P&L Calculations Complete:")
+        logger.info(f"  Main positions analyzed: {len(all_positions_for_pnl)}")
+        logger.info(f"  Main orders analyzed: {len(all_orders_combined)}")
+        logger.info(f"  If All TP1 Hit: +${potential_profit_tp1:.2f}")
+        logger.info(f"  If All TPs Hit: +${potential_profit_all_tp:.2f}")
+        logger.info(f"  If All SL Hit: -${potential_loss_sl:.2f}")
+        logger.info(f"  Risk:Reward = 1:{(potential_profit_tp1/potential_loss_sl if potential_loss_sl > 0 else 0):.1f}")
+        
+        # Enhanced debugging for TP1 calculation discrepancy
+        logger.warning(f"🔍 TP1 CALCULATION DEBUG:")
+        logger.warning(f"   Main account positions: {len(active_positions)}")
+        logger.warning(f"   Mirror account positions: {len(mirror_positions) if mirror_positions else 0} (EXCLUDED from P&L calc)")
+        logger.warning(f"   Positions used for P&L: {len(all_positions_for_pnl)} (main account only)")
+        logger.warning(f"   TP1 profit breakdown by position:")
+        
+        # Log each position's contribution to TP1
+        for pos in all_positions_for_pnl:
+            symbol = pos.get('symbol', '')
+            size = float(pos.get('size', 0))
+            avg_price = float(pos.get('avgPrice', 0))
+            side = pos.get('side', '')
+            
+            # Find TP1 order for this position
+            tp1_found = False
+            for order in all_orders_combined:
+                if order.get('symbol') == symbol and order.get('reduceOnly', False):
+                    trigger_price = order.get('triggerPrice', '')
+                    if trigger_price:
+                        try:
+                            trigger_price_float = float(trigger_price)
+                            if (side == 'Buy' and trigger_price_float > avg_price) or \
+                               (side == 'Sell' and trigger_price_float < avg_price):
+                                tp1_found = True
+                                break
+                        except:
+                            pass
+            
+            logger.warning(f"   {symbol}: size={size}, avgPrice={avg_price}, side={side}, TP1_found={tp1_found}")
+        
         # Calculate account health
         # Use actual margin (positionIM) instead of leveraged position value
         balance_used = total_margin_used
@@ -445,9 +525,9 @@ async def build_analytics_dashboard_text(chat_data: Any, bot_data: Any) -> str:
         # Update win/loss stats with current P&L if positions are closed
         if total_unrealized_pnl != 0:
             if total_unrealized_pnl > 0:
-                stats_data['stats_total_wins_pnl'] = stats_data.get('stats_total_wins_pnl', 0) + total_unrealized_pnl
+                stats_data['stats_total_wins_pnl'] = float(stats_data.get('stats_total_wins_pnl', 0)) + float(total_unrealized_pnl)
             else:
-                stats_data['stats_total_losses_pnl'] = stats_data.get('stats_total_losses_pnl', 0) + abs(total_unrealized_pnl)
+                stats_data['stats_total_losses_pnl'] = float(stats_data.get('stats_total_losses_pnl', 0)) + float(abs(total_unrealized_pnl))
         
         # Store overall win rate for other calculations
         stats_data['overall_win_rate'] = win_rate
@@ -482,28 +562,45 @@ async def build_analytics_dashboard_text(chat_data: Any, bot_data: Any) -> str:
             if symbol:
                 active_position_symbols.add(symbol)
         
+        # Get mirror position symbols for mirror monitor validation
+        mirror_position_symbols = set()
+        if mirror_positions:
+            for pos in mirror_positions:
+                symbol = pos.get('symbol')
+                if symbol and float(pos.get('size', 0)) > 0:
+                    mirror_position_symbols.add(symbol)
+        
         # Count from monitor_tasks registry (primary source)
         current_time = time.time()
         stale_monitors_to_remove = []
         
         for monitor_key, task_info in monitor_tasks.items():
             if isinstance(task_info, dict) and task_info.get('active', False):
-                # Validate monitor is not stale (older than 24 hours)
+                # Get monitor details
+                monitor_symbol = task_info.get('symbol', '')
+                account_type = task_info.get('account_type', 'primary')
                 started_at = task_info.get('started_at', 0)
-                if started_at > 0 and (current_time - started_at) > 86400:  # 24 hours
-                    logger.debug(f"Skipping stale monitor {monitor_key} (started {(current_time - started_at)/3600:.1f} hours ago)")
+                
+                # Use appropriate position symbols based on account type
+                if account_type == 'mirror':
+                    valid_symbols = mirror_position_symbols
+                else:
+                    valid_symbols = active_position_symbols
+                
+                # Check if monitor should be removed (no active position)
+                if monitor_symbol and monitor_symbol not in valid_symbols:
+                    if started_at > 0 and (current_time - started_at) > 86400:  # Old and no position
+                        logger.debug(f"Marking stale monitor {monitor_key} for removal (age: {(current_time - started_at)/3600:.1f}h, no position)")
+                    else:
+                        logger.debug(f"Monitor {monitor_key} ({account_type}) has no active position, marking for removal")
                     stale_monitors_to_remove.append(monitor_key)
                     continue
                 
-                # Validate monitor has an active position
-                monitor_symbol = task_info.get('symbol', '')
-                if monitor_symbol and monitor_symbol not in active_position_symbols:
-                    logger.debug(f"Monitor {monitor_key} has no active position, marking for removal")
-                    stale_monitors_to_remove.append(monitor_key)
-                    continue
+                # Log if keeping old monitor with active position
+                if started_at > 0 and (current_time - started_at) > 86400 and monitor_symbol in valid_symbols:
+                    logger.debug(f"Keeping old monitor {monitor_key} (age: {(current_time - started_at)/3600:.1f}h, position active)")
                 
                 approach = task_info.get('approach', 'unknown')
-                account_type = task_info.get('account_type', 'primary')
                 
                 if account_type == 'mirror':
                     # Mirror account monitors
@@ -718,12 +815,16 @@ async def build_analytics_dashboard_text(chat_data: Any, bot_data: Any) -> str:
         logger.info(f"   Recent trade PnLs: {len(stats_data.get('recent_trade_pnls', []))} trades")
         logger.info(f"   Total P&L: {total_pnl}")
         
+        # Choose appropriate label based on whether TP orders cover full positions
+        tp1_coverage = (potential_profit_tp1 / potential_profit_tp1_full * 100) if potential_profit_tp1_full > 0 else 0
+        
         dashboard += f"""
 💡 <b>POTENTIAL P&L ANALYSIS</b>
-├ 🎯 If All TP1 Hit: +${format_number(potential_profit_tp1)}
+├ 🎯 TP1 Orders ({tp1_coverage:.0f}%): +${format_number(potential_profit_tp1)}
+├ 💯 Full Positions @ TP1: +${format_number(potential_profit_tp1_full)}
 ├ 🚀 If All TPs Hit: +${format_number(potential_profit_all_tp)}
 ├ 🛑 If All SL Hit: -${format_number(potential_loss_sl)}
-└ 📊 Risk:Reward = 1:{(potential_profit_tp1/potential_loss_sl if potential_loss_sl > 0 else 0):.1f}
+└ 📊 Risk:Reward = 1:{(potential_profit_tp1_full/potential_loss_sl if potential_loss_sl > 0 else 0):.1f}
 
 📊 <b>POSITIONS OVERVIEW</b> ({len(active_positions)} Active)
 ├ 🤖 Total Positions: {len(bot_positions)}
@@ -766,6 +867,7 @@ async def build_analytics_dashboard_text(chat_data: Any, bot_data: Any) -> str:
 ⚡ <b>LIVE MONITORING</b>
 ├ Active Positions: {len(active_positions)}
 ├ Active Monitors: {active_monitor_count + mirror_active_monitor_count} (Primary: {active_monitor_count}, Mirror: {mirror_active_monitor_count})
+├ Auto-Refresh: {'🟢 Active (30s)' if len(active_positions) > 0 else '⚪ Inactive'}
 └ System Status: 🟢 All systems operational
 
 💡 <b>TRADING INSIGHTS</b>

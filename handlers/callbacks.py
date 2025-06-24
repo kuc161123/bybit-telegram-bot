@@ -19,6 +19,7 @@ from dashboard.keyboards_analytics import (
     build_help_keyboard
 )
 from shared import msg_manager
+from handlers.commands import start_auto_refresh, stop_auto_refresh
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,9 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
                 context.chat_data[LAST_UI_MESSAGE_ID] = sent.message_id
                     
                 logger.info(f"Dashboard refreshed for chat {query.message.chat.id}")
+                
+                # Restart auto-refresh after manual refresh
+                await start_auto_refresh(query.message.chat.id, context)
             except Exception as e:
                 logger.error(f"Error refreshing dashboard: {e}")
                 # Fallback: send a simple status message

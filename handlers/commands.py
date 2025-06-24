@@ -22,12 +22,18 @@ from utils.position_modes import (
 )
 from clients.bybit_helpers import get_all_positions
 from decimal import Decimal
+import asyncio
+import time
 
 logger = logging.getLogger(__name__)
 
+# Auto-refresh settings
+AUTO_REFRESH_INTERVAL = 30  # seconds
+AUTO_REFRESH_TASK_KEY = "dashboard_auto_refresh_task"
+
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Enhanced dashboard command with mobile optimization"""
-    logger.info("📱 Dashboard command called - showing ENHANCED UI")
+    """Enhanced dashboard command with mobile optimization and auto-refresh"""
+    logger.info("📱 Dashboard command called - showing ENHANCED UI with auto-refresh")
     
     # Clear any cached data to ensure fresh UI
     from utils.cache import invalidate_all_caches
@@ -43,6 +49,88 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     # Force new message to show enhanced UI
     await _send_or_edit_dashboard_message(update, context, new_msg=True)
+    
+    # Start auto-refresh if there are active positions
+    await start_auto_refresh(update.effective_chat.id, context)
+
+async def stop_auto_refresh(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop auto-refresh task for a chat"""
+    # Cancel existing auto-refresh task if any
+    task_key = f"{AUTO_REFRESH_TASK_KEY}_{chat_id}"
+    if task_key in context.application.bot_data:
+        task = context.application.bot_data[task_key]
+        if not task.done():
+            task.cancel()
+            logger.info(f"Cancelled auto-refresh task for chat {chat_id}")
+        del context.application.bot_data[task_key]
+
+async def start_auto_refresh(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start or restart auto-refresh task for dashboard"""
+    # Cancel existing task if any
+    await stop_auto_refresh(chat_id, context)
+    
+    # Check if we have active positions
+    positions = await get_all_positions()
+    active_positions = [p for p in positions if float(p.get('size', 0)) > 0]
+    
+    if active_positions:
+        # Start new auto-refresh task
+        task_key = f"{AUTO_REFRESH_TASK_KEY}_{chat_id}"
+        task = asyncio.create_task(auto_refresh_dashboard(chat_id, context))
+        context.application.bot_data[task_key] = task
+        logger.info(f"Started auto-refresh task for chat {chat_id} with {len(active_positions)} active positions")
+    else:
+        logger.info(f"No active positions, auto-refresh not started for chat {chat_id}")
+
+async def auto_refresh_dashboard(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Auto-refresh dashboard while positions are active"""
+    logger.info(f"Auto-refresh started for chat {chat_id}")
+    consecutive_errors = 0
+    
+    try:
+        while True:
+            await asyncio.sleep(AUTO_REFRESH_INTERVAL)
+            
+            # Check if we still have active positions
+            positions = await get_all_positions()
+            active_positions = [p for p in positions if float(p.get('size', 0)) > 0]
+            
+            if not active_positions:
+                logger.info(f"No active positions, stopping auto-refresh for chat {chat_id}")
+                break
+            
+            # Check if dashboard is still being viewed (last refresh within 5 minutes)
+            last_refresh = context.chat_data.get('last_dashboard_refresh', 0)
+            if time.time() - last_refresh > 300:  # 5 minutes
+                logger.info(f"Dashboard not viewed recently, stopping auto-refresh for chat {chat_id}")
+                break
+            
+            try:
+                # Clear cache and refresh dashboard
+                from utils.cache import invalidate_all_caches
+                invalidate_all_caches()
+                
+                # Update dashboard
+                await _send_or_edit_dashboard_message(chat_id, context, new_msg=False)
+                logger.debug(f"Auto-refreshed dashboard for chat {chat_id}")
+                consecutive_errors = 0
+                
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(f"Error auto-refreshing dashboard: {e}")
+                if consecutive_errors >= 3:
+                    logger.error(f"Too many errors, stopping auto-refresh for chat {chat_id}")
+                    break
+                    
+    except asyncio.CancelledError:
+        logger.info(f"Auto-refresh cancelled for chat {chat_id}")
+    except Exception as e:
+        logger.error(f"Auto-refresh error for chat {chat_id}: {e}")
+    finally:
+        # Clean up task reference
+        task_key = f"{AUTO_REFRESH_TASK_KEY}_{chat_id}"
+        if task_key in context.application.bot_data:
+            del context.application.bot_data[task_key]
 
 async def _send_or_edit_dashboard_message(upd_or_cid, ctx: ContextTypes.DEFAULT_TYPE, new_msg: bool = False):
     """Send or edit dashboard message with enhanced mobile optimization"""
@@ -98,6 +186,8 @@ async def _send_or_edit_dashboard_message(upd_or_cid, ctx: ContextTypes.DEFAULT_
             if sent:
                 ctx.chat_data[LAST_UI_MESSAGE_ID] = sent.message_id
                 logger.debug(f"Sent new dashboard message {sent.message_id}")
+                # Store last refresh time
+                ctx.chat_data['last_dashboard_refresh'] = time.time()
         except Exception as e:
             logger.error(f"Error sending dashboard message: {e}")
             

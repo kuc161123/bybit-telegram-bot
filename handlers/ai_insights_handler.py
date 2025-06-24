@@ -163,7 +163,11 @@ async def show_ai_insights(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         ])
         
         if query:
-            await query.edit_message_text(insights_msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            try:
+                await query.edit_message_text(insights_msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            except Exception as edit_error:
+                logger.warning(f"Could not edit message, sending new one: {edit_error}")
+                await query.message.reply_text(insights_msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
         else:
             await message.reply_text(insights_msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
         
@@ -176,6 +180,10 @@ async def show_ai_insights(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         ])
         
         if query:
-            await query.edit_message_text(error_msg, reply_markup=keyboard)
+            try:
+                await query.edit_message_text(error_msg, reply_markup=keyboard)
+            except Exception as edit_error:
+                logger.warning(f"Could not edit error message, sending new one: {edit_error}")
+                await query.message.reply_text(error_msg, reply_markup=keyboard)
         else:
             await message.reply_text(error_msg, reply_markup=keyboard)

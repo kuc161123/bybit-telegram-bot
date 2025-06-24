@@ -1010,6 +1010,15 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
             if not numbers_found:
                 return self._error_result("No numbers found in colored boxes")
             
+            # First pass: collect all prices to understand the scale
+            all_prices = []
+            for item in numbers_found:
+                try:
+                    value = Decimal(str(item["value"]).replace(',', ''))
+                    all_prices.append(value)
+                except:
+                    continue
+            
             # Separate by label and box color
             entry_prices = []
             tp_prices = []
@@ -1027,6 +1036,26 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                         sl_price = value
                         logger.info(f"Found SL from label/grey box: {value}")
                     elif "add short" in label or "add long" in label:
+                        # Normalize entry prices that may be missing decimal points
+                        # Get context from other prices that have decimals
+                        decimal_prices = [p for p in all_prices if p < 10]
+                        if decimal_prices and value > 100:
+                            # Calculate average scale of decimal prices
+                            avg_decimal = sum(decimal_prices) / len(decimal_prices)
+                            # Determine normalization factor
+                            if 1000 <= value < 10000:
+                                normalized_value = value / 10000  # 1717 -> 0.1717
+                            elif 100 <= value < 1000:
+                                normalized_value = value / 1000   # 171 -> 0.171
+                            else:
+                                normalized_value = value / 100    # 17 -> 0.17
+                            
+                            # Verify normalized value is in reasonable range of other prices
+                            if normalized_value > avg_decimal * 0.1 and normalized_value < avg_decimal * 10:
+                                logger.info(f"Normalizing entry price: {value} -> {normalized_value} (context: avg decimal price {avg_decimal:.4f})")
+                                value = normalized_value
+                            else:
+                                logger.warning(f"Normalized value {normalized_value} out of range, keeping original {value}")
                         entry_prices.append((value, position))
                         logger.info(f"Found entry from 'add' label: {value}")
                     elif "take profit" in label:
@@ -1138,6 +1167,18 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
             entry = params[PRIMARY_ENTRY_PRICE]
             sl = params[SL_PRICE]
             
+            # Check for potential decimal point issues
+            if entry > 100 and sl < 10:
+                # Likely decimal point issue with entry price
+                logger.warning(f"Potential decimal point issue: entry={entry}, sl={sl}")
+                # Try to normalize entry price
+                if 1000 <= entry < 10000:
+                    entry = entry / 10000
+                elif 100 <= entry < 1000:
+                    entry = entry / 1000
+                params[PRIMARY_ENTRY_PRICE] = entry
+                logger.info(f"Auto-corrected entry price to {entry}")
+            
             if side == "Buy":
                 if sl >= entry:
                     logic_score *= 0.0  # Critical failure
@@ -1153,6 +1194,14 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
         if PRIMARY_ENTRY_PRICE in params and TP1_PRICE in params:
             entry = params[PRIMARY_ENTRY_PRICE]
             tp1 = params[TP1_PRICE]
+            
+            # Check for potential decimal point issues
+            if entry > 100 and tp1 < 10:
+                # Likely decimal point issue with entry price
+                logger.warning(f"Potential decimal point issue in TP check: entry={entry}, tp1={tp1}")
+                # Use the corrected entry if available
+                if PRIMARY_ENTRY_PRICE in params:
+                    entry = params[PRIMARY_ENTRY_PRICE]
             
             if side == "Buy":
                 if tp1 <= entry:

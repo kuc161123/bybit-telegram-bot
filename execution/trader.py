@@ -382,6 +382,16 @@ class TradeExecutor:
             position_qty = position_size / entry_price
             position_qty = value_adjusted_to_step(position_qty, qty_step)
             
+            # Validate minimum order value (Bybit requires 5 USDT minimum)
+            order_value = position_qty * entry_price
+            if order_value < 5:
+                self.logger.error(f"❌ Order value ${order_value:.2f} is below minimum $5 USDT")
+                self.logger.error(f"   Position qty: {position_qty}, Entry price: {entry_price}")
+                # Check if entry price might have decimal issue
+                if entry_price > 100:
+                    self.logger.warning(f"⚠️ Entry price {entry_price} seems too high - possible decimal point issue")
+                raise ValueError(f"Order value ${order_value:.2f} is below Bybit's minimum of $5 USDT")
+            
             # Check if we should merge with existing position
             from telegram.ext import Application
             app = Application._instances[0] if hasattr(Application, '_instances') else None
@@ -461,6 +471,10 @@ class TradeExecutor:
             chat_data["market_order_id"] = market_order_id
             chat_data["entry_price"] = str(avg_price)
             chat_data[PRIMARY_ENTRY_PRICE] = avg_price
+            # Store approach-specific entry price to avoid conflicts between approaches
+            approach = chat_data.get(TRADING_APPROACH, "fast")
+            if approach != "fast":
+                chat_data[f"{approach}_entry_price"] = avg_price
             
             # Mark that this position was created by the bot
             chat_data["position_created"] = True
@@ -2681,11 +2695,27 @@ class TradeExecutor:
                     } for o in existing_limit_orders
                 ]
             
-            # Place the new position addition (market order)
-            self.logger.info(f"📦 Adding {new_params['position_size']} to existing position")
+            # Initialize mirror results early for all operations
+            mirror_results = {"market": None, "limits": [], "tps": [], "sl": None, "errors": []}
+            
+            # Calculate position allocation for merge
+            total_position_size = new_params['position_size']
+            
+            # Determine how to split between market and limit orders
+            if parameters_changed and len(limit_prices) > 1:
+                # If parameters changed and we have limit prices, split position like a fresh trade
+                # Allocate proportionally: first entry (market) gets its share, rest for limits
+                market_allocation = total_position_size / len(limit_prices)  # Equal split
+                limit_allocation = total_position_size - market_allocation
+                self.logger.info(f"📦 Adding to position with allocation - Market: {market_allocation:.6f}, Limits: {limit_allocation:.6f}")
+            else:
+                # No limit orders needed, use full position for market order
+                market_allocation = total_position_size
+                limit_allocation = Decimal("0")
+                self.logger.info(f"📦 Adding {market_allocation} to existing position (no limit orders)")
             
             # Place market order to add to position
-            add_qty = value_adjusted_to_step(new_params['position_size'], qty_step)
+            add_qty = value_adjusted_to_step(market_allocation, qty_step)
             order_params = {
                 "symbol": symbol,
                 "side": side,
@@ -2702,15 +2732,16 @@ class TradeExecutor:
             
             # Place new limit orders if parameters changed
             new_limit_order_ids = []
-            if parameters_changed and limit_prices and len(limit_prices) > 0:
-                self.logger.info(f"📍 Placing {len(limit_prices)} new limit orders due to parameter changes...")
+            if parameters_changed and limit_prices and len(limit_prices) > 1:
+                self.logger.info(f"📍 Placing {len(limit_prices) - 1} new limit orders due to parameter changes...")
                 
-                # Calculate quantity for each limit order
-                remaining_margin = margin_amount - (fill_price * add_qty / leverage)
-                limit_qty_each = remaining_margin * leverage / sum(limit_prices[1:]) if len(limit_prices) > 1 else 0
+                # Calculate quantity for each limit order from the allocated amount
+                num_limit_orders = len(limit_prices) - 1  # Exclude first price (used for market)
+                limit_qty_each = limit_allocation / num_limit_orders if num_limit_orders > 0 else Decimal("0")
                 
                 for i, limit_price in enumerate(limit_prices[1:], 1):  # Skip first price (market order)
                     limit_qty = value_adjusted_to_step(limit_qty_each, qty_step)
+                    self.logger.info(f"📊 Limit order {i}: Price={limit_price}, Qty={limit_qty} (each={limit_qty_each})")
                     if limit_qty > 0:
                         limit_order_params = {
                             "symbol": symbol,
@@ -2724,6 +2755,30 @@ class TradeExecutor:
                         if limit_result and limit_result.get("orderId"):
                             new_limit_order_ids.append(limit_result.get("orderId"))
                             self.logger.info(f"✅ Placed Limit {i} at {limit_price} for {limit_qty} qty")
+                            
+                            # Mirror the limit order
+                            if MIRROR_TRADING_AVAILABLE and is_mirror_trading_enabled():
+                                try:
+                                    # Generate unique order link ID for mirror limit order
+                                    mirror_limit_link_id = self._generate_unique_order_link_id(f"{trade_group_id}_LIMIT{i}_MIRROR")
+                                    mirror_limit = await mirror_limit_order(
+                                        symbol=symbol,
+                                        side=side,
+                                        qty=str(limit_qty),
+                                        price=str(limit_price),
+                                        position_idx=None,  # Will auto-detect
+                                        order_link_id=mirror_limit_link_id
+                                    )
+                                    if mirror_limit:
+                                        self.logger.info(f"✅ MIRROR: Limit order {i} placed at {limit_price}")
+                                        if "limits" not in mirror_results:
+                                            mirror_results["limits"] = []
+                                        mirror_results["limits"].append({"order": i, "success": True})
+                                    else:
+                                        mirror_results["errors"].append(f"Limit order {i} mirror failed")
+                                except Exception as e:
+                                    self.logger.error(f"❌ MIRROR: Failed to place limit order {i}: {e}")
+                                    mirror_results["errors"].append(f"Limit order {i} error: {str(e)}")
                 
                 # Store new limit order IDs
                 chat_data[LIMIT_ORDER_IDS] = new_limit_order_ids
@@ -2811,7 +2866,6 @@ class TradeExecutor:
                     self.logger.error(f"Failed to record merge decision: {e}")
             
             # Mirror trading for merge
-            mirror_results = {"market": None, "tps": [], "sl": None, "errors": []}
             if MIRROR_TRADING_AVAILABLE and is_mirror_trading_enabled():
                 self.logger.info(f"🔄 Executing merge on mirror account...")
                 

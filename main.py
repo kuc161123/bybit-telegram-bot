@@ -291,11 +291,39 @@ async def cleanup_stale_monitors(application: Application):
                 stale_monitors.append(monitor_key)
                 continue
             
-            # Check if monitor is stale (older than 24 hours)
+            # Check if monitor is stale (older than 24 hours) AND has no active position
             started_at = task_info.get('started_at', 0)
             if started_at > 0 and (current_time - started_at) > 86400:  # 24 hours
-                stale_monitors.append(monitor_key)
-                logger.info(f"Found stale monitor {monitor_key} (started {(current_time - started_at)/3600:.1f} hours ago)")
+                # Before removing, check if there's still an active position
+                symbol = task_info.get('symbol')
+                account_type = task_info.get('account_type', 'primary')
+                
+                has_active_position = False
+                if symbol:
+                    try:
+                        if account_type == 'mirror':
+                            # Check mirror account for active position
+                            from execution.mirror_trader import get_mirror_positions
+                            mirror_positions = await get_mirror_positions()
+                            has_active_position = any(
+                                pos.get('symbol') == symbol and float(pos.get('size', 0)) > 0 
+                                for pos in mirror_positions
+                            )
+                        else:
+                            # Check primary account for active position
+                            from clients.bybit_helpers import get_position_info
+                            positions = await get_position_info(symbol)
+                            has_active_position = any(
+                                float(pos.get('size', 0)) > 0 for pos in positions
+                            ) if positions else False
+                    except Exception as e:
+                        logger.warning(f"Could not check position for {symbol}: {e}")
+                
+                if not has_active_position:
+                    stale_monitors.append(monitor_key)
+                    logger.info(f"🗑️ Removing stale monitor {monitor_key} (age: {(current_time - started_at)/3600:.1f}h, active: {task_info.get('active', False)})")
+                else:
+                    logger.info(f"⏰ Keeping old monitor {monitor_key} (age: {(current_time - started_at)/3600:.1f}h) - position still active")
                 continue
             
             # Check if monitor is marked as active but has no running task
@@ -620,8 +648,17 @@ async def check_and_restart_position_monitors(application: Application):
                         
                         # Start monitoring
                         try:
-                            from execution.monitor import start_position_monitoring
+                            from execution.monitor import start_position_monitoring, start_mirror_position_monitoring
                             await start_position_monitoring(application, int(main_chat_id), new_chat_data)
+                            
+                            # Also start mirror monitoring if mirror trading is enabled
+                            try:
+                                from execution.mirror_trader import is_mirror_trading_enabled
+                                if is_mirror_trading_enabled():
+                                    await start_mirror_position_monitoring(application, int(main_chat_id), new_chat_data)
+                                    logger.info(f"✅ Started mirror monitor for {symbol} ({approach})")
+                            except Exception as mirror_error:
+                                logger.warning(f"Could not start mirror monitor for {symbol} ({approach}): {mirror_error}")
                             
                             logger.info(f"✅ Created new monitor for {symbol} ({approach}) in chat {main_chat_id}")
                             created_new_entries += 1
@@ -660,8 +697,17 @@ async def check_and_restart_position_monitors(application: Application):
                                 chat_data[LAST_KNOWN_POSITION_SIZE] = position["size"]
                                 
                                 # Start monitoring
-                                from execution.monitor import start_position_monitoring
+                                from execution.monitor import start_position_monitoring, start_mirror_position_monitoring
                                 await start_position_monitoring(application, int(chat_id), chat_data)
+                                
+                                # Also restore mirror monitoring if mirror trading is enabled
+                                try:
+                                    from execution.mirror_trader import is_mirror_trading_enabled
+                                    if is_mirror_trading_enabled():
+                                        await start_mirror_position_monitoring(application, int(chat_id), chat_data)
+                                        logger.info(f"✅ Restored mirror monitor for {symbol} ({chat_approach})")
+                                except Exception as mirror_error:
+                                    logger.warning(f"Could not restore mirror monitor for {symbol} ({chat_approach}): {mirror_error}")
                                 
                                 logger.info(f"✅ Monitor restored for {symbol} ({chat_approach}) in chat {chat_id}")
                                 restored_positions += 1
@@ -674,50 +720,96 @@ async def check_and_restart_position_monitors(application: Application):
                         except Exception as e:
                             logger.error(f"❌ Error restoring monitor for {symbol}: {e}")
                 
-                # If no monitor found, create new entry
+                # If no monitor found, detect and create monitors for all approaches used
                 if not monitor_found:
-                    approach = detected_approach or "fast"  # Use detected approach or default to fast
-                    logger.info(f"📝 Creating new chat data for position: {symbol} {side} ({approach})")
+                    # Analyze orders to detect which approaches were used
+                    approaches_used = set()
                     
-                    # Create chat data for this position
-                    new_chat_data = {
-                        SYMBOL: symbol,
-                        SIDE: side,
-                        LAST_KNOWN_POSITION_SIZE: position["size"],
-                        PRIMARY_ENTRY_PRICE: position.get("avgPrice", "0"),
-                        TRADING_APPROACH: approach,
-                        "position_created": True,
-                        "bot_position": True
-                    }
-                    
-                    # Add approach-specific order IDs if detected and available
-                    if detected_approach == "conservative" and position_orders:
-                        tp_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('TP')]
-                        sl_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('SL')]
+                    if position_orders:
+                        # Check for conservative patterns
+                        has_conservative = any(
+                            o.get('orderLinkId', '').startswith(('TP1_', 'TP2_', 'TP3_', 'TP4_', 'SL_', '_LIMIT'))
+                            for o in position_orders
+                        )
+                        # Check for fast patterns  
+                        has_fast = any(
+                            '_FAST_' in o.get('orderLinkId', '') or
+                            o.get('orderLinkId', '').startswith(('TP_', 'SL_')) or
+                            o.get('stopOrderType') in ['TakeProfit', 'StopLoss']
+                            for o in position_orders
+                        )
                         
-                        if tp_orders:
-                            tp_order_ids = [o.get('orderId') for o in sorted(tp_orders, key=lambda x: x.get('orderLinkId', ''))]
-                            new_chat_data[CONSERVATIVE_TP_ORDER_IDS] = tp_order_ids
-                        if sl_orders:
-                            new_chat_data[CONSERVATIVE_SL_ORDER_ID] = sl_orders[0].get('orderId')
+                        if has_conservative:
+                            approaches_used.add("conservative")
+                        if has_fast:
+                            approaches_used.add("fast")
                     
-                    # Store in the main chat's data
-                    if main_chat_id not in application.chat_data:
-                        application.chat_data[main_chat_id] = {}
+                    # If no patterns detected, use detected approach or default to fast
+                    if not approaches_used:
+                        approaches_used.add(detected_approach or "fast")
                     
-                    # Create a unique key for this position including approach
-                    position_key = f"position_{symbol}_{side}_{approach}"
-                    application.chat_data[main_chat_id][position_key] = new_chat_data
+                    logger.info(f"📝 Creating monitors for {symbol} {side} with approaches: {list(approaches_used)}")
                     
-                    # Start monitoring
-                    try:
-                        from execution.monitor import start_position_monitoring
-                        await start_position_monitoring(application, int(main_chat_id), new_chat_data)
+                    # Create monitor for each detected approach
+                    for approach in approaches_used:
+                        logger.info(f"📝 Creating new chat data for position: {symbol} {side} ({approach})")
                         
-                        logger.info(f"✅ Created new monitor for {symbol} ({approach}) in chat {main_chat_id}")
-                        created_new_entries += 1
-                    except Exception as e:
-                        logger.error(f"❌ Error creating monitor for {symbol}: {e}")
+                        # Create chat data for this position
+                        new_chat_data = {
+                            SYMBOL: symbol,
+                            SIDE: side,
+                            LAST_KNOWN_POSITION_SIZE: position["size"],
+                            PRIMARY_ENTRY_PRICE: position.get("avgPrice", "0"),
+                            TRADING_APPROACH: approach,
+                            "position_created": True,
+                            "bot_position": True
+                        }
+                        
+                        # Add approach-specific order IDs if available
+                        if approach == "conservative" and position_orders:
+                            tp_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('TP')]
+                            sl_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('SL')]
+                            
+                            if tp_orders:
+                                tp_order_ids = [o.get('orderId') for o in sorted(tp_orders, key=lambda x: x.get('orderLinkId', ''))]
+                                new_chat_data[CONSERVATIVE_TP_ORDER_IDS] = tp_order_ids
+                            if sl_orders:
+                                new_chat_data[CONSERVATIVE_SL_ORDER_ID] = sl_orders[0].get('orderId')
+                        elif approach == "fast" and position_orders:
+                            fast_tp_orders = [o for o in position_orders if '_FAST_TP' in o.get('orderLinkId', '') or o.get('stopOrderType') == 'TakeProfit']
+                            fast_sl_orders = [o for o in position_orders if '_FAST_SL' in o.get('orderLinkId', '') or o.get('stopOrderType') == 'StopLoss']
+                            
+                            if fast_tp_orders:
+                                new_chat_data[TP_ORDER_ID] = fast_tp_orders[0].get('orderId')
+                            if fast_sl_orders:
+                                new_chat_data[SL_ORDER_ID] = fast_sl_orders[0].get('orderId')
+                        
+                        # Store in the main chat's data
+                        if main_chat_id not in application.chat_data:
+                            application.chat_data[main_chat_id] = {}
+                        
+                        # Create a unique key for this position including approach
+                        position_key = f"position_{symbol}_{side}_{approach}"
+                        application.chat_data[main_chat_id][position_key] = new_chat_data
+                        
+                        # Start monitoring
+                        try:
+                            from execution.monitor import start_position_monitoring, start_mirror_position_monitoring
+                            await start_position_monitoring(application, int(main_chat_id), new_chat_data)
+                            
+                            # Also start mirror monitoring if mirror trading is enabled
+                            try:
+                                from execution.mirror_trader import is_mirror_trading_enabled
+                                if is_mirror_trading_enabled():
+                                    await start_mirror_position_monitoring(application, int(main_chat_id), new_chat_data)
+                                    logger.info(f"✅ Started mirror monitor for {symbol} ({approach})")
+                            except Exception as mirror_error:
+                                logger.warning(f"Could not start mirror monitor for {symbol} ({approach}): {mirror_error}")
+                            
+                            logger.info(f"✅ Created new monitor for {symbol} ({approach}) in chat {main_chat_id}")
+                            created_new_entries += 1
+                        except Exception as e:
+                            logger.error(f"❌ Error creating monitor for {symbol} ({approach}): {e}")
             
             # Small delay between position processing
             await asyncio.sleep(0.3)

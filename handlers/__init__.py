@@ -213,6 +213,35 @@ def setup_callback_handlers(app):
         except Exception as e:
             logger.warning(f"AI Insights handler not loaded: {e}")
         
+        # Analytics Dashboard callback
+        try:
+            from .commands import dashboard_command
+            async def handle_analytics_dashboard(update, context):
+                """Handle analytics dashboard callback"""
+                query = update.callback_query
+                await query.answer()
+                # Reuse the dashboard command logic
+                await dashboard_command(update, context)
+            
+            app.add_handler(CallbackQueryHandler(handle_analytics_dashboard, pattern="^analytics_dashboard$"))
+            logger.info("✅ Analytics Dashboard callback loaded!")
+        except Exception as e:
+            logger.warning(f"Analytics Dashboard callback not loaded: {e}")
+        
+        # Delete Message callback
+        async def handle_delete_message(update, context):
+            """Handle delete message callback"""
+            query = update.callback_query
+            await query.answer()
+            try:
+                await query.message.delete()
+            except Exception as e:
+                logger.warning(f"Could not delete message: {e}")
+                await query.edit_message_text("❌ Message closed")
+        
+        app.add_handler(CallbackQueryHandler(handle_delete_message, pattern="^delete_message$"))
+        logger.info("✅ Delete Message callback loaded!")
+        
         # Predictive Signals callback
         try:
             from .predictive_signals_handler import show_predictive_signals

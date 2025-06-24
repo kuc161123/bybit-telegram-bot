@@ -356,6 +356,7 @@ async def cancel_mirror_order(symbol: str, order_id: str) -> bool:
         logger.error(f"❌ MIRROR: Exception cancelling order: {e}")
         return False
 
+
 # Status check function
 def is_mirror_trading_enabled() -> bool:
     """Check if mirror trading is enabled and properly configured."""
