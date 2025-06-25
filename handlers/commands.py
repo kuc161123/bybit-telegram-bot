@@ -161,35 +161,54 @@ async def _send_or_edit_dashboard_message(upd_or_cid, ctx: ContextTypes.DEFAULT_
         
         keyboard = build_enhanced_dashboard_keyboard(c_id, ctx, active_positions, has_monitors)
         
-        # ALWAYS delete previous dashboard message if it exists
+        # Get the previous message ID
         old_msg_id = ctx.chat_data.get(LAST_UI_MESSAGE_ID)
-        if old_msg_id:
+        
+        # If auto-refresh (new_msg=False) and we have an existing message, edit it
+        if not new_msg and old_msg_id:
             try:
-                await ctx.bot.delete_message(chat_id=c_id, message_id=old_msg_id)
-                logger.debug(f"Deleted previous dashboard message {old_msg_id}")
-            except Exception as e:
-                logger.debug(f"Could not delete old dashboard message: {e}")
-            # Clear the stored ID since we deleted it
-            ctx.chat_data[LAST_UI_MESSAGE_ID] = None
-        
-        # Force new_msg to True to ensure we always send a fresh message
-        new_msg = True
-        
-        # Always send new message (since we deleted the old one)
-        try:
-            sent = await ctx.bot.send_message(
-                c_id, 
-                dashboard_text, 
-                parse_mode=ParseMode.HTML,
-                reply_markup=keyboard
-            )
-            if sent:
-                ctx.chat_data[LAST_UI_MESSAGE_ID] = sent.message_id
-                logger.debug(f"Sent new dashboard message {sent.message_id}")
+                await ctx.bot.edit_message_text(
+                    chat_id=c_id,
+                    message_id=old_msg_id,
+                    text=dashboard_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard
+                )
+                logger.debug(f"Edited existing dashboard message {old_msg_id} (auto-refresh)")
                 # Store last refresh time
                 ctx.chat_data['last_dashboard_refresh'] = time.time()
-        except Exception as e:
-            logger.error(f"Error sending dashboard message: {e}")
+            except Exception as e:
+                logger.debug(f"Could not edit message (might be unchanged or deleted): {e}")
+                # If edit fails, fall back to sending new message
+                new_msg = True
+        
+        # For manual refresh or if edit failed, delete old and send new
+        if new_msg:
+            # Delete previous dashboard message if it exists
+            if old_msg_id:
+                try:
+                    await ctx.bot.delete_message(chat_id=c_id, message_id=old_msg_id)
+                    logger.debug(f"Deleted previous dashboard message {old_msg_id}")
+                except Exception as e:
+                    logger.debug(f"Could not delete old dashboard message: {e}")
+                # Clear the stored ID since we deleted it
+                ctx.chat_data[LAST_UI_MESSAGE_ID] = None
+            
+            # Send new message
+            try:
+                sent = await ctx.bot.send_message(
+                    c_id, 
+                    dashboard_text, 
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard
+                )
+                if sent:
+                    ctx.chat_data[LAST_UI_MESSAGE_ID] = sent.message_id
+                    logger.debug(f"Sent new dashboard message {sent.message_id}")
+                    # Store last refresh time
+                    ctx.chat_data['last_dashboard_refresh'] = time.time()
+            except Exception as e:
+                logger.error(f"Error sending dashboard message: {e}")
             
     except Exception as e:
         logger.error(f"Error in dashboard generation: {e}", exc_info=True)
