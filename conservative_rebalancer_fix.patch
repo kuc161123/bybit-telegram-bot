@@ -1,0 +1,32 @@
+--- a/execution/conservative_rebalancer.py
++++ b/execution/conservative_rebalancer.py
+@@ -248,6 +248,29 @@ class ConservativeRebalancer:
+             # Get current orders
+             orders = await get_order_info(symbol=symbol)
+             
++            # Check if position size indicates TPs have already executed
++            original_size = chat_data.get("original_position_size")
++            if original_size:
++                original_size = safe_decimal_conversion(original_size)
++                
++                # Calculate expected position size based on TP executions
++                expected_size = original_size
++                if tp_number >= 1:
++                    expected_size = original_size * Decimal("0.15")  # After TP1 (85%)
++                if tp_number >= 2:
++                    expected_size = original_size * Decimal("0.10")  # After TP2 (5%)
++                if tp_number >= 3:
++                    expected_size = original_size * Decimal("0.05")  # After TP3 (5%)
++                
++                # If actual position is significantly smaller than expected, TPs have executed
++                size_tolerance = Decimal("0.95")  # 5% tolerance
++                if actual_position_size < (expected_size * size_tolerance):
++                    self.logger.info(
++                        f"Position size ({actual_position_size}) indicates TPs have executed. "
++                        f"Expected: {expected_size}. Skipping TP recreation."
++                    )
++                    return {"success": True, "message": "TPs already executed, no rebalancing needed"}
++            
+             # Find existing TP and SL orders
+             tp_orders = []
+             sl_order = None

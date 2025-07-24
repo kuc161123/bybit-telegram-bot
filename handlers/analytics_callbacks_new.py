@@ -21,7 +21,7 @@ async def view_performance_analytics(update: Update, context: ContextTypes.DEFAU
     """Show detailed performance analytics"""
     query = update.callback_query
     await query.answer()
-    
+
     # Generate performance report
     performance_text = f"""
 📈 <b>PERFORMANCE ANALYTICS</b> {datetime.now().strftime('%H:%M')}
@@ -59,9 +59,9 @@ async def view_performance_analytics(update: Update, context: ContextTypes.DEFAU
 ├ Risk Mgmt: +16.4%
 └ Total: +127.4%
 """
-    
+
     keyboard = build_performance_analytics_keyboard()
-    
+
     try:
         await query.edit_message_text(
             performance_text,
@@ -76,7 +76,7 @@ async def view_risk_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Show detailed risk analytics"""
     query = update.callback_query
     await query.answer()
-    
+
     risk_text = f"""
 🎯 <b>RISK ANALYTICS</b> {datetime.now().strftime('%H:%M')}
 {'═' * 35}
@@ -112,9 +112,9 @@ async def view_risk_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE
 ├ Downside Dev: 8.7%
 └ Ulcer Index: 1.2
 """
-    
+
     keyboard = build_risk_analytics_keyboard()
-    
+
     try:
         await query.edit_message_text(
             risk_text,
@@ -129,7 +129,7 @@ async def view_time_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Show time-based analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     time_text = f"""
 ⏰ <b>TIME-BASED ANALYSIS</b> {datetime.now().strftime('%H:%M')}
 {'═' * 35}
@@ -166,9 +166,9 @@ async def view_time_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE)
 ├ Q3: +41.3% (69% win)
 └ Q4: +23.2% (68% win)
 """
-    
+
     keyboard = build_time_analysis_keyboard()
-    
+
     try:
         await query.edit_message_text(
             time_text,
@@ -183,7 +183,7 @@ async def view_correlations(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Show correlation analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     correlation_text = f"""
 🔗 <b>CORRELATION ANALYSIS</b> {datetime.now().strftime('%H:%M')}
 {'═' * 35}
@@ -219,11 +219,11 @@ async def view_correlations(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 ├ Increase time diversity
 └ Consider hedging
 """
-    
+
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔙 Back", callback_data="refresh_dashboard")]
     ])
-    
+
     try:
         await query.edit_message_text(
             correlation_text,
@@ -237,7 +237,7 @@ async def view_predictions(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Show predictive analytics"""
     query = update.callback_query
     await query.answer()
-    
+
     prediction_text = f"""
 🎲 <b>PREDICTIVE ANALYTICS</b> {datetime.now().strftime('%H:%M')}
 {'═' * 35}
@@ -276,11 +276,11 @@ async def view_predictions(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 ├ SL: 67,500 (12% prob)
 └ R:R Ratio: 3.2:1
 """
-    
+
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔙 Back", callback_data="refresh_dashboard")]
     ])
-    
+
     try:
         await query.edit_message_text(
             prediction_text,
@@ -294,15 +294,15 @@ async def view_ai_insights(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Show AI-generated insights"""
     query = update.callback_query
     await query.answer()
-    
+
     ai_text = f"""
 💡 <b>AI INSIGHTS & RECOMMENDATIONS</b> {datetime.now().strftime('%H:%M')}
 {'═' * 35}
 
 🧠 <b>Market Analysis</b>
-The market is showing strong bullish momentum with 
-decreasing volatility. Key resistance at 69,800 
-with support at 67,500. Volume profile suggests 
+The market is showing strong bullish momentum with
+decreasing volatility. Key resistance at 69,800
+with support at 67,500. Volume profile suggests
 accumulation phase ending.
 
 🎯 <b>Optimal Strategy</b>
@@ -331,14 +331,14 @@ possible retest of support. Best entry
 windows: 14:00-16:00 UTC. Avoid trading
 during US market open volatility.
 """
-    
+
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📊 Apply Suggestions", callback_data="apply_ai_suggestions"),
             InlineKeyboardButton("🔙 Back", callback_data="refresh_dashboard")
         ]
     ])
-    
+
     try:
         await query.edit_message_text(
             ai_text,

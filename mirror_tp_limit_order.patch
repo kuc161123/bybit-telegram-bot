@@ -1,0 +1,21 @@
+--- execution/trader.py.backup_mirror_tp_20250709_100548	2025-07-09 10:05:48
++++ execution/trader.py	2025-07-09 10:05:48
+@@ -908,14 +908,15 @@
+                             # Create unique order link ID to avoid duplicates
+                             unique_order_link_id = self._generate_unique_order_link_id(f"{order_link_id}_MIRROR")
+ 
+-                            mirror_tp_result = await mirror_tp_sl_order(
++                            mirror_tp_result = await mirror_limit_order(
+                                 symbol=symbol,
+                                 side=tp_side,
+                                 qty=str(mirror_tp_qty),  # Use proportional quantity
+-                                trigger_price=str(tp_price),
++                                price=str(tp_price),
+                                 position_idx=original_position_idx,
+                                 order_link_id=unique_order_link_id,
+-                                stop_order_type="TakeProfit"
++                                reduce_only=True,
++                                time_in_force="GTC"
+                             )
+                             if mirror_tp_result:
+                                 mirror_tp_id = mirror_tp_result.get("orderId", "")

@@ -1,0 +1,17 @@
+Alert Coverage Verification Report
+Generated: 2025-07-12 11:40:37.718329
+================================================================================
+
+Total Positions: 27
+Total Monitors: 26
+Coverage Percentage: 77.8%
+
+Missing Monitors: 1
+  - IDUSDT_Buy_mirror
+
+Monitors Without Chat ID: 5
+  - AUCTIONUSDT_Buy_main
+  - AUCTIONUSDT_Buy_mirror
+  - CRVUSDT_Buy_mirror
+  - SEIUSDT_Buy_mirror
+  - ARBUSDT_Buy_mirror

@@ -1,0 +1,18 @@
+Fresh Start Closure Summary - 2025-07-09 18:14:26.821878
+================================================================================
+
+MAIN Account:
+  Positions closed: 14
+  Orders cancelled: 50
+  Remaining positions: 0
+  Remaining orders: 1
+
+MIRROR Account:
+  Positions closed: 14
+  Orders cancelled: 52
+  Remaining positions: 0
+  Remaining orders: 1
+
+TOTALS:
+  Total positions closed: 28
+  Total orders cancelled: 102

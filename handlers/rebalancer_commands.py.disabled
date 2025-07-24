@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""
+Commands for managing the auto-rebalancer
+"""
+import logging
+from telegram import Update
+from telegram.ext import ContextTypes
+
+from execution.auto_rebalancer import (
+    is_auto_rebalancer_running,
+    start_auto_rebalancer,
+    stop_auto_rebalancer
+)
+
+logger = logging.getLogger(__name__)
+
+
+async def rebalancer_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Check auto-rebalancer status"""
+    try:
+        is_running = is_auto_rebalancer_running()
+        
+        if is_running:
+            status_emoji = "✅"
+            status_text = "RUNNING"
+            message = f"""
+⚖️ <b>AUTO-REBALANCER STATUS</b>
+━━━━━━━━━━━━━━━━━━━━━━
+{status_emoji} Status: {status_text}
+
+The auto-rebalancer is actively monitoring positions and will automatically:
+• Rebalance when new positions open (Fast)
+• Rebalance when positions merge (Conservative)  
+• Rebalance when limit orders fill
+• Maintain proper TP/SL distributions
+
+<i>Alerts are sent for main account only</i>
+"""
+        else:
+            status_emoji = "🔴"
+            status_text = "STOPPED"
+            message = f"""
+⚖️ <b>AUTO-REBALANCER STATUS</b>
+━━━━━━━━━━━━━━━━━━━━━━
+{status_emoji} Status: {status_text}
+
+The auto-rebalancer is not running.
+Positions will not be automatically rebalanced.
+
+Use /rebalancer_start to enable auto-rebalancing.
+"""
+        
+        await update.message.reply_text(
+            message.strip(),
+            parse_mode="HTML"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error checking rebalancer status: {e}")
+        await update.message.reply_text(
+            "❌ Error checking rebalancer status"
+        )
+
+
+async def rebalancer_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Start the auto-rebalancer"""
+    try:
+        if is_auto_rebalancer_running():
+            await update.message.reply_text(
+                "⚖️ Auto-rebalancer is already running"
+            )
+            return
+        
+        # Start with application context
+        await start_auto_rebalancer(context.application)
+        
+        await update.message.reply_text(
+            "✅ Auto-rebalancer started successfully\n\n"
+            "The bot will now automatically rebalance positions when:\n"
+            "• New positions are opened\n"
+            "• Positions are merged\n"
+            "• Limit orders are filled"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error starting rebalancer: {e}")
+        await update.message.reply_text(
+            "❌ Failed to start auto-rebalancer"
+        )
+
+
+async def rebalancer_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Stop the auto-rebalancer"""
+    try:
+        if not is_auto_rebalancer_running():
+            await update.message.reply_text(
+                "⚖️ Auto-rebalancer is not running"
+            )
+            return
+        
+        await stop_auto_rebalancer()
+        
+        await update.message.reply_text(
+            "🛑 Auto-rebalancer stopped\n\n"
+            "Positions will no longer be automatically rebalanced."
+        )
+        
+    except Exception as e:
+        logger.error(f"Error stopping rebalancer: {e}")
+        await update.message.reply_text(
+            "❌ Failed to stop auto-rebalancer"
+        )

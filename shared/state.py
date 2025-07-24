@@ -21,7 +21,7 @@ class MessageManager:
         self.pending_edits = {}
         self.edit_lock = asyncio.Lock()
         self.message_cache = {}
-        self.cache_ttl = 60  # 1 minute
+        self.cache_ttl = 120  # 2 minutes - increased for better performance
     
     async def smart_edit_message(self, ctx: ContextTypes.DEFAULT_TYPE, chat_id: int, 
                                 message_id: Optional[int], text: str, 

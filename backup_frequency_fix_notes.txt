@@ -1,0 +1,5 @@
+
+# To reduce backup frequency, you can:
+# 1. Modify robust_persistence.py to limit backup frequency
+# 2. Add time-based checks before creating backups
+# 3. Only backup on significant changes, not every write

@@ -1,0 +1,72 @@
+--- enhanced_tp_sl_manager.py.orig
++++ enhanced_tp_sl_manager.py
+@@ -870,12 +870,20 @@
+     async def monitor_and_adjust_orders(self, symbol: str, side: str):
+         """
+         Enhanced monitoring with real-time fill detection and reduced latency
+         This replaces the conditional order logic with active management
++        
++        Now supports account-aware monitoring to prevent key collisions
+         """
+-        monitor_key = f"{symbol}_{side}"
++        # First, try to find the monitor by looking for both possible keys
++        main_key = f"{symbol}_{side}_main"
++        mirror_key = f"{symbol}_{side}_mirror"
++        legacy_key = f"{symbol}_{side}"  # For backward compatibility
++        
++        # Determine which key exists
++        monitor_key = None
++        if main_key in self.position_monitors:
++            monitor_key = main_key
++        elif mirror_key in self.position_monitors:
++            monitor_key = mirror_key
++        elif legacy_key in self.position_monitors:
++            # Handle legacy monitors (will be migrated)
++            monitor_key = legacy_key
++            
+         if monitor_key not in self.position_monitors:
+             return
+         
+         monitor_data = self.position_monitors[monitor_key]
++        
++        # Extract account type from monitor data or key
++        account_type = monitor_data.get('account_type', 'main')
++        if '_mirror' in monitor_key:
++            account_type = 'mirror'
++        elif '_main' in monitor_key:
++            account_type = 'main'
+         
+         # Sanitize monitor data to ensure all numeric fields are Decimal
+         monitor_data = self._sanitize_monitor_data(monitor_data)
+@@ -904,7 +912,13 @@
+         
+         try:
+             # Get current position
+-            positions = await get_position_info(symbol)
++            # Use appropriate client based on account type
++            if account_type == 'mirror':
++                from execution.mirror_trader import bybit_client_2
++                positions = await get_position_info_mirror(symbol, bybit_client_2)
++            else:
++                positions = await get_position_info(symbol)
++                
+             position = None
+             if positions:
+                 # Find the position for our side
+@@ -917,7 +931,7 @@
+                 logger.info(f"Position {symbol} {side} closed - stopping monitor")
+                 
+                 # CRITICAL FIX: Clean up all orders when position is closed (SL hit or manual close)
+-                await self.cleanup_position_orders(symbol, side)
++                await self.cleanup_position_orders(symbol, side, account_type=account_type)
+                 
+                 # Send position closed alert
+                 await self._send_position_closed_alert(monitor_data)
+@@ -967,7 +981,7 @@
+                     logger.info(f"📈 Position size increased by {size_diff} - additional limit orders filled")
+                     
+                     # Use atomic lock to prevent race conditions during order adjustment
+-                    monitor_key = f"{symbol}_{side}"
++                    # monitor_key already defined above
+                     if monitor_key not in self.monitor_locks:
+                         self.monitor_locks[monitor_key] = asyncio.Lock()

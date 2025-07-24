@@ -1,0 +1,7 @@
+# Mirror Monitor Protection
+# Created: 2025-07-09 10:45:12
+# This file indicates mirror monitors should be preserved
+
+PRESERVE_MIRROR_MONITORS = True
+MIRROR_MONITOR_COUNT = 5
+TOTAL_EXPECTED_MONITORS = 10

@@ -1,1 +1,97 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project specific
+*.pkl
+!bybit_bot_dashboard_v4.1_enhanced.pkl
+*.log
+*.log.*
+logs/
+backups/
+data/trade_history*.json
+cache/
+assets/debug/
+debug_*.png
+
+# Sensitive
 .env
+.env.*
+!.env.example
+config/local_settings.py
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+*.cover
+.hypothesis/
+
+# Documentation
+docs/_build/
+site/
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*.old
+archive/
+bot_output*.log
+trading_bot.log*
+
+# OS files
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# Monitoring
+monitor_health.json
+failed_alerts.json
+stats_backup*.json
+.monitor_sync_trigger
+.persistence_checksum
+.disable_persistence_recovery
+.false_tp_fix_checkpoint
+.false_tp_fix_verified
+.fresh_start
+.no_backup_restore
+health_check_*.txt
+bot_restart_log.txt
+
+# Temporary analysis scripts
+monitor_state_analysis.json
+current_monitor_state.json
+position_order_monitor.py
+trade_log_monitor.py
+
+# Keep important scripts in scripts/ directory
+check_*.py
+debug_*.py
+test_*.py
+verify_*.py
+fix_*.py
+diagnose_*.py
+analyze_*.py
+!scripts/diagnostics/check_*.py
+!scripts/fixes/fix_*.py
+!scripts/analysis/verify_*.py
+!tests/test_*.py

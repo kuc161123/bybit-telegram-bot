@@ -7,20 +7,29 @@ PRESERVES: All existing constants and configurations
 from decimal import Decimal
 
 # --- TRADING PARAMETERS ---
-ENTRY_PORTION_ALLOCATION = [Decimal("0.34"), Decimal("0.33"), Decimal("0.33")] 
+ENTRY_PORTION_ALLOCATION = [Decimal("0.34"), Decimal("0.33"), Decimal("0.33")]
+RISK_PERCENTAGE = "risk_percentage"  # Chat data key for risk percentage
 
-# ENHANCED: Dual approach system
-# Fast Market Approach: Single TP closes 100%
-TP_PERCENTAGES_FAST = [Decimal("1.00"), Decimal("0.00"), Decimal("0.00"), Decimal("0.00")]
+# Conservative approach only - fast approach removed
 
 # Conservative Approach: 4 TPs with specified percentages
-TP_PERCENTAGES_CONSERVATIVE = [Decimal("0.70"), Decimal("0.10"), Decimal("0.10"), Decimal("0.10")]
+TP_PERCENTAGES_CONSERVATIVE = [Decimal("0.85"), Decimal("0.05"), Decimal("0.05"), Decimal("0.05")]
+CONSERVATIVE_TP_PERCENTAGES = TP_PERCENTAGES_CONSERVATIVE  # Alias for compatibility
 
-# Legacy TP_PERCENTAGES for backward compatibility
+# Default TP percentages
 TP_PERCENTAGES = TP_PERCENTAGES_CONSERVATIVE
 
 # Limit order allocation for conservative approach (3 equal parts)
 LIMIT_ORDER_ALLOCATION = [Decimal("0.333"), Decimal("0.333"), Decimal("0.334")]
+
+# Bot Identification
+BOT_PREFIX = "BOT_"  # Prefix for bot-initiated orders to distinguish from external trades
+AUTO_PREFIX = "AUTO_"  # Prefix for auto-generated orders
+MANUAL_PREFIX = "MANUAL_"  # Prefix for manually created bot orders
+
+# Bot Position Tracking
+BOT_ORDER_PREFIXES = [BOT_PREFIX, AUTO_PREFIX, MANUAL_PREFIX]  # All prefixes that indicate bot orders
+MANAGE_EXTERNAL_POSITIONS = False  # Whether to manage positions not created by the bot - SET TO FALSE to protect external trades
 
 # --- VISUAL ELEMENTS ---
 EMOJI_MAP = {
@@ -81,7 +90,6 @@ ORDER_STRATEGY = "order_strategy"
 
 # ENHANCED: Trading approach selection including GGShot
 TRADING_APPROACH = "trading_approach"
-APPROACH_FAST = "fast_market"
 APPROACH_CONSERVATIVE = "conservative_limits"
 APPROACH_GGSHOT = "ggshot_screenshot"
 
@@ -92,7 +100,7 @@ GGSHOT_AI_CONFIDENCE = "ggshot_ai_confidence"
 GGSHOT_DETECTED_STRATEGY = "ggshot_detected_strategy"
 
 # Entry prices
-PRIMARY_ENTRY_PRICE = "primary_entry_price" 
+PRIMARY_ENTRY_PRICE = "primary_entry_price"
 LIMIT_ENTRY_1_PRICE = "limit_entry_1_price"
 LIMIT_ENTRY_2_PRICE = "limit_entry_2_price"
 LIMIT_ENTRY_3_PRICE = "limit_entry_3_price"
@@ -112,10 +120,10 @@ LAST_UI_MESSAGE_ID = "last_ui_message_id"
 POSITION_IDX = "positionIdx"
 
 # Order IDs
-PLACED_LIMIT_ENTRY_IDS = "placed_limit_entry_ids" 
-MARKET_ORDER_ID = "market_order_id" 
-TP_ORDER_IDS = "tp_order_ids" 
-SL_ORDER_ID = "sl_order_id" 
+PLACED_LIMIT_ENTRY_IDS = "placed_limit_entry_ids"
+MARKET_ORDER_ID = "market_order_id"
+TP_ORDER_IDS = "tp_order_ids"
+SL_ORDER_ID = "sl_order_id"
 
 # ENHANCED: Conservative approach order tracking
 LIMIT_ORDER_IDS = "limit_order_ids"
@@ -131,7 +139,7 @@ GGSHOT_TRADE_GROUP_ID = "ggshot_trade_group_id"
 GGSHOT_LIMITS_FILLED = "ggshot_limits_filled"
 
 # Instrument info
-MIN_ORDER_QTY = "min_order_qty" 
+MIN_ORDER_QTY = "min_order_qty"
 MIN_ORDER_NOTIONAL_VALUE = "min_order_notional_value"
 INITIAL_MARKET_FILL_QTY = "initial_market_fill_qty"
 INITIAL_AVG_ENTRY_PRICE = "initial_avg_entry_price"
@@ -182,10 +190,7 @@ STRATEGY_MARKET_ONLY = "strategy_market_only"
 STRATEGY_MARKET_AND_LIMITS = "strategy_market_and_limits"
 STRATEGY_CONSERVATIVE_LIMITS = "strategy_conservative_limits"
 
-# =============================================
-# BOT DATA KEYS - PERFORMANCE STATS
-# =============================================
-# Basic Stats
+
 STATS_TOTAL_TRADES = 'stats_total_trades_initiated'
 STATS_TOTAL_WINS = 'stats_total_wins'
 STATS_TOTAL_LOSSES = 'stats_total_losses'
@@ -206,7 +211,7 @@ STATS_WORST_TRADE = 'stats_worst_trade'
 
 # Approach Stats
 STATS_CONSERVATIVE_TRADES = 'stats_conservative_trades'
-STATS_FAST_TRADES = 'stats_fast_trades'
+# Fast approach stats removed
 STATS_GGSHOT_TRADES = 'stats_ggshot_trades'
 STATS_GGSHOT_AI_SUCCESS_RATE = 'stats_ggshot_ai_success_rate'
 STATS_CONSERVATIVE_TP1_CANCELLATIONS = 'stats_conservative_tp1_cancellations'
@@ -214,10 +219,7 @@ STATS_CONSERVATIVE_TP1_CANCELLATIONS = 'stats_conservative_tp1_cancellations'
 # Meta Stats
 STATS_LAST_RESET = 'stats_last_reset_timestamp'
 
-# =============================================
-# BOT DATA KEYS - MIRROR ACCOUNT MONITORING
-# =============================================
-# Account Types
+
 ACCOUNT_TYPE_PRIMARY = "primary"
 ACCOUNT_TYPE_MIRROR = "mirror"
 
@@ -226,7 +228,10 @@ MIRROR_MONITOR_TASK = "mirror_monitor_task"
 MIRROR_ACTIVE_MONITOR_TASK = "mirror_active_monitor_task"
 
 # Mirror Alert Settings
-ENABLE_MIRROR_ALERTS = False  # Disable alerts for mirror account positions to prevent duplicate notifications
+# Controls whether mirror account positions send alerts (works with enhanced TP/SL system)
+# Set to True to enable separate alerts for mirror positions 
+# Set to False to prevent duplicate notifications (recommended for single-user setups)
+ENABLE_MIRROR_ALERTS = True
 
 # =============================================
 # BOT DATA KEYS - EXTERNAL POSITION STATS
@@ -251,6 +256,14 @@ MONITOR_CHECK_INTERVAL = 8  # seconds
 MONITOR_CLEANUP_INTERVAL = 600  # seconds (10 minutes)
 MAX_POSITION_HISTORY = 10  # entries
 READ_ONLY_MONITORING_CHAT_ID_BASE = 9000000000  # Base for synthetic chat IDs
+
+# =============================================
+# MARKET ANALYSIS CACHE PARAMETERS
+# =============================================
+MARKET_ANALYSIS_CACHE_TTL = 86400  # 24 hours in seconds
+AI_INSIGHTS_CACHE_TTL = 86400  # 24 hours in seconds
+MARKET_DATA_CACHE_TTL = 60  # 60 seconds for responsive market data
+FORCE_REFRESH_BYPASS = True  # Allow manual refresh to bypass cache
 
 # =============================================
 # PERFORMANCE TRACKING
@@ -293,11 +306,8 @@ SUCCESS_MESSAGES = {
     'position_closed': "Position closed successfully"
 }
 
-# =============================================
-# CONVERSATION STATES
-# =============================================
-# New state definitions with GGShot approach selection
-(SELECTING_ACTION, ENTERING_SYMBOL, SELECTING_SIDE, ENTERING_MARGIN, 
+
+(SELECTING_ACTION, ENTERING_SYMBOL, SELECTING_SIDE, ENTERING_MARGIN,
  SELECTING_LEVERAGE, ENTERING_TP, ENTERING_SL, CONFIRMING_TRADE,
  ENTERING_MULTIPLE_TPS, ENTERING_LIMIT_ORDERS, SELECTING_APPROACH,
  UPLOADING_SCREENSHOT, MONITORING_POSITION) = range(13)
@@ -332,105 +342,108 @@ SUCCESS_MESSAGES = {
 # =============================================
 __all__ = [
     # Trading Parameters
-    'ENTRY_PORTION_ALLOCATION', 'TP_PERCENTAGES_FAST', 'TP_PERCENTAGES_CONSERVATIVE',
-    'TP_PERCENTAGES', 'LIMIT_ORDER_ALLOCATION',
-    
+    'ENTRY_PORTION_ALLOCATION', 'TP_PERCENTAGES_CONSERVATIVE',
+    'CONSERVATIVE_TP_PERCENTAGES', 'TP_PERCENTAGES', 'LIMIT_ORDER_ALLOCATION', 'RISK_PERCENTAGE',
+
     # Visual Elements
     'EMOJI_MAP',
-    
+
     # Chat Data Keys - Basic
     'SYMBOL', 'SIDE', 'MARGIN_AMOUNT', 'LEVERAGE', 'ORDER_STRATEGY',
-    'TRADING_APPROACH', 'APPROACH_FAST', 'APPROACH_CONSERVATIVE', 'APPROACH_GGSHOT',
-    
+
     # GGShot Screenshot Keys
     'GGSHOT_SCREENSHOT_FILE_ID', 'GGSHOT_SCREENSHOT_FILE_PATH',
     'GGSHOT_AI_CONFIDENCE', 'GGSHOT_DETECTED_STRATEGY',
-    
+
     # Chat Data Keys - Prices
     'PRIMARY_ENTRY_PRICE', 'LIMIT_ENTRY_1_PRICE', 'LIMIT_ENTRY_2_PRICE',
     'LIMIT_ENTRY_3_PRICE', 'TP1_PRICE', 'TP2_PRICE', 'TP3_PRICE', 'TP4_PRICE',
     'SL_PRICE',
-    
+
     # Chat Data Keys - UI/State
     'AWAITING_INPUT_FOR', 'LAST_UI_MESSAGE_ID', 'POSITION_IDX',
-    
+
     # Chat Data Keys - Orders
     'PLACED_LIMIT_ENTRY_IDS', 'MARKET_ORDER_ID', 'TP_ORDER_IDS', 'SL_ORDER_ID',
     'LIMIT_ORDER_IDS', 'CONSERVATIVE_TP_ORDER_IDS', 'CONSERVATIVE_SL_ORDER_ID',
     'CONSERVATIVE_TRADE_GROUP_ID',
-    
+
     # GGShot Order Keys
     'GGSHOT_ENTRY_ORDER_IDS', 'GGSHOT_TP_ORDER_IDS', 'GGSHOT_SL_ORDER_ID',
     'GGSHOT_TRADE_GROUP_ID', 'GGSHOT_LIMITS_FILLED',
-    
+
     # Chat Data Keys - Instrument
     'MIN_ORDER_QTY', 'MIN_ORDER_NOTIONAL_VALUE', 'INITIAL_MARKET_FILL_QTY',
     'INITIAL_AVG_ENTRY_PRICE', 'ACTIVE_MONITOR_TASK', 'INSTRUMENT_TICK_SIZE',
     'INSTRUMENT_QTY_STEP', 'MARGIN_INPUT_TYPE', 'MARGIN_PERCENTAGE_VALUE',
     'MAX_LEVERAGE_FOR_SYMBOL',
-    
+
     # Chat Data Keys - AI/Risk
     'AI_RECOMMENDATIONS_STORE', 'AI_RISK_ASSESSMENT_STORE', 'AI_RISK_SCORE',
     'AI_RISK_RATING', 'AI_POSITION_SIZING',
-    
+
     # Chat Data Keys - User Overrides
     'USER_OVERRIDE_MARGIN_TYPE', 'USER_OVERRIDE_MARGIN_VALUE_FIXED',
     'USER_OVERRIDE_MARGIN_VALUE_PERCENTAGE', 'USER_OVERRIDE_LEVERAGE',
     'USER_OVERRIDE_STRATEGY',
-    
+
     # Chat Data Keys - Monitoring
     'LAST_KNOWN_POSITION_SIZE', 'MONITORING_MODE', 'HELP_CONTEXT',
     'USER_PREFERENCES', 'INITIAL_POSITION_MARGIN', 'INITIAL_POSITION_VALUE',
-    
+
     # Conservative Approach Tracking
     'CONSERVATIVE_LIMITS_FILLED', 'CONSERVATIVE_TP1_HIT_BEFORE_LIMITS',
-    'CONSERVATIVE_TP1_HIT_WITH_FILLS', 'CONSERVATIVE_TP1_HIT_WITH_FILLS_PROCESSED', 
+    'CONSERVATIVE_TP1_HIT_WITH_FILLS', 'CONSERVATIVE_TP1_HIT_WITH_FILLS_PROCESSED',
     'CONSERVATIVE_ORDERS_CANCELLED',
-    
+
     # AI States
     'AWAIT_AI_RECOMMENDATIONS', 'DISPLAY_AI_RECOMMENDATIONS',
     'MODIFY_AI_MARGIN_TYPE', 'MODIFY_AI_MARGIN_VALUE',
     'MODIFY_AI_LEVERAGE', 'MODIFY_AI_STRATEGY',
-    
+
     # Strategy Constants
     'STRATEGY_MARKET_ONLY', 'STRATEGY_MARKET_AND_LIMITS',
     'STRATEGY_CONSERVATIVE_LIMITS',
-    
+
     # Performance Stats Keys
     'STATS_TOTAL_TRADES', 'STATS_TOTAL_WINS', 'STATS_TOTAL_LOSSES',
     'STATS_TOTAL_PNL', 'STATS_TP1_HITS', 'STATS_SL_HITS', 'STATS_OTHER_CLOSURES',
     'STATS_WIN_STREAK', 'STATS_LOSS_STREAK', 'STATS_BEST_TRADE',
-    'STATS_WORST_TRADE', 'STATS_CONSERVATIVE_TRADES', 'STATS_FAST_TRADES',
+    'STATS_WORST_TRADE', 'STATS_CONSERVATIVE_TRADES',
     'STATS_GGSHOT_TRADES', 'STATS_GGSHOT_AI_SUCCESS_RATE',
     'STATS_CONSERVATIVE_TP1_CANCELLATIONS', 'STATS_LAST_RESET',
-    
+
     # External Stats Keys
     'STATS_EXTERNAL_TRADES', 'STATS_EXTERNAL_PNL', 'STATS_EXTERNAL_WINS',
     'STATS_EXTERNAL_LOSSES',
-    
+
     # Trading Parameters
     'MAX_LEVERAGE', 'MIN_MARGIN', 'MAX_MARGIN', 'MIN_POSITION_SIZE',
-    
+
     # Monitoring Parameters
     'MONITOR_CHECK_INTERVAL', 'MONITOR_CLEANUP_INTERVAL',
     'MAX_POSITION_HISTORY', 'READ_ONLY_MONITORING_CHAT_ID_BASE',
-    
+
+    # Market Analysis Cache Parameters
+    'MARKET_ANALYSIS_CACHE_TTL', 'AI_INSIGHTS_CACHE_TTL', 
+    'MARKET_DATA_CACHE_TTL', 'FORCE_REFRESH_BYPASS',
+
     # Performance Tracking
     'TRADE_HISTORY_MAX_SIZE', 'STATS_DECIMAL_PRECISION',
-    
+
     # Default Values
     'DEFAULT_LEVERAGE_OPTIONS', 'DEFAULT_MARGIN_OPTIONS',
     'DEFAULT_TP_PERCENTAGES', 'DEFAULT_SL_PERCENTAGES',
-    
+
     # Messages
     'ERROR_MESSAGES', 'SUCCESS_MESSAGES',
-    
+
     # States
     'SELECTING_ACTION', 'ENTERING_SYMBOL', 'SELECTING_SIDE', 'ENTERING_MARGIN',
     'SELECTING_LEVERAGE', 'ENTERING_TP', 'ENTERING_SL', 'CONFIRMING_TRADE',
     'ENTERING_MULTIPLE_TPS', 'ENTERING_LIMIT_ORDERS', 'SELECTING_APPROACH',
     'UPLOADING_SCREENSHOT', 'MONITORING_POSITION',
-    
+
     # Legacy States
     'ASK_SYMBOL', 'ASK_SIDE', 'ASK_APPROACH_SELECTION', 'ASK_ORDER_STRATEGY',
     'ASK_PRIMARY_ENTRY_PRICE', 'ASK_L1_PRICE', 'ASK_L2_PRICE', 'ASK_L3_PRICE',
@@ -440,7 +453,7 @@ __all__ = [
     'HANDLE_MANUAL_MARGIN_SETUP_PERCENTAGE_VALUE',
     'HANDLE_MANUAL_LEVERAGE_SETUP', 'HANDLE_MANUAL_STRATEGY_SETUP',
     'REVIEW_TRADE_WITH_FINAL_PARAMS',
-    
+
     # Mirror Account Monitoring
     'ACCOUNT_TYPE_PRIMARY', 'ACCOUNT_TYPE_MIRROR',
     'MIRROR_MONITOR_TASK', 'MIRROR_ACTIVE_MONITOR_TASK',

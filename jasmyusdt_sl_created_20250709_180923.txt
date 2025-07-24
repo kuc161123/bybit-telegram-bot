@@ -1,0 +1,9 @@
+JASMYUSDT SL Order Created - 2025-07-09 18:09:23.468115
+============================================================
+
+Position: JASMYUSDT Buy 29925 @ 0.01250704
+Mark Price: 0.012483
+SL Order: Sell 29925 @ trigger 0.011944
+Order ID: d5a9e381-f20b-4c5d-99f9-28ac68c2a13d
+Link ID: BOT_CONS_JASMYUSDT_SL_1752073761532
+Verified: Yes

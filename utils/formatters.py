@@ -32,17 +32,17 @@ def format_mobile_number(value: Union[Decimal, float, int], decimals: int = 2, m
     try:
         if isinstance(value, (int, float)):
             value = Decimal(str(value))
-        
+
         # Format with specified decimals
         formatted = f"{value:,.{decimals}f}"
         formatted = formatted.rstrip('0').rstrip('.') if '.' in formatted else formatted
-        
+
         # Enhanced mobile formatting for iPhone 16 Pro Max
         if len(formatted) > max_length:
             # Try with fewer decimals first
             if decimals > 0:
                 return format_mobile_number(value, decimals - 1, max_length)
-            
+
             # Use enhanced notation for iPhone screen
             abs_value = abs(float(value))
             if abs_value >= 1_000_000_000:
@@ -57,7 +57,7 @@ def format_mobile_number(value: Union[Decimal, float, int], decimals: int = 2, m
                 thousands = abs_value / 1_000
                 sign = "-" if value < 0 else ""
                 return f"{sign}{thousands:.1f}K"
-        
+
         return formatted
     except:
         return str(value)[:max_length]
@@ -94,12 +94,12 @@ def create_info_card(title: str, content: List[str], emoji: str = "", width: int
         header_text = f"{emoji} {title}"
     else:
         header_text = title
-    
+
     # Card structure optimized for iPhone 16 Pro Max
     card = f"┌{'─' * width}┐\n"
     card += f"│ <b>{header_text}</b>{' ' * max(0, width - len(header_text) - 1)}│\n"
     card += f"├{'─' * width}┤\n"
-    
+
     for item in content:
         # Ensure content fits within card width
         if len(item) > width - 4:
@@ -117,7 +117,7 @@ def create_info_card(title: str, content: List[str], emoji: str = "", width: int
                 card += f"│ {current_line}{' ' * (width - len(current_line) - 1)}│\n"
         else:
             card += f"│ {item}{' ' * (width - len(item) - 1)}│\n"
-    
+
     card += f"└{'─' * width}┘"
     return card
 
@@ -136,7 +136,7 @@ def create_status_badge(status: str, text: str = "") -> str:
         'loss': '💔',
         'neutral': '⚪'
     }
-    
+
     emoji = status_emojis.get(status.lower(), '•')
     return f"{emoji} {text}" if text else emoji
 
@@ -150,7 +150,7 @@ def mobile_status_indicator(status: str) -> str:
     """Get iPhone 16 Pro Max optimized status indicator emoji"""
     indicators = {
         'active': '🟢',
-        'pending': '🟡', 
+        'pending': '🟡',
         'error': '🔴',
         'success': '✅',
         'warning': '⚠️',
@@ -204,7 +204,7 @@ def create_mobile_risk_meter(risk_score: float, compact: bool = True) -> str:
         color = "🔴"
         level = "MAX"
         icon = "💀"
-    
+
     if compact:
         # Enhanced compact version for iPhone 16 Pro Max
         filled = min(int(risk_score), 10)
@@ -240,7 +240,7 @@ def format_decimal_or_na(value: Optional[Union[Decimal, float, str]], precision:
     try:
         val_str = str(value)
         dec_val = Decimal(val_str)
-        
+
         # Enhanced auto-adjust precision for iPhone 16 Pro Max display
         abs_val = abs(dec_val)
         if abs_val >= 10000:
@@ -256,20 +256,20 @@ def format_decimal_or_na(value: Optional[Union[Decimal, float, str]], precision:
                 decimal_part = str_val.split('.')[1]
                 leading_zeros = len(decimal_part) - len(decimal_part.lstrip('0'))
                 precision = min(precision, leading_zeros + 4)
-        
+
         quantizer_str = '1e-' + str(precision)
         quantizer = Decimal(quantizer_str)
         quantized_val = dec_val.quantize(quantizer, rounding=ROUND_DOWN)
-        
+
         # Format result with enhanced readability
         result = quantized_val.to_eng_string()
         if '.' in result:
             result = result.rstrip('0').rstrip('.')
-        
+
         # Apply iPhone 16 Pro Max friendly formatting for very long numbers
         if len(result) > 14:  # Increased threshold for iPhone 16 Pro Max
             return format_mobile_number(dec_val, min(precision, 2))
-        
+
         return result
     except InvalidOperation:
         return "Invalid"
@@ -285,10 +285,10 @@ def format_price(value: Optional[Union[Decimal, float, str]], default_val: str =
     try:
         val_str = str(value)
         dec_val = Decimal(val_str)
-        
+
         # Convert to string without any rounding or precision loss
         result = str(dec_val)
-        
+
         # Only remove trailing zeros AFTER the decimal point
         if '.' in result:
             # Split into integer and decimal parts
@@ -300,7 +300,7 @@ def format_price(value: Optional[Union[Decimal, float, str]], default_val: str =
                 result = f"{integer_part}.{decimal_part}"
             else:
                 result = integer_part
-        
+
         return result
     except (InvalidOperation, ValueError):
         return default_val
@@ -326,7 +326,7 @@ def create_mobile_header(title: str, emoji: str = "", width: int = 32, style: st
         header_text = f"{emoji} {title}"
     else:
         header_text = title
-    
+
     if style == "card":
         # Card-style header for iPhone 16 Pro Max
         return f"┌{'─' * width}┐\n│ <b>{header_text}</b>{' ' * max(0, width - len(header_text) - 1)}│\n└{'─' * width}┘"
@@ -355,55 +355,55 @@ def create_mobile_info_line(label: str, value: str, emoji: str = "•", max_labe
         formatted_label = f"{emoji} {label}"
     else:
         formatted_label = label
-    
+
     # Enhanced truncation for iPhone 16 Pro Max
     if len(formatted_label) > max_label_width:
         formatted_label = formatted_label[:max_label_width-1] + "…"
-    
+
     return f"  {formatted_label}: {value}"
 
 def create_info_grid(items: List[tuple], columns: int = 2, width: int = 32) -> str:
     """Create iPhone 16 Pro Max optimized information grid"""
     grid = ""
     col_width = width // columns
-    
+
     for i in range(0, len(items), columns):
         row_items = items[i:i+columns]
         line = ""
-        
+
         for j, (label, value) in enumerate(row_items):
             if j > 0:
                 line += " │ "
-            
+
             item_text = f"{label}: {value}"
             if len(item_text) > col_width - 3:
                 item_text = item_text[:col_width-4] + "…"
-            
+
             line += item_text.ljust(col_width - 3)
-        
+
         grid += line + "\n"
-    
+
     return grid.rstrip()
 
 def split_long_message_mobile(message: str, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH - TELEGRAM_MESSAGE_BUFFER) -> List[str]:
     """Split long message optimized for iPhone 16 Pro Max reading"""
     # Use stricter limit for safety
     safe_max = min(max_length, 3800)  # Conservative limit to avoid issues
-    
+
     if len(message) <= safe_max:
         return [message]
-    
+
     messages = []
     current_message = ""
     lines = message.split('\n')
-    
+
     for line in lines:
         if len(line) > safe_max:
             # If a single line is too long, break it at word boundaries
             if current_message:
                 messages.append(current_message.rstrip('\n'))
                 current_message = ""
-            
+
             words = line.split(' ')
             current_line = ""
             for word in words:
@@ -413,7 +413,7 @@ def split_long_message_mobile(message: str, max_length: int = TELEGRAM_MAX_MESSA
                     if current_line:
                         messages.append(current_line)
                     current_line = word
-            
+
             if current_line:
                 current_message = current_line + '\n'
         else:
@@ -424,11 +424,11 @@ def split_long_message_mobile(message: str, max_length: int = TELEGRAM_MAX_MESSA
                 current_message = line + '\n'
             else:
                 current_message += line + '\n'
-    
+
     # Add remaining content
     if current_message:
         messages.append(current_message.rstrip('\n'))
-    
+
     # Add continuation indicators only if multiple parts
     if len(messages) > 1:
         for i in range(len(messages)):
@@ -436,23 +436,23 @@ def split_long_message_mobile(message: str, max_length: int = TELEGRAM_MAX_MESSA
                 messages[i] = f"📱 Part {i+1}/{len(messages)}\n" + "─" * 20 + "\n\n" + messages[i]
             if i < len(messages) - 1:
                 messages[i] += f"\n\n" + "─" * 20 + f"\n📱 Continued... ({i+1}/{len(messages)})"
-    
+
     return messages
 
-def format_mobile_position_summary(symbol: str, side: str, pnl: Decimal, 
+def format_mobile_position_summary(symbol: str, side: str, pnl: Decimal,
                                   pnl_pct: float, size: Decimal) -> str:
     """Format position summary optimized for iPhone 16 Pro Max display"""
     side_emoji = "📈" if side == "Buy" else "📉"
     pnl_emoji = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "🟡"
-    
+
     # Enhanced ultra-compact format for iPhone 16 Pro Max
     pnl_formatted = format_mobile_currency(pnl, compact=True)
     pct_formatted = format_mobile_percentage(pnl_pct, show_sign=True, decimals=1)
     size_formatted = format_mobile_number(size, decimals=3, max_length=10)
-    
+
     return f"{side_emoji} <b>{symbol}</b> • {pnl_emoji} {pnl_formatted} ({pct_formatted}) • {size_formatted}"
 
-def create_mobile_progress_indicator(current: int, total: int, 
+def create_mobile_progress_indicator(current: int, total: int,
                                    description: str = "Progress") -> str:
     """Create iPhone 16 Pro Max optimized progress indicator"""
     percentage = (current / total * 100) if total > 0 else 0
@@ -467,25 +467,25 @@ def create_highlight_box(text: str, style: str = "info", width: int = 32) -> str
         "success": {"emoji": "✅", "border": "═"},
         "error": {"emoji": "❌", "border": "▬"}
     }
-    
+
     style_config = styles.get(style, styles["info"])
     emoji = style_config["emoji"]
     border_char = style_config["border"]
-    
+
     box = f"┌{border_char * width}┐\n"
     box += f"│ {emoji} {text}{' ' * max(0, width - len(text) - 3)}│\n"
     box += f"└{border_char * width}┘"
-    
+
     return box
 
-def format_trade_summary_card(symbol: str, side: str, entry: Decimal, 
+def format_trade_summary_card(symbol: str, side: str, entry: Decimal,
                              current: Decimal, pnl: Decimal, approach: str) -> str:
     """Create iPhone 16 Pro Max optimized trade summary card"""
     side_emoji = "📈" if side == "Buy" else "📉"
     approach_emoji = "⚡" if approach == "fast" else "🛡️"
     pnl_emoji = "💚" if pnl >= 0 else "💔"
     pnl_status = "🟢" if pnl >= 0 else "🔴"
-    
+
     # Calculate percentage change
     pct_change = 0
     if entry > 0:
@@ -493,20 +493,20 @@ def format_trade_summary_card(symbol: str, side: str, entry: Decimal,
             pct_change = ((current - entry) / entry) * 100
         else:
             pct_change = ((entry - current) / entry) * 100
-    
+
     card = create_card_border(30) + "\n"
     card += f"│ {approach_emoji} {symbol} {side_emoji} {side.upper()}{' ' * (25 - len(symbol) - len(side))}│\n"
     card += f"├{'─' * 30}┤\n"
     card += f"│ Entry: ${format_decimal_or_na(entry)}{' ' * (22 - len(format_decimal_or_na(entry)))}│\n"
     card += f"│ Current: ${format_decimal_or_na(current)}{' ' * (20 - len(format_decimal_or_na(current)))}│\n"
     card += f"│ P&L: {pnl_status} {format_decimal_or_na(pnl, 2)} USDT {pnl_emoji}{' ' * (10 - len(format_decimal_or_na(pnl, 2)))}│\n"
-    
+
     if pct_change != 0:
         pct_emoji = "🚀" if pct_change > 5 else "📈" if pct_change > 0 else "📉"
         card += f"│ Change: {pct_emoji} {pct_change:+.2f}%{' ' * (16 - len(f'{pct_change:+.2f}'))}│\n"
-    
+
     card += create_card_bottom(30)
-    
+
     return card
 
 # Legacy compatibility functions
@@ -529,7 +529,7 @@ def create_beautiful_header(title: str, icon: str = "", subtitle: str = "") -> s
         header_line = f"{icon} <b>{title}</b>"
     else:
         header_line = f"<b>{title}</b>"
-    
+
     # Beautiful header with decorative elements
     result = f"╭─── {header_line} ───╮\n"
     if subtitle:
@@ -549,7 +549,7 @@ def create_status_line(label: str, value: str, status: str = "neutral") -> str:
     """Create status line with beautiful visual indicators"""
     status_styles = {
         "positive": "💚",
-        "negative": "❤️", 
+        "negative": "❤️",
         "neutral": "💙",
         "warning": "💛",
         "success": "💚",
@@ -572,7 +572,7 @@ def create_progress_indicator(current: float, target: float, width: int = 10) ->
     """Create visual progress bar indicator"""
     if target == 0:
         return "░" * width + " 0.0%"
-    
+
     percentage = min(100, (current / target) * 100)
     filled = int((percentage / 100) * width)
     bar = "█" * filled + "░" * (width - filled)
@@ -591,7 +591,7 @@ def format_pnl_with_color(pnl: Union[float, Decimal]) -> str:
 def create_enhanced_risk_meter(score: float, max_score: float = 10) -> str:
     """Create enhanced visual risk meter with emoji indicators"""
     normalized = (score / max_score) * 5
-    
+
     if normalized <= 1:
         return "🟢🟢⚪⚪⚪ Low Risk"
     elif normalized <= 2:
@@ -624,34 +624,34 @@ def create_pnl_scenario_card(tp1: float, all_tp: float, sl: float, current: floa
     """Create clean P&L scenario card for dashboard"""
     lines = []
     lines.append("┌─── 💰 P&L Scenarios ─────────┐")
-    
+
     if current != 0:
         current_str = f"+${abs(current):.2f}" if current > 0 else f"-${abs(current):.2f}"
         color = "🟢" if current > 0 else "🔴" if current < 0 else "⚪"
         lines.append(f"│ Current: {current_str} {color}        │")
-    
+
     if tp1 > 0:
         lines.append(f"│ TP1 Hit: +${tp1:.2f} 🎯       │")
-    
+
     if all_tp > 0:
         lines.append(f"│ All TPs: +${all_tp:.2f} 🏆     │")
-    
+
     if sl < 0:
         lines.append(f"│ All SLs: -${abs(sl):.2f} 🛡️      │")
-    
+
     lines.append("└──────────────────────────────┘")
-    
+
     return "\n".join(lines)
 
 def format_position_summary(symbol: str, side: str, pnl: float, size: float = None) -> str:
     """Format a compact position summary line"""
     side_emoji = "📈" if side == "Buy" else "📉"
     pnl_str = format_pnl_with_color(pnl)
-    
+
     summary = f"{side_emoji} {symbol}: {pnl_str}"
     if size:
         summary += f" ({size:.4f})"
-    
+
     return summary
 
 def create_position_heatmap_indicator(pnl: float, scale: float = 100) -> str:
@@ -681,11 +681,11 @@ __all__ = [
     'format_decimal_or_na',
     'format_price',  # New function for full precision prices
     'split_long_message',
-    
+
     # iPhone 16 Pro Max optimized functions
     'format_mobile_number',
     'mobile_progress_bar',
-    'mobile_status_indicator', 
+    'mobile_status_indicator',
     'format_mobile_price_change',
     'create_mobile_risk_meter',
     'format_mobile_time_ago',
@@ -697,17 +697,17 @@ __all__ = [
     'split_long_message_mobile',
     'format_mobile_position_summary',
     'create_mobile_progress_indicator',
-    
+
     # Card-based formatting (iPhone 16 Pro Max specific)
     'create_card_border',
-    'create_card_bottom', 
+    'create_card_bottom',
     'create_section_divider',
     'create_info_card',
     'create_status_badge',
     'create_info_grid',
     'create_highlight_box',
     'format_trade_summary_card',
-    
+
     # Enhanced formatting functions
     'create_section_header',
     'create_beautiful_header',
@@ -723,11 +723,11 @@ __all__ = [
     'create_position_heatmap_indicator',
     'format_potential_outcome',
     'create_pnl_scenario_card',
-    
+
     # Legacy compatibility
     'progress_bar',
     'status_indicator',
-    'format_price_change', 
+    'format_price_change',
     'create_risk_meter',
     'format_time_ago'
 ]

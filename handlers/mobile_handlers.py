@@ -9,7 +9,7 @@ from telegram.constants import ParseMode
 from decimal import Decimal
 from utils.formatters import get_emoji, format_decimal_or_na
 from dashboard.mobile_layouts import (
-    build_mobile_optimized_quick_trade_keyboard, 
+    build_mobile_optimized_quick_trade_keyboard,
     build_mobile_help_keyboard,
     build_mobile_dashboard_primary_keyboard,
     build_mobile_voice_keyboard,
@@ -25,27 +25,27 @@ async def fetch_mobile_optimized_trades_status() -> str:
     """Mobile-optimized trade status with compact display"""
     from utils.cache import executor
     from clients.bybit_client import bybit_client
-    
+
     try:
         import asyncio
         loop = asyncio.get_event_loop()
         positions_response = await loop.run_in_executor(
-            executor, 
+            executor,
             lambda: bybit_client.get_positions(category="linear", settleCoin="USDT", limit=10)
         )
-        
+
         if positions_response.get("retCode") == 0:
             all_positions = positions_response.get("result", {}).get("list", [])
             active_positions = [p for p in all_positions if Decimal(str(p.get("size", "0"))) > 0]
-            
+
             if not active_positions:
                 return "📱 <b>Portfolio</b>\n\n🟡 No active positions\n💰 Ready to trade!"
-            
+
             # Mobile-optimized header
             status_lines = [f"📱 <b>Portfolio ({len(active_positions)} active)</b>\n"]
-            
+
             total_pnl = Decimal("0")
-            
+
             # Show max 3 positions for mobile, with compact format
             for i, pos in enumerate(active_positions[:3]):
                 symbol = pos.get("symbol", "Unknown")
@@ -55,7 +55,7 @@ async def fetch_mobile_optimized_trades_status() -> str:
                 entry_price = Decimal(str(pos.get("avgPrice", "0")))
                 mark_price = Decimal(str(pos.get("markPrice", "0")))
                 total_pnl += unrealized
-                
+
                 # Calculate percentage change
                 if entry_price > 0:
                     if side == "Buy":
@@ -64,23 +64,23 @@ async def fetch_mobile_optimized_trades_status() -> str:
                         pct_change = ((entry_price - mark_price) / entry_price) * 100
                 else:
                     pct_change = 0
-                
+
                 side_emoji = "📈" if side == "Buy" else "📉"
                 pnl_emoji = "🟢" if unrealized > 0 else "🔴" if unrealized < 0 else "🟡"
-                
+
                 # Ultra-compact mobile format
                 status_lines.append(
                     f"{side_emoji} <b>{symbol}</b> • {pnl_emoji} {unrealized:.2f} USDT ({pct_change:+.1f}%)"
                 )
-            
+
             # Show summary if more positions exist
             if len(active_positions) > 3:
                 status_lines.append(f"... +{len(active_positions) - 3} more positions")
-            
+
             # Mobile-optimized total
             total_emoji = "📈" if total_pnl > 0 else "📉" if total_pnl < 0 else "➡️"
             status_lines.append(f"\n{total_emoji} <b>Total P&L: {total_pnl:.2f} USDT</b>")
-            
+
             return "\n".join(status_lines)
         else:
             return "📱 <b>Portfolio Status</b>\n\n❌ Could not fetch positions"
@@ -89,19 +89,19 @@ async def fetch_mobile_optimized_trades_status() -> str:
 
 async def mobile_dashboard_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Mobile-optimized dashboard command"""
-    
+
     # Import dashboard function
     from handlers.commands import _send_or_edit_dashboard_message
     await _send_or_edit_dashboard_message(upd, ctx, new_msg=True)
 
 async def mobile_quick_actions_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Enhanced mobile quick actions with better UX"""
-    
+
     # Get current portfolio status for context
     portfolio_status = await fetch_mobile_optimized_trades_status()
-    
+
     quick_message = f"""
-⚡ <b>QUICK TRADING</b> 
+⚡ <b>QUICK TRADING</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 {portfolio_status}
@@ -120,7 +120,7 @@ async def mobile_quick_actions_command(upd: Update, ctx: ContextTypes.DEFAULT_TY
 
 <i>Tap any option below to trade instantly!</i>
 """
-    
+
     await ctx.bot.send_message(
         chat_id=upd.effective_chat.id,
         text=quick_message,
@@ -130,10 +130,10 @@ async def mobile_quick_actions_command(upd: Update, ctx: ContextTypes.DEFAULT_TY
 
 async def mobile_portfolio_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Enhanced mobile portfolio with detailed insights"""
-    
+
     # Get detailed mobile-optimized status
     status_text = await fetch_mobile_optimized_trades_status()
-    
+
     portfolio_message = f"""
 {status_text}
 
@@ -142,7 +142,7 @@ async def mobile_portfolio_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
 <b>📊 Portfolio Actions:</b>
 • 📈 Real-time P&L tracking
 • 🎯 Position management
-• 📊 Performance analytics  
+• 📊 Performance analytics
 • 🔔 Price alerts & monitoring
 
 <b>⚡ Quick Access:</b>
@@ -152,18 +152,18 @@ async def mobile_portfolio_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 <i>Optimized for iPhone 16 Pro Max experience</i>
 """
-    
+
     await send_long_message(
-        ctx.bot, 
-        upd.effective_chat.id, 
-        portfolio_message, 
+        ctx.bot,
+        upd.effective_chat.id,
+        portfolio_message,
         parse_mode=ParseMode.HTML,
         reply_markup=build_mobile_position_management_keyboard()
     )
 
 async def mobile_help_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Enhanced mobile help with comprehensive guidance"""
-    
+
     help_message = f"""
 📱 <b>MOBILE TRADING GUIDE</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -208,7 +208,7 @@ async def mobile_help_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 <i>Select a topic below for detailed help:</i>
 """
-    
+
     await ctx.bot.send_message(
         chat_id=upd.effective_chat.id,
         text=help_message,
@@ -218,7 +218,7 @@ async def mobile_help_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def mobile_voice_help_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Mobile-optimized voice trading help"""
-    
+
     voice_help_message = f"""
 🎤 <b>VOICE TRADING GUIDE</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -264,7 +264,7 @@ async def mobile_voice_help_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE)
 
 <i>Ready to try voice trading? Tap below!</i>
 """
-    
+
     await ctx.bot.send_message(
         chat_id=upd.effective_chat.id,
         text=voice_help_message,
@@ -274,7 +274,7 @@ async def mobile_voice_help_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE)
 
 async def mobile_ai_insights_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Mobile-optimized AI insights display"""
-    
+
     ai_insights_message = f"""
 🧠 <b>AI TRADING INSIGHTS</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -310,7 +310,7 @@ async def mobile_ai_insights_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE
 
 <i>AI analysis updates every 30 seconds</i>
 """
-    
+
     await ctx.bot.send_message(
         chat_id=upd.effective_chat.id,
         text=ai_insights_message,
@@ -322,17 +322,17 @@ async def handle_mobile_quick_trade_callback(upd: Update, ctx: ContextTypes.DEFA
     """Enhanced mobile quick trade callback with better UX"""
     query = upd.callback_query
     await query.answer("⚡ Setting up quick trade...")
-    
+
     try:
         # Parse callback data: quick_trade:side:symbol:leverage
         parts = query.data.split(":")
         if len(parts) >= 4:
             _, action, side, symbol, leverage = parts[:5]
-            
+
             if action == "trade":
                 side_emoji = "📈" if side == "long" else "📉"
                 side_text = "LONG" if side == "long" else "SHORT"
-                
+
                 # Mobile-optimized quick setup message
                 quick_setup_message = f"""
 ⚡ <b>QUICK TRADE SETUP</b>
@@ -360,16 +360,16 @@ async def handle_mobile_quick_trade_callback(upd: Update, ctx: ContextTypes.DEFA
 
 <i>Choose your next action below:</i>
 """
-                
+
                 # Mobile-optimized next steps keyboard
                 next_steps_keyboard = build_mobile_trade_confirmation_keyboard()
-                
+
                 await query.edit_message_text(
                     text=quick_setup_message,
                     parse_mode=ParseMode.HTML,
                     reply_markup=next_steps_keyboard
                 )
-        
+
     except Exception as e:
         logger.error(f"Error in mobile quick trade callback: {e}")
         await query.edit_message_text(
@@ -387,7 +387,7 @@ async def handle_mobile_dashboard_refresh(upd: Update, ctx: ContextTypes.DEFAULT
     """Enhanced mobile dashboard refresh with loading states"""
     query = upd.callback_query
     await query.answer("🔄 Refreshing dashboard...")
-    
+
     try:
         # Show loading state first for better UX
         loading_message = f"""
@@ -395,28 +395,28 @@ async def handle_mobile_dashboard_refresh(upd: Update, ctx: ContextTypes.DEFAULT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 📊 Loading portfolio data...
-🎯 Fetching position updates...  
+🎯 Fetching position updates...
 🧠 Refreshing AI insights...
 💰 Updating balance info...
 
 <i>This will take just a moment...</i>
 """
-        
+
         await query.edit_message_text(
             text=loading_message,
             parse_mode=ParseMode.HTML
         )
-        
+
         # Import and call enhanced dashboard function
         from handlers.commands import _send_or_edit_dashboard_message
         await _send_or_edit_dashboard_message(query.message.chat.id, ctx, new_msg=True)
-        
+
         # Delete the loading message
         try:
             await query.message.delete()
         except:
             pass
-            
+
     except Exception as e:
         logger.error(f"Error in mobile dashboard refresh: {e}")
         await query.edit_message_text(
@@ -434,11 +434,11 @@ async def handle_mobile_position_management(upd: Update, ctx: ContextTypes.DEFAU
     """Enhanced mobile position management interface"""
     query = upd.callback_query
     await query.answer("📊 Loading positions...")
-    
+
     try:
         # Get current positions
         position_status = await fetch_mobile_optimized_trades_status()
-        
+
         position_management_message = f"""
 📊 <b>POSITION MANAGEMENT</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -467,13 +467,13 @@ async def handle_mobile_position_management(upd: Update, ctx: ContextTypes.DEFAU
 
 <i>Select an action below to manage your positions</i>
 """
-        
+
         await query.edit_message_text(
             text=position_management_message,
             parse_mode=ParseMode.HTML,
             reply_markup=build_mobile_position_management_keyboard()
         )
-        
+
     except Exception as e:
         logger.error(f"Error in mobile position management: {e}")
         await query.edit_message_text(
@@ -490,18 +490,18 @@ async def handle_back_to_dashboard(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Enhanced back to dashboard with smooth transition"""
     query = upd.callback_query
     await query.answer("🏠 Returning to dashboard...")
-    
+
     try:
         # Import and call dashboard function with smooth transition
         from handlers.commands import _send_or_edit_dashboard_message
         await _send_or_edit_dashboard_message(query.message.chat.id, ctx, new_msg=True)
-        
+
         # Delete the current message for clean transition
         try:
             await query.message.delete()
         except:
             pass
-            
+
     except Exception as e:
         logger.error(f"Error returning to dashboard: {e}")
         # Fallback - just show error message with dashboard option
@@ -514,7 +514,7 @@ async def handle_back_to_dashboard(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
 def build_mobile_error_recovery_keyboard():
     """Mobile-optimized error recovery keyboard"""
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-    
+
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Try Again", callback_data="retry_last_action")],
         [
@@ -531,7 +531,7 @@ def build_mobile_error_recovery_keyboard():
 __all__ = [
     'fetch_mobile_optimized_trades_status',
     'mobile_dashboard_command',
-    'mobile_quick_actions_command', 
+    'mobile_quick_actions_command',
     'mobile_portfolio_command',
     'mobile_help_command',
     'mobile_voice_help_command',

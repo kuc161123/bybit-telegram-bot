@@ -1,0 +1,7 @@
+# Mirror monitors lock file
+# Created: 2025-07-09 10:38:01
+# This file indicates that mirror monitors have been added
+
+MIRROR_MONITORS_ADDED = True
+TOTAL_MONITORS = 10
+TIMESTAMP = 1752046681

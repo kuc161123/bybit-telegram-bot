@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""
+Patch for Enhanced TP/SL Manager to fix limit fill detection.
+This ensures alerts are sent for ALL limit fills, not just small ones.
+"""
+
+# This patch should be applied to execution/enhanced_tp_sl_manager.py
+# Around line 1472, the logic should be changed from:
+
+# OLD LOGIC (problematic):
+# elif not limit_orders_filled and fill_percentage < 50:
+#     # Send limit fill alert
+
+# NEW LOGIC (fixed):
+# elif not limit_orders_filled and current_size > 0:
+#     # Send limit fill alert for ANY limit fill
+#     # Don't restrict based on fill percentage
+
+# The key changes:
+# 1. Remove the "fill_percentage < 50" condition
+# 2. Alert on ANY position size increase when limit_orders_filled is False
+# 3. Always call _adjust_all_orders_for_partial_fill when position increases
+
+# Additional fix around line 1383:
+# Always adjust orders when position size increases, regardless of fill percentage

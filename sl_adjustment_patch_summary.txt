@@ -1,0 +1,40 @@
+
+SL QUANTITY ADJUSTMENT PATCH SUMMARY
+====================================
+Date: 2025-07-10 18:05:29
+
+WHAT THIS PATCH DOES:
+1. Ensures enhanced SL quantity adjustment is used after every TP hit
+2. Properly adjusts SL quantity after TP1 (should be 15% of original)
+3. Properly adjusts SL quantity after TP2/3/4 progressively
+4. Adds detailed logging to track SL adjustments
+5. Works for both conservative and fast approaches
+
+EXPECTED BEHAVIOR AFTER PATCH:
+- When TP1 (85%) hits:
+  • Cancels remaining limit orders ✅
+  • Moves SL to breakeven ✅
+  • Adjusts SL quantity to match remaining 15% ✅
+  
+- When TP2 (5%) hits:
+  • SL quantity adjusts to remaining 10% ✅
+  
+- When TP3 (5%) hits:
+  • SL quantity adjusts to remaining 5% ✅
+  
+- When TP4 (5%) hits:
+  • Position closes completely ✅
+
+ALERTS YOU'LL RECEIVE:
+1. "TP1 HIT - PROFIT TAKEN!" with breakeven info
+2. "Limit Orders Cleaned Up" showing cancelled orders
+3. "STOP LOSS MOVED TO BREAKEVEN" confirmation
+4. For each TP: Updated SL quantity in logs
+
+Changes made:
+  ✅ Patched TP fill to use enhanced SL adjustment
+  ✅ Fixed enhanced SL calculation logic
+  ✅ Patched fast approach to use enhanced SL adjustment
+  ✅ Added detailed logging for SL adjustments
+
+Backup created: execution/enhanced_tp_sl_manager.py.backup_20250710_180529

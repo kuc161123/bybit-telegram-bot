@@ -38,51 +38,51 @@ def calculate_sharpe_ratio(returns: List[float], risk_free_rate: float = 0.02) -
     """Calculate Sharpe ratio"""
     if not returns or len(returns) < 2:
         return 0.0
-    
+
     avg_return = sum(returns) / len(returns)
     std_dev = math.sqrt(sum((r - avg_return) ** 2 for r in returns) / len(returns))
-    
+
     if std_dev == 0:
         return 0.0
-    
+
     return (avg_return - risk_free_rate) / std_dev
 
 def calculate_sortino_ratio(returns: List[float], risk_free_rate: float = 0.02) -> float:
     """Calculate Sortino ratio (downside deviation)"""
     if not returns or len(returns) < 2:
         return 0.0
-    
+
     avg_return = sum(returns) / len(returns)
     downside_returns = [r for r in returns if r < risk_free_rate]
-    
+
     if not downside_returns:
         return float('inf') if avg_return > risk_free_rate else 0.0
-    
+
     downside_std = math.sqrt(sum((r - risk_free_rate) ** 2 for r in downside_returns) / len(downside_returns))
-    
+
     if downside_std == 0:
         return 0.0
-    
+
     return (avg_return - risk_free_rate) / downside_std
 
 def create_ascii_chart(data: List[float], width: int = 30, height: int = 8, label: str = "") -> str:
     """Create ASCII line chart"""
     if not data or len(data) < 2:
         return ""
-    
+
     min_val = min(data)
     max_val = max(data)
-    
+
     if max_val == min_val:
         max_val = min_val + 1
-    
+
     scale = (height - 1) / (max_val - min_val)
-    
+
     chart = []
     for h in range(height, 0, -1):
         line = ""
         threshold = min_val + (h - 1) / scale
-        
+
         for i, value in enumerate(data):
             if i < len(data) - 1:
                 if value >= threshold:
@@ -100,20 +100,20 @@ def create_ascii_chart(data: List[float], width: int = 30, height: int = 8, labe
                         line += "■"
                 else:
                     line += "░"
-        
+
         if h == height:
             chart.append(f"{max_val:>6.1f} ┤{line}")
         elif h == 1:
             chart.append(f"{min_val:>6.1f} ┤{line}")
         else:
             chart.append(f"       │{line}")
-    
+
     # Add bottom axis
     chart.append(f"       └{'─' * len(data)}")
-    
+
     if label:
         chart.append(f"         {label}")
-    
+
     return "\n".join(chart)
 
 def create_distribution_chart(wins: int, losses: int, width: int = 20) -> str:
@@ -121,16 +121,16 @@ def create_distribution_chart(wins: int, losses: int, width: int = 20) -> str:
     total = wins + losses
     if total == 0:
         return "No trades yet"
-    
+
     win_width = int((wins / total) * width)
     loss_width = width - win_width
-    
+
     return f"{'█' * win_width}{'▒' * loss_width} {wins}W/{losses}L"
 
 def create_correlation_matrix(correlations: Dict[str, float]) -> str:
     """Create visual correlation matrix"""
     matrix = []
-    
+
     for asset, corr in correlations.items():
         # Visual correlation strength
         if corr >= 0.7:
@@ -145,9 +145,9 @@ def create_correlation_matrix(correlations: Dict[str, float]) -> str:
         else:
             strength = "█░░░░░░░"
             indicator = "🟢"  # Very low correlation
-        
+
         matrix.append(f"{indicator} {asset:>6}: {strength} {corr:.2f}")
-    
+
     return "\n".join(matrix)
 
 def generate_time_based_analysis(positions_data: List[Dict]) -> str:
@@ -159,15 +159,15 @@ def generate_time_based_analysis(positions_data: List[Dict]) -> str:
         ("Last 30d", 60, 41, 19, "+41.22"),
         ("Last 90d", 156, 103, 53, "+38.90")
     ]
-    
+
     table = "┌─── TIMEFRAME ──┬─ TRADES ─┬─ WIN ─┬─ LOSS ─┬─ AVG P&L ─┐\n"
-    
+
     for tf, trades, wins, losses, avg_pnl in timeframes:
         win_rate = (wins / trades * 100) if trades > 0 else 0
         table += f"│ {tf:<14} │   {trades:>3}    │  {wins:>3}  │   {losses:>3}  │ {avg_pnl:>9} │\n"
-    
+
     table += "└────────────────┴──────────┴───────┴────────┴───────────┘"
-    
+
     return table
 
 def calculate_advanced_metrics(positions: List[Dict]) -> Dict[str, Any]:
@@ -176,31 +176,31 @@ def calculate_advanced_metrics(positions: List[Dict]) -> Dict[str, Any]:
     total_trades = 60
     winning_trades = 41
     losing_trades = 19
-    
+
     # P&L calculations
     avg_win = 47.20
     avg_loss = -26.80
     total_profit = winning_trades * avg_win
     total_loss = losing_trades * abs(avg_loss)
-    
+
     # Risk metrics
     sharpe = 2.34
     sortino = 3.12
     calmar = 5.8
     max_dd = -3.2
-    
+
     # Statistical measures
     win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
     profit_factor = total_profit / total_loss if total_loss > 0 else 0
     expectancy = (winning_trades * avg_win + losing_trades * avg_loss) / total_trades if total_trades > 0 else 0
-    
+
     # Kelly Criterion (simplified)
     p = win_rate / 100  # Probability of win
     q = 1 - p  # Probability of loss
     b = abs(avg_win / avg_loss) if avg_loss != 0 else 1  # Win/loss ratio
     kelly = (p * b - q) / b if b != 0 else 0
     kelly_pct = max(0, min(kelly * 100, 25))  # Cap at 25%
-    
+
     return {
         "total_trades": total_trades,
         "wins": winning_trades,
@@ -228,7 +228,7 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
             wallet_info = await get_usdt_wallet_balance_cached()
             if isinstance(wallet_info, tuple):
                 wallet_info = wallet_info[0] if wallet_info else {}
-            
+
             if wallet_info and isinstance(wallet_info, dict):
                 result = wallet_info.get('result', {})
                 wallet_list = result.get('list', [])
@@ -250,19 +250,19 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
             logger.warning(f"Error getting wallet balance: {e}")
             total_balance = safe_decimal(10000)  # Demo balance
             available_balance = safe_decimal(8000)
-        
+
         # Get positions
         positions = await get_all_positions()
         active_positions = [p for p in positions if float(p.get('size', 0)) > 0]
-        
+
         # Calculate metrics
         metrics = calculate_advanced_metrics(active_positions)
-        
+
         # Simulate portfolio value and changes
         portfolio_value = float(total_balance)
         portfolio_change = 12.47  # MTD change
         alpha = 8.4  # vs BTC benchmark
-        
+
         # Build dashboard sections
         dashboard = f"""
 📈 <b>═══════ ADVANCED ANALYTICS SUITE ═══════</b>
@@ -339,7 +339,7 @@ async def build_analytics_dashboard_text(chat_id: int, context: Any) -> str:
 
 🚨 <b>LIVE ALERTS & SIGNALS</b>
 ├─ 🟢 {(datetime.now() - timedelta(minutes=1)).strftime('%H:%M')} - BTC breakout signal detected
-├─ 🟡 {(datetime.now() - timedelta(minutes=3)).strftime('%H:%M')} - ETH approaching resistance  
+├─ 🟡 {(datetime.now() - timedelta(minutes=3)).strftime('%H:%M')} - ETH approaching resistance
 ├─ 🔵 {(datetime.now() - timedelta(minutes=5)).strftime('%H:%M')} - ADA volume spike +240%
 ├─ ⚪ {(datetime.now() - timedelta(minutes=7)).strftime('%H:%M')} - Risk check passed ✓
 └─ 🟢 {(datetime.now() - timedelta(minutes=9)).strftime('%H:%M')} - New opportunity: SOL
@@ -372,9 +372,9 @@ Current Allocation vs Optimal (Markowitz)
 
 ═══════════════════════════════════════
 """
-        
+
         return dashboard
-        
+
     except Exception as e:
         logger.error(f"Error building analytics dashboard: {e}")
         return f"⚠️ Error loading analytics dashboard: {str(e)}"

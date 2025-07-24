@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""
+Helper functions for properly initializing background tasks in the trading bot.
+Add this to your bot initialization to fix the "no running event loop" errors.
+"""
+import asyncio
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+# Import robust_persistence for monitor sync
+from utils.robust_persistence import robust_persistence
+
+async def enhanced_tp_sl_monitoring_loop():
+    """
+    Background task for Enhanced TP/SL monitoring
+    This continuously monitors all positions and manages their TP/SL orders
+    """
+    logger.info("🎯 Enhanced TP/SL monitoring loop started")
+    
+    loop_count = 0
+    while True:
+        try:
+            loop_count += 1
+            # Log every 60 loops (5 minutes) to show the loop is running
+            if loop_count % 60 == 1:
+                logger.info(f"🔄 Enhanced TP/SL monitoring loop cycle #{loop_count}")
+            
+            from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+from execution.mirror_position_sync import start_mirror_position_sync
+            
+            # Check for signal file to reload monitors
+            signal_file = '/Users/lualakol/bybit-telegram-bot/reload_enhanced_monitors.signal'
+            force_load_signal = '/Users/lualakol/bybit-telegram-bot/.force_load_all_monitors'
+            should_reload = False
+            
+            if not enhanced_tp_sl_manager.position_monitors:
+                should_reload = True
+                logger.info("🔍 No monitors found, attempting to load from persistence...")
+            elif os.path.exists(signal_file):
+                should_reload = True
+                logger.info("📡 Signal file detected, reloading monitors from persistence...")
+            elif os.path.exists(force_load_signal):
+                should_reload = True
+                logger.info("🔄 Force load ALL monitors signal detected...")
+            
+            # Check for and load monitors from persistence if needed
+            if should_reload:
+                try:
+                    # Load directly from pickle file
+                    import pickle
+                    
+                    logger.info(f"🔍 Loading monitors directly from pickle file")
+                    logger.info(f"🔍 Current monitor count: {len(enhanced_tp_sl_manager.position_monitors)}")
+                    
+                    # Get all monitors from pickle
+                    with open('bybit_bot_dashboard_v4.1_enhanced.pkl', 'rb') as f:
+                        data = pickle.load(f)
+                    
+                    persisted_monitors = data.get('bot_data', {}).get('enhanced_tp_sl_monitors', {})
+                    logger.info(f"🔍 Found {len(persisted_monitors)} persisted monitors")
+                    
+                    if persisted_monitors:
+                        logger.info(f"🔍 Monitor keys: {list(persisted_monitors.keys())}")
+                        
+                        # Clear existing monitors and load fresh from persistence
+                        enhanced_tp_sl_manager.position_monitors.clear()
+                        
+                        # Sanitize each monitor data to ensure numeric fields are Decimal
+                        for monitor_key, monitor_data in persisted_monitors.items():
+                            # Only load monitors with proper account suffixes to prevent legacy monitor issues
+                            if monitor_key.endswith('_main') or monitor_key.endswith('_mirror'):
+                                sanitized_data = enhanced_tp_sl_manager._sanitize_monitor_data(monitor_data)
+                                enhanced_tp_sl_manager.position_monitors[monitor_key] = sanitized_data
+                            else:
+                                logger.warning(f"⚠️ Skipping legacy monitor: {monitor_key}")
+                        
+                        logger.info(f"✅ Loaded {len(enhanced_tp_sl_manager.position_monitors)} monitors from robust persistence")
+                        logger.info(f"🔍 Manager now has {len(enhanced_tp_sl_manager.position_monitors)} monitors")
+                        
+                        # Only sync with positions if NOT force loading (force load keeps all monitors)
+                        if not os.path.exists(force_load_signal):
+                            # Sync with actual positions to remove orphaned monitors
+                            from clients.bybit_helpers import get_all_positions
+                            positions = await get_all_positions()
+                            # Note: sync_with_positions will remove orphaned monitors but not sync sizes
+                            await robust_persistence.sync_with_positions(positions)
+                        else:
+                            logger.info("🔄 Force load mode - keeping ALL monitors without position sync")
+                        
+                        # Remove the signal files if they exist
+                        if os.path.exists(signal_file):
+                            os.remove(signal_file)
+                            logger.info("📡 Monitor reload signal processed")
+                        if os.path.exists(force_load_signal):
+                            os.remove(force_load_signal)
+                            logger.info("🔄 Force load signal processed")
+                    else:
+                        logger.warning("🔍 No persisted monitors found")
+                        
+                    # Log persistence stats
+                    stats = await robust_persistence.get_stats()
+                    logger.info(f"📊 Persistence stats: {stats.get('total_monitors')} monitors, {stats.get('file_size_mb'):.2f}MB file")
+                
+                except Exception as e:
+                    logger.error(f"❌ Could not load monitors from persistence: {e}")
+                    import traceback
+                    logger.error(f"❌ Traceback: {traceback.format_exc()}")
+            
+            # Periodic position sync (every 60 seconds)
+            import time
+            if not hasattr(enhanced_tp_sl_monitoring_loop, '_last_position_sync'):
+                enhanced_tp_sl_monitoring_loop._last_position_sync = 0
+            
+            current_time = time.time()
+            if current_time - enhanced_tp_sl_monitoring_loop._last_position_sync > 60:
+                logger.info("🔄 Running periodic position sync check")
+                try:
+                    await enhanced_tp_sl_manager.sync_existing_positions()
+                    
+                    # Mirror sync removed - mirror accounts operate independently
+                    # Each account's monitors handle their own positions without syncing
+                    
+                    enhanced_tp_sl_monitoring_loop._last_position_sync = current_time
+                except Exception as e:
+                    logger.error(f"❌ Error during periodic position sync: {e}")
+            
+            # Monitor all active positions (only count properly formatted monitors)
+            all_monitors = enhanced_tp_sl_manager.position_monitors
+            # Only count monitors with proper account-aware keys (ending in _main or _mirror)
+            valid_monitors = {k: v for k, v in all_monitors.items() 
+                            if k.endswith('_main') or k.endswith('_mirror')}
+            monitor_count = len(valid_monitors)
+            
+            if monitor_count > 0:
+                logger.info(f"🔍 Monitoring {monitor_count} positions")
+                for monitor_key, monitor_data in list(valid_monitors.items()):
+                    try:
+                        # Extract account type from monitor data
+                        account_type = monitor_data.get("account_type", "main")
+                        
+                        # Add debug logging for mirror monitors
+                        if monitor_key.endswith('_mirror'):
+                            logger.debug(f"🔍 Processing mirror monitor {monitor_key}: position_size={monitor_data.get('position_size')}, remaining_size={monitor_data.get('remaining_size')}")
+                        
+                        await enhanced_tp_sl_manager.monitor_and_adjust_orders(
+                            monitor_data["symbol"], 
+                            monitor_data["side"],
+                            account_type
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ Error monitoring {monitor_key}: {e}")
+            else:
+                # Only log this every 30 seconds to avoid spam
+                if not hasattr(enhanced_tp_sl_monitoring_loop, '_last_no_monitors_log'):
+                    enhanced_tp_sl_monitoring_loop._last_no_monitors_log = 0
+                
+                if current_time - enhanced_tp_sl_monitoring_loop._last_no_monitors_log > 30:
+                    logger.warning("🔍 No monitors active, checking for persistence reload")
+                    enhanced_tp_sl_monitoring_loop._last_no_monitors_log = current_time
+            
+            # Wait before next monitoring cycle (5 seconds for active monitoring)
+            await asyncio.sleep(5)
+            
+        except asyncio.CancelledError:
+            logger.info("🛑 Enhanced TP/SL monitoring loop cancelled")
+            break
+        except Exception as e:
+            logger.error(f"❌ Error in Enhanced TP/SL monitoring loop: {e}")
+            await asyncio.sleep(10)  # Wait longer on error
+
+async def start_all_background_tasks(app=None):
+    """
+    Start all background tasks after the event loop is running.
+    Call this from your main bot initialization after the application starts.
+    """
+    try:
+        logger.info("🚀 Starting all background tasks...")
+        
+        # Import the tasks here to avoid circular imports
+        from execution.monitor import periodic_monitor_cleanup
+        from clients.bybit_helpers import periodic_order_cleanup_task
+        # from execution.auto_rebalancer import start_auto_rebalancer  # DISABLED
+        
+        # Start monitor cleanup task
+        monitor_task = asyncio.create_task(periodic_monitor_cleanup())
+        logger.info("✅ Monitor cleanup task started")
+        
+        # Start order cleanup task
+        order_task = asyncio.create_task(periodic_order_cleanup_task())
+        logger.info("✅ Order cleanup task started")
+        
+        # Start Enhanced TP/SL monitoring
+        try:
+            from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+from execution.mirror_position_sync import start_mirror_position_sync
+            enhanced_task = asyncio.create_task(enhanced_tp_sl_monitoring_loop())
+            logger.info("✅ Enhanced TP/SL monitoring task started")
+
+    # Start mirror position sync (independent from main sync)
+    if os.getenv("ENABLE_MIRROR_TRADING", "false").lower() == "true":
+        logger.info("🪞 Starting independent mirror position sync...")
+        try:
+            mirror_sync_task = asyncio.create_task(
+                start_mirror_position_sync(enhanced_tp_sl_manager)
+            )
+            background_tasks.append(mirror_sync_task)
+            logger.info("✅ Mirror position sync task started (independent from main sync)")
+        except Exception as e:
+            logger.error(f"Failed to start mirror position sync: {e}")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Could not start Enhanced TP/SL monitoring: {e}")
+            enhanced_task = None
+        
+        # Start auto-rebalancer - DISABLED
+        # await start_auto_rebalancer(app)
+        # logger.info("✅ Auto-rebalancer started")
+        
+        # Add any other background tasks here
+        # Example: cache cleanup, protection cleanup, etc.
+        
+        logger.info("✅ All background tasks started successfully")
+        
+        # Store references to prevent garbage collection
+        if app and hasattr(app, 'bot_data'):
+            app.bot_data['_background_tasks'] = {
+                'monitor_cleanup': monitor_task,
+                'order_cleanup': order_task,
+                'enhanced_tp_sl': enhanced_task
+            }
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Error starting background tasks: {e}", exc_info=True)
+        return False
+
+def setup_post_init_callback(application):
+    """
+    Set up a post-initialization callback to start background tasks.
+    Add this to your bot setup in main.py
+    
+    Example usage in main.py:
+    
+    from helpers.background_tasks import setup_post_init_callback
+    
+    # After creating your Application instance:
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    # Set up the post-init callback
+    setup_post_init_callback(application)
+    """
+    async def post_init(application):
+        """Called after the bot is initialized"""
+        await start_all_background_tasks(application)
+    
+    # Register the post_init callback
+    application.post_init = post_init
+    logger.info("✅ Post-init callback registered for background tasks")
+
+# Alternative approach using a startup handler
+async def startup_handler(update, context):
+    """
+    Alternative: Start background tasks on first /start command
+    This ensures the bot is fully initialized before starting tasks
+    """
+    # Check if tasks already started
+    if context.bot_data.get('_background_tasks_started', False):
+        return
+    
+    # Start all background tasks
+    success = await start_all_background_tasks(context.application)
+    if success:
+        context.bot_data['_background_tasks_started'] = True
+        logger.info("✅ Background tasks started via startup handler")
+
+# Function to safely check if event loop is running
+def is_event_loop_running():
+    """Check if an event loop is currently running"""
+    try:
+        loop = asyncio.get_running_loop()
+        return loop.is_running()
+    except RuntimeError:
+        return False
+
+# Deferred task starter for modules
+class DeferredTaskStarter:
+    """
+    Helper class to defer task creation until event loop is available
+    """
+    def __init__(self):
+        self.pending_tasks = []
+        self.started = False
+    
+    def add_task(self, coro_func, name="unnamed"):
+        """Add a coroutine function to start later"""
+        self.pending_tasks.append((coro_func, name))
+        logger.debug(f"📋 Deferred task '{name}' for later startup")
+    
+    async def start_all(self):
+        """Start all pending tasks"""
+        if self.started:
+            logger.warning("⚠️ Tasks already started")
+            return
+        
+        started_tasks = []
+        for coro_func, name in self.pending_tasks:
+            try:
+                task = asyncio.create_task(coro_func())
+                started_tasks.append((task, name))
+                logger.info(f"✅ Started deferred task: {name}")
+            except Exception as e:
+                logger.error(f"❌ Failed to start task '{name}': {e}")
+        
+        self.started = True
+        self.pending_tasks.clear()
+        return started_tasks
+
+# Global deferred task starter
+deferred_tasks = DeferredTaskStarter()
+
+# Example usage in your modules:
+# Instead of directly calling asyncio.create_task() during import:
+#
+# from helpers.background_tasks import deferred_tasks
+# deferred_tasks.add_task(periodic_monitor_cleanup, "monitor_cleanup")
+#
+# Then in your main bot initialization:
+# await deferred_tasks.start_all()

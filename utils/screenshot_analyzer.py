@@ -23,24 +23,24 @@ logger = logging.getLogger(__name__)
 
 class ScreenshotAnalyzer:
     """Analyzes trading screenshots using OpenAI Vision API"""
-    
+
     def __init__(self):
         self.client = openai_client
         self.max_image_size = (1024, 1024)  # Reduce size for API efficiency
         self.enhancement_level = "standard"  # Can be "quick", "standard", or "advanced"
         self.debug_mode = True  # Save enhanced images for debugging
-        
+
     async def _parallel_model_analysis(self, base64_image: str, symbol: str, side: str, prompt_strategy: str = "simple") -> Dict[str, Any]:
         """Run multiple models in parallel and take the best result"""
         logger.info("🚀 Starting parallel model analysis for maximum speed...")
-        
+
         # Define model configurations (only vision-capable models)
         models = [
             ("gpt-4o-mini", "simple"),     # Fastest, good accuracy
             ("gpt-4o-mini", "numbers_only"), # Same model, different strategy
             ("gpt-4o", "detailed")         # Slowest but most accurate
         ]
-        
+
         # Create tasks for parallel execution
         tasks = []
         for model, strategy in models:
@@ -48,7 +48,7 @@ class ScreenshotAnalyzer:
                 self._analyze_with_openai(base64_image, symbol, side, strategy, model)
             )
             tasks.append((model, strategy, task))
-        
+
         # Wait for all tasks to complete
         results = []
         for model, strategy, task in tasks:
@@ -67,21 +67,21 @@ class ScreenshotAnalyzer:
                 logger.warning(f"⏱️ {model} ({strategy}) timed out")
             except Exception as e:
                 logger.error(f"💥 {model} ({strategy}) error: {e}")
-        
+
         if not results:
             return self._error_result("All models failed to extract parameters")
-        
+
         # Sort by confidence and take the best
         results.sort(key=lambda x: x[3], reverse=True)
         best_model, best_strategy, best_result, best_confidence = results[0]
-        
+
         # Log all results for comparison
         logger.info("📊 Parallel model results:")
         for model, strategy, result, confidence in results:
             logger.info(f"  - {model} ({strategy}): confidence={confidence:.2f}, strategy_type={result.get('strategy_type', 'unknown')}")
-        
+
         logger.info(f"🏆 Selected {best_model} ({best_strategy}) with confidence {best_confidence:.2f}")
-        
+
         # Add parallel analysis metadata
         best_result["parallel_analysis"] = {
             "models_tried": len(models),
@@ -89,18 +89,18 @@ class ScreenshotAnalyzer:
             "all_results": [(f"{m} ({s})", c) for m, s, _, c in results],
             "best_model": f"{best_model} ({best_strategy})"
         }
-        
+
         return best_result
 
     async def analyze_trading_screenshot(self, image_url: str, symbol: str, side: str) -> Dict[str, Any]:
         """
         Analyze trading screenshot and extract parameters with multi-pass extraction
-        
+
         Args:
             image_url: URL or file path to the screenshot
             symbol: Trading symbol (e.g., "BTCUSDT")
             side: Trade direction ("Buy" or "Sell")
-            
+
         Returns:
             Dict containing analysis results and extracted parameters
         """
@@ -108,22 +108,22 @@ class ScreenshotAnalyzer:
             if not self.client or LLM_PROVIDER != "openai":
                 logger.warning("OpenAI client not available, falling back to mock analysis")
                 return await self._mock_analysis(symbol, side)
-            
+
             # Download and preprocess image
             processed_image = await self._download_and_preprocess_image(image_url)
             if not processed_image:
                 return self._error_result("Failed to download or process image")
-            
+
             # Store original image for potential re-processing
             original_image = processed_image.copy()
-            
+
             # Get quality report
             from utils.image_enhancer import image_enhancer
             _, quality_report = image_enhancer.enhance_for_ocr(processed_image, "quick")
-            
+
             # Apply standard enhancement for parallel processing
             enhanced_image, _ = image_enhancer.enhance_for_ocr(processed_image.copy(), "standard")
-            
+
             # Save debug image if enabled
             if self.debug_mode:
                 debug_filename = f"debug_enhanced_parallel_{symbol}_{side}.png"
@@ -132,32 +132,32 @@ class ScreenshotAnalyzer:
                     logger.info(f"Debug: Saved enhanced image to {debug_filename}")
                 except Exception as e:
                     logger.error(f"Failed to save debug image: {e}")
-            
+
             # Convert to base64
             base64_image = self._image_to_base64(enhanced_image)
             if not base64_image:
                 return self._error_result("Failed to convert image to base64")
-            
+
             # Use parallel model analysis for maximum speed
             parallel_result = await self._parallel_model_analysis(base64_image, symbol, side)
-            
+
             if parallel_result.get("success"):
                 parallel_result["quality_report"] = quality_report
                 parallel_result["extraction_method"] = "parallel_model_analysis"
-                
+
                 # Log the winning model
                 if "parallel_analysis" in parallel_result:
                     logger.info(f"🏆 Parallel analysis winner: {parallel_result['parallel_analysis']['best_model']}")
-                
+
                 return parallel_result
             else:
                 # Final fallback - try to get ANY numbers from the image
                 logger.warning("All extraction attempts failed, trying emergency number extraction")
-                
+
                 # Use the most enhanced version
                 final_enhanced = await self._aggressive_enhance_for_ocr(original_image.copy())
                 base64_image = self._image_to_base64(final_enhanced)
-                
+
                 if base64_image:
                     emergency_result = await self._emergency_number_extraction(base64_image, symbol, side)
                     if emergency_result.get("success"):
@@ -165,13 +165,13 @@ class ScreenshotAnalyzer:
                         emergency_result["extraction_method"] = "emergency extraction"
                         logger.info("Emergency extraction succeeded")
                         return emergency_result
-                
+
                 return self._error_result("Failed to extract parameters after all attempts")
-            
+
         except Exception as e:
             logger.error(f"Error in screenshot analysis: {e}")
             return self._error_result(f"Analysis failed: {str(e)}")
-    
+
     async def _download_and_preprocess_image(self, image_url: str) -> Optional[Image.Image]:
         """Download and preprocess image for better OCR results"""
         try:
@@ -184,41 +184,41 @@ class ScreenshotAnalyzer:
                 # Assume it's a file path
                 with open(image_url, 'rb') as f:
                     image_data = f.read()
-            
+
             # Open image with PIL
             image = Image.open(io.BytesIO(image_data))
-            
+
             # Convert to RGB if necessary
             if image.mode != 'RGB':
                 image = image.convert('RGB')
-            
+
             # Enhance image for better OCR
             image = self._enhance_image_for_ocr(image)
-            
+
             # Resize if too large
             if image.size[0] > self.max_image_size[0] or image.size[1] > self.max_image_size[1]:
                 image.thumbnail(self.max_image_size, Image.Resampling.LANCZOS)
-            
+
             return image
-            
+
         except Exception as e:
             logger.error(f"Error downloading/preprocessing image: {e}")
             return None
-    
+
     def _enhance_image_for_ocr(self, image: Image.Image) -> Image.Image:
         """Enhance image using advanced enhancement pipeline"""
         try:
             # Use the new image enhancer
             enhanced_image, quality_report = enhance_screenshot(image, self.enhancement_level)
-            
+
             # Log quality report for debugging
             logger.info(f"Image quality report: {quality_report}")
-            
+
             # If it's detected as a TradingView screenshot, apply special enhancement
             if self._is_tradingview_screenshot(image):
                 logger.info("Detected TradingView screenshot, applying specialized enhancement")
                 enhanced_image = enhance_tradingview(enhanced_image)
-            
+
             # Warn about quality issues
             if quality_report.get("is_blurry"):
                 logger.warning("Image appears to be blurry, OCR accuracy may be reduced")
@@ -226,9 +226,9 @@ class ScreenshotAnalyzer:
                 logger.warning("Image resolution is below recommended minimum")
             if quality_report["brightness"].get("has_low_contrast"):
                 logger.warning("Image has low contrast, enhancement applied")
-                
+
             return enhanced_image
-            
+
         except Exception as e:
             logger.error(f"Error enhancing image: {e}")
             # Fallback to basic enhancement
@@ -240,34 +240,34 @@ class ScreenshotAnalyzer:
             except:
                 pass
             return image
-    
+
     def _is_tradingview_screenshot(self, image: Image.Image) -> bool:
         """Detect if image is likely a TradingView screenshot"""
         # Simple heuristic: check aspect ratio and size
         width, height = image.size
         aspect_ratio = width / height
-        
+
         # TradingView screenshots typically have certain aspect ratios
         # and are usually wider than they are tall
         is_landscape = aspect_ratio > 1.2
         is_reasonable_size = width > 800 and height > 400
-        
+
         return is_landscape and is_reasonable_size
-    
+
     def _image_to_base64(self, image: Image.Image) -> Optional[str]:
         """Convert PIL Image to base64 string"""
         try:
             buffer = io.BytesIO()
             image.save(buffer, format='JPEG', quality=85)
             buffer.seek(0)
-            
+
             image_base64 = base64.b64encode(buffer.read()).decode('utf-8')
             return image_base64
-            
+
         except Exception as e:
             logger.error(f"Error converting image to base64: {e}")
             return None
-    
+
     def _get_max_tokens_for_strategy(self, prompt_strategy: str) -> int:
         """Get optimal max_tokens based on prompt strategy for enhanced accuracy"""
         if prompt_strategy == "detailed":
@@ -282,7 +282,7 @@ class ScreenshotAnalyzer:
         else:
             # Default fallback
             return 1000
-    
+
     async def _analyze_with_openai(self, base64_image: str, symbol: str, side: str, prompt_strategy: str = "detailed", model: str = "gpt-4o") -> Dict[str, Any]:
         """Analyze image using OpenAI Vision API with different prompt strategies"""
         try:
@@ -293,7 +293,7 @@ class ScreenshotAnalyzer:
                 system_prompt = self._create_numbers_only_prompt()
             else:  # detailed (default)
                 system_prompt = self._create_analysis_prompt(symbol, side)
-            
+
             # Adjust user message based on prompt strategy
             if prompt_strategy == "numbers_only":
                 user_message = "Extract all visible numbers from this trading screenshot."
@@ -301,7 +301,7 @@ class ScreenshotAnalyzer:
                 user_message = f"Extract price levels from this {symbol} {side} trade screenshot."
             else:
                 user_message = f"Analyze this TradingView screenshot for {symbol} {side} trade and extract the trading parameters in the specified JSON format."
-            
+
             # Call OpenAI Vision API
             response = await asyncio.to_thread(
                 self.client.chat.completions.create,
@@ -331,77 +331,94 @@ class ScreenshotAnalyzer:
                 max_tokens=self._get_max_tokens_for_strategy(prompt_strategy) if model == "gpt-4o" else min(1500, self._get_max_tokens_for_strategy(prompt_strategy)),
                 temperature=0.1  # Low temperature for consistent extraction
             )
-            
+
             # Parse response
             content = response.choices[0].message.content
-            
+
             # Add model info to result
             result = None
             if prompt_strategy == "numbers_only":
                 result = await self._parse_numbers_only_response(content, symbol, side)
             else:
                 result = await self._parse_openai_response(content, symbol, side)
-            
+
             if result and isinstance(result, dict):
                 result["model_used"] = model
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Error calling OpenAI Vision API with model {model}: {e}")
             return self._error_result(f"OpenAI API error ({model}): {str(e)}")
-    
+
     def _create_analysis_prompt(self, symbol: str, side: str) -> str:
         """Create detailed analysis prompt for OpenAI Vision API with enhanced reasoning"""
         direction = "LONG" if side == "Buy" else "SHORT"
-        
+
+        # Different box colors for LONG vs SHORT
+        if side == "Buy":  # LONG
+            boxes_description = """
+CRITICAL VISUAL INDICATORS FOR LONG TRADES:
+🟩 GREEN BOXES = Entry prices and Take Profit levels
+- Look for numbers inside GREEN rectangular boxes
+- These GREEN boxes contain ENTRY prices and TP prices
+- Multiple green boxes = multiple entries or TPs
+
+⬜ GREY BOXES = Stop Loss
+- Look for numbers inside GREY/GRAY rectangular boxes
+- GREY boxes contain the STOP LOSS price
+- Usually only one grey box per trade"""
+        else:  # SHORT
+            boxes_description = """
+CRITICAL VISUAL INDICATORS FOR SHORT TRADES:
+🔴 RED BOXES = Entry prices and Take Profit levels
+- Look for numbers inside RED rectangular boxes
+- These RED boxes contain ENTRY prices and TP prices
+- Multiple red boxes = multiple entries or TPs
+
+⬜ GREY BOXES = Stop Loss
+- Look for numbers inside GREY/GRAY rectangular boxes
+- GREY boxes contain the STOP LOSS price
+- Usually only one grey box per trade"""
+
         return f"""You are an expert trading analyst specialized in extracting parameters from TradingView mobile screenshots.
 
 TASK: Analyze this mobile trading screenshot and extract ALL visible trading parameters for a {direction} position on {symbol}.
 
 ANALYSIS APPROACH:
 1. First, describe in detail what you see in the screenshot (colors, boxes, text labels, price levels)
-2. Identify all colored boxes (red, grey) and their associated numbers
+2. Identify all colored boxes ({('green' if side == 'Buy' else 'red')}, grey) and their associated numbers
 3. Look for text labels that indicate entry points, take profits, and stop loss
 4. Explain your reasoning for each price identification
 5. List any ambiguities or uncertainties you encounter
 6. Then provide the final JSON output
 
-CRITICAL VISUAL INDICATORS:
-🔴 RED BOXES = Entry prices and Take Profit levels
-- Look for numbers inside small RED rectangular boxes
-- These RED boxes contain ENTRY prices and TP prices
-- Multiple red boxes = multiple entries or TPs
-
-⬜ GREY BOXES = Stop Loss
-- Look for numbers inside small GREY/GRAY rectangular boxes
-- GREY boxes contain the STOP LOSS price
-- Usually only one grey box per trade
+{boxes_description}
 
 📝 IMPORTANT LABELS TO IDENTIFY:
-- ENTRIES: Look for "add short" or "add long" text labels next to prices
-- TAKE PROFITS: Look for "GG-Shot:Take Profit" labels next to prices
-- STOP LOSS: Look for "GG-Shot:Trailing Stop Loss" label next to price
+- ENTRIES: Look for {"'add long'" if side == "Buy" else "'add short'"} text labels next to prices
+- TAKE PROFITS: Look for "GGshot: Take Profit" labels next to prices
+- STOP LOSS: Look for "GGshot: Trailing Stop Loss" label next to price
 
 USE THESE LABELS AS PRIMARY IDENTIFICATION METHOD!
 
 POSITION RULES FOR {direction}:
 {f"- Stop Loss (grey box): at the BOTTOM (lowest price)" if side == "Buy" else "- Stop Loss (grey box): at the TOP (highest price)"}
-{f"- Entries (red boxes): ABOVE stop loss, closest to current price" if side == "Buy" else "- Entries (red boxes): BELOW stop loss, closest to current price"}
-{f"- Take Profits (red boxes): ABOVE entries, farther from current price" if side == "Buy" else "- Take Profits (red boxes): BELOW entries, farther from current price"}
+{f"- Entries (green boxes): ABOVE stop loss, closest to current price" if side == "Buy" else "- Entries (red boxes): BELOW stop loss, closest to current price"}
+{f"- Take Profits (green boxes): ABOVE entries, farther from current price" if side == "Buy" else "- Take Profits (red boxes): BELOW entries, farther from current price"}
 
 MOBILE SCREENSHOT TIPS:
 - LOOK FOR TEXT LABELS FIRST:
-  * "add short" or "add long" = ENTRY PRICES
-  * "GG-Shot:Take Profit" = TAKE PROFIT PRICES
-  * "GG-Shot:Trailing Stop Loss" = STOP LOSS PRICE
+  * {"'add long' = ENTRY PRICES" if side == "Buy" else "'add short' = ENTRY PRICES"}
+  * "GGshot: Take Profit" = TAKE PROFIT PRICES
+  * "GGshot: Trailing Stop Loss" = STOP LOSS PRICE
 - The colored boxes confirm the price types:
-  * RED box = Entry or TP
+  * {f"GREEN box = Entry or TP" if side == "Buy" else "RED box = Entry or TP"}
   * GREY box = Stop Loss
 - For {direction} positions:
-  * {"Entries are HIGHER (red boxes above current price)" if side == "Sell" else "Entries are LOWER (red boxes below current price)"}
-  * {"TPs are LOWER (red boxes below entries)" if side == "Sell" else "TPs are HIGHER (red boxes above entries)"}
-  * {"SL is HIGHEST (grey box at top)" if side == "Sell" else "SL is LOWEST (grey box at bottom)"}
+  * {"Entries are LOWER (green boxes below current price)" if side == "Buy" else "Entries are HIGHER (red boxes above current price)"}
+  * {"TPs are HIGHER (green boxes above entries)" if side == "Buy" else "TPs are LOWER (red boxes below entries)"}
+  * {"SL is LOWEST (grey box at bottom)" if side == "Buy" else "SL is HIGHEST (grey box at top)"}
 - Check both left and right sides for these colored boxes
 - Numbers may be small - focus on the colored boxes first
 
@@ -461,7 +478,7 @@ ENHANCED ANALYSIS REQUIREMENTS:
         try:
             import json
             from decimal import Decimal
-            
+
             # Custom JSON decoder that preserves decimal precision
             def parse_json_with_decimal(json_str):
                 """Parse JSON preserving decimal precision for price fields"""
@@ -479,31 +496,31 @@ ENHANCED ANALYSIS REQUIREMENTS:
                         else:
                             result[key] = value
                     return result
-                
+
                 return json.loads(json_str, object_pairs_hook=decimal_parser)
-            
+
             # Try to extract JSON from response
             if content.startswith('```json'):
                 content = content.replace('```json', '').replace('```', '').strip()
             elif content.startswith('```'):
                 content = content.replace('```', '').strip()
-            
+
             # Log raw response for debugging
             logger.info(f"Raw OpenAI response: {content[:500]}...")  # First 500 chars
-            
+
             # Parse JSON response with custom parser
             result = parse_json_with_decimal(content)
-            
+
             if not result.get("success"):
                 return self._error_result(result.get("notes", "Analysis failed"))
-            
+
             # Convert parameters to internal format
             params = result.get("parameters", {})
             strategy_type = result.get("strategy_type", "fast")
-            
+
             # Map to internal constants
             internal_params = {}
-            
+
             # Helper function to safely convert to Decimal
             def safe_decimal_convert(value, field_name):
                 try:
@@ -516,13 +533,13 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 except (InvalidOperation, ValueError) as e:
                     logger.error(f"Failed to convert {field_name}='{value}' to Decimal: {e}")
                     return None
-            
+
             # Entry prices
             if "primary_entry" in params:
                 val = safe_decimal_convert(params["primary_entry"], "primary_entry")
                 if val:
                     internal_params[PRIMARY_ENTRY_PRICE] = val
-            
+
             if strategy_type == "conservative":
                 if "limit_entry_1" in params:
                     val = safe_decimal_convert(params["limit_entry_1"], "limit_entry_1")
@@ -536,7 +553,7 @@ ENHANCED ANALYSIS REQUIREMENTS:
                     val = safe_decimal_convert(params["limit_entry_3"], "limit_entry_3")
                     if val:
                         internal_params[LIMIT_ENTRY_3_PRICE] = val
-            
+
             # Take profits with enhanced handling for missing TP4
             if "tp1_price" in params:
                 val = safe_decimal_convert(params["tp1_price"], "tp1_price")
@@ -564,22 +581,22 @@ ENHANCED ANALYSIS REQUIREMENTS:
                         calculated_tp4 = tp3 + (distance * Decimal("0.5"))
                         internal_params[TP4_PRICE] = calculated_tp4
                         logger.info(f"Calculated missing TP4: {calculated_tp4} based on TP3: {tp3}")
-            
+
             # Stop loss
             if "sl_price" in params:
                 val = safe_decimal_convert(params["sl_price"], "sl_price")
                 if val:
                     internal_params[SL_PRICE] = val
-            
+
             # Leverage and margin with better error handling
             try:
                 internal_params["leverage"] = int(params.get("leverage", 10))
             except (ValueError, TypeError):
                 internal_params["leverage"] = 10
-                
+
             margin_val = safe_decimal_convert(params.get("margin_amount", 100), "margin_amount")
             internal_params["margin_amount"] = margin_val if margin_val else Decimal("100")
-            
+
             # Check if we have minimum required parameters
             missing_critical = []
             if PRIMARY_ENTRY_PRICE not in internal_params:
@@ -588,16 +605,16 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 missing_critical.append("take profit 1")
             if SL_PRICE not in internal_params:
                 missing_critical.append("stop loss")
-            
+
             if missing_critical:
                 logger.error(f"Missing critical parameters: {', '.join(missing_critical)}")
                 return self._error_result(f"Failed to extract required parameters: {', '.join(missing_critical)}")
-            
+
             # For conservative strategy, ensure we have all required TPs
             if strategy_type == "conservative":
                 if TP4_PRICE not in internal_params:
                     logger.warning("TP4 was missing and calculated automatically")
-            
+
             # ENHANCED: Validate extracted parameters
             from utils.ggshot_validator import validate_ggshot_parameters
             try:
@@ -606,12 +623,12 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 current_price = await get_ticker_price_cached(symbol)
             except:
                 current_price = None
-            
+
             # Validate parameters
             success, errors, validated_params = await validate_ggshot_parameters(
                 internal_params, symbol, side, current_price
             )
-            
+
             if not success:
                 logger.warning(f"Parameter validation failed: {errors}")
                 return {
@@ -622,7 +639,7 @@ ENHANCED ANALYSIS REQUIREMENTS:
                     "validation_errors": errors,
                     "notes": "AI extraction successful but validation failed"
                 }
-            
+
             # Include enhanced analysis data if available
             enhanced_data = {}
             if "reasoning" in result:
@@ -630,7 +647,7 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 logger.info(f"Enhanced reasoning: {result['reasoning'][:200]}...")  # Log first 200 chars
             if "visible_elements" in result:
                 enhanced_data["visible_elements"] = result["visible_elements"]
-            
+
             return_data = {
                 "success": True,
                 "confidence": result.get("confidence", 0.8),
@@ -638,13 +655,13 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 "parameters": validated_params,  # Use validated/corrected params
                 "notes": result.get("notes", "Analysis completed successfully")
             }
-            
+
             # Add enhanced data if available
             if enhanced_data:
                 return_data["enhanced_analysis"] = enhanced_data
-            
+
             return return_data
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"JSON parsing error: {e}")
             logger.error(f"Content that failed to parse: {content}")
@@ -657,14 +674,14 @@ ENHANCED ANALYSIS REQUIREMENTS:
             logger.error(f"Unexpected error in parse_openai_response: {e}")
             logger.error(f"Full traceback:", exc_info=True)
             return self._error_result(f"Unexpected parsing error: {escape(str(e))}")
-    
+
     async def _mock_analysis(self, symbol: str, side: str) -> Dict[str, Any]:
         """Fallback mock analysis when OpenAI is not available"""
         logger.info("Using mock analysis - OpenAI not configured")
-        
+
         # Simulate processing delay
         await asyncio.sleep(2)
-        
+
         if side == "Buy":
             return {
                 "success": True,
@@ -699,7 +716,7 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 },
                 "notes": "Mock analysis - configure OpenAI for real extraction"
             }
-    
+
     def _error_result(self, error_message: str) -> Dict[str, Any]:
         """Create standardized error result"""
         # Ensure error message is HTML-safe
@@ -716,21 +733,21 @@ ENHANCED ANALYSIS REQUIREMENTS:
             # Convert to RGB if needed
             if image.mode != 'RGB':
                 image = image.convert('RGB')
-            
+
             # Check if this is a dark image
             gray = image.convert('L')
             pixels = np.array(gray)
             mean_brightness = np.mean(pixels)
             width, height = image.size
             is_mobile = height > width and width < 800
-            
+
             # Super aggressive processing for very dark mobile screenshots
             if mean_brightness < 30 and is_mobile:
                 logger.info(f"Very dark mobile image detected (brightness: {mean_brightness}), applying SUPER aggressive processing")
-                
+
                 # Save multiple versions and pick the best
                 versions = []
-                
+
                 # Version 1: Extreme brightness + gamma
                 v1 = image.copy()
                 enhancer = ImageEnhance.Brightness(v1)
@@ -742,7 +759,7 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 v1 = Image.fromarray(img_array)
                 v1 = ImageOps.equalize(v1)
                 versions.append(("brightness_gamma", v1))
-                
+
                 # Version 2: Inversion + enhancement
                 v2 = image.copy()
                 # Pre-brighten before inversion
@@ -754,7 +771,7 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 # Sharpen text
                 v2 = v2.filter(ImageFilter.UnsharpMask(radius=2, percent=250, threshold=1))
                 versions.append(("inverted", v2))
-                
+
                 # Version 3: Threshold-based approach
                 v3 = image.copy()
                 enhancer = ImageEnhance.Brightness(v3)
@@ -767,12 +784,12 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 binary = gray_v3.point(lambda x: 255 if x > threshold else 0, 'L')
                 v3 = binary.convert('RGB')
                 versions.append(("threshold", v3))
-                
+
                 # Pick the version with best contrast
                 best_contrast = 0
                 best_version = image
                 best_name = "original"
-                
+
                 for name, ver in versions:
                     gray_ver = np.array(ver.convert('L'))
                     contrast = np.std(gray_ver)
@@ -781,37 +798,37 @@ ENHANCED ANALYSIS REQUIREMENTS:
                         best_contrast = contrast
                         best_version = ver
                         best_name = name
-                
+
                 logger.info(f"Selected {best_name} version with contrast {best_contrast}")
                 image = best_version
-                    
+
             elif mean_brightness < 30:
                 logger.info(f"Very dark image detected (brightness: {mean_brightness}), applying aggressive brightening")
                 # Standard aggressive enhancement for non-mobile
                 enhancer = ImageEnhance.Brightness(image)
                 image = enhancer.enhance(4.0)
-                
+
                 img_array = np.array(image)
                 gamma = 2.2
                 img_array = np.power(img_array / 255.0, 1.0 / gamma) * 255.0
                 img_array = np.clip(img_array, 0, 255).astype(np.uint8)
                 image = Image.fromarray(img_array)
-                
+
                 image = ImageOps.autocontrast(image, cutoff=5)
             elif mean_brightness < 60:
                 logger.info(f"Dark image detected (brightness: {mean_brightness}), applying moderate brightening")
                 enhancer = ImageEnhance.Brightness(image)
                 image = enhancer.enhance(2.0)
                 image = ImageOps.autocontrast(image, cutoff=3)
-            
+
             # Aggressive contrast enhancement
             enhancer = ImageEnhance.Contrast(image)
             image = enhancer.enhance(2.5 if is_mobile else 2.0)
-            
+
             # Color reduction for text clarity
             enhancer = ImageEnhance.Color(image)
             image = enhancer.enhance(0.3 if is_mobile else 0.5)
-            
+
             # Strong sharpening for mobile
             if is_mobile:
                 # Apply multiple sharpening passes
@@ -820,10 +837,10 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 image = image.filter(ImageFilter.UnsharpMask(radius=4, percent=300, threshold=2))
             else:
                 image = image.filter(ImageFilter.UnsharpMask(radius=3, percent=200, threshold=3))
-            
+
             # Edge enhancement
             image = image.filter(ImageFilter.EDGE_ENHANCE_MORE)
-            
+
             # Aggressive upscaling for mobile screenshots
             if width < 800 or (is_mobile and width < 1000):
                 target_width = 1200 if is_mobile else 1024
@@ -831,28 +848,29 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 new_size = (int(width * scale_factor), int(height * scale_factor))
                 logger.info(f"Upscaling low-res image from {width}x{height} to {new_size[0]}x{new_size[1]}")
                 image = image.resize(new_size, Image.Resampling.LANCZOS)
-            
+
             return image
-            
+
         except Exception as e:
             logger.error(f"Error in aggressive enhancement: {e}")
             return image  # Return original if enhancement fails
-    
+
     def _create_simple_analysis_prompt(self, symbol: str, side: str) -> str:
         """Create simplified prompt focusing on visible numbers - optimized for speed"""
         direction = "LONG" if side == "Buy" else "SHORT"
-        
+        box_color = "GREEN" if side == "Buy" else "RED"
+
         return f"""Extract trading prices from this {symbol} {direction} screenshot.
 
 LOOK FOR:
-- RED BOXES = Entry/TP prices
+- {box_color} BOXES = Entry/TP prices
 - GREY BOX = Stop Loss
-- Labels: "add short/long", "GG-Shot:Take Profit", "GG-Shot:Trailing Stop Loss"
+- Labels: {"'add long'" if side == "Buy" else "'add short'"}, "GGshot: Take Profit", "GGshot: Trailing Stop Loss"
 
 {direction} POSITIONS:
-{"- Entries: RED boxes ABOVE current price" if side == "Sell" else "- Entries: RED boxes BELOW current price"}
-{"- TPs: RED boxes BELOW entries" if side == "Sell" else "- TPs: RED boxes ABOVE entries"}  
-{"- SL: GREY box at TOP" if side == "Sell" else "- SL: GREY box at BOTTOM"}
+{"- Entries: GREEN boxes BELOW current price" if side == "Buy" else "- Entries: RED boxes ABOVE current price"}
+{"- TPs: GREEN boxes ABOVE entries" if side == "Buy" else "- TPs: RED boxes BELOW entries"}
+{"- SL: GREY box at BOTTOM" if side == "Buy" else "- SL: GREY box at TOP"}
 
 Return JSON:
 {{
@@ -881,31 +899,36 @@ Extract EXACT numbers with ALL decimals."""
 YOUR TASK:
 1. Look for TEXT LABELS next to prices:
    - "add short" or "add long" = ENTRY PRICE
-   - "GG-Shot:Take Profit" = TAKE PROFIT PRICE
-   - "GG-Shot:Trailing Stop Loss" = STOP LOSS PRICE
-2. Find ALL numbers inside RED BOXES (red rectangular backgrounds)
-3. Find ALL numbers inside GREY/GRAY BOXES (grey rectangular backgrounds)
-4. Note the label and position of each price
+   - "GGshot: Take Profit" = TAKE PROFIT PRICE
+   - "GGshot: Trailing Stop Loss" = STOP LOSS PRICE
+2. Find ALL numbers inside GREEN BOXES (green rectangular backgrounds) - for LONG trades
+3. Find ALL numbers inside RED BOXES (red rectangular backgrounds) - for SHORT trades
+4. Find ALL numbers inside GREY/GRAY BOXES (grey rectangular backgrounds) - always Stop Loss
+5. Note the label and position of each price
 
-CRITICAL: 
+CRITICAL:
 - TEXT LABELS are the primary way to identify price types
-- The COLOR of the box confirms: RED = Entry/TP, GREY = Stop Loss
+- The COLOR of the box confirms:
+  * GREEN = Entry/TP for LONG trades
+  * RED = Entry/TP for SHORT trades
+  * GREY = Stop Loss (for both)
 
 Return JSON format:
 {
     "numbers_found": [
-        {"value": "1.2345", "box_color": "red", "label": "add short", "position": "top", "context": "entry price with 'add short' label"},
-        {"value": "1.2000", "box_color": "red", "label": "GG-Shot:Take Profit", "position": "middle", "context": "TP with label"},
-        {"value": "1.1500", "box_color": "red", "label": "GG-Shot:Take Profit", "position": "lower", "context": "TP with label"},
-        {"value": "1.3000", "box_color": "grey", "label": "GG-Shot:Trailing Stop Loss", "position": "top", "context": "stop loss with label"}
+        {"value": "1.2345", "box_color": "green", "label": "add long", "position": "top", "context": "entry price with 'add long' label"},
+        {"value": "1.2000", "box_color": "green", "label": "GGshot: Take Profit", "position": "middle", "context": "TP with label"},
+        {"value": "1.1500", "box_color": "green", "label": "GGshot: Take Profit", "position": "lower", "context": "TP with label"},
+        {"value": "1.3000", "box_color": "grey", "label": "GGshot: Trailing Stop Loss", "position": "top", "context": "stop loss with label"}
     ],
-    "red_box_count": 5,
+    "green_box_count": 3,
+    "red_box_count": 0,
     "grey_box_count": 1,
     "confidence": 0.0-1.0
 }
 
 IMPORTANT: Focus ONLY on numbers inside colored boxes. Extract EXACT values."""
-    
+
     async def _emergency_number_extraction(self, base64_image: str, symbol: str, side: str) -> Dict[str, Any]:
         """Emergency extraction - just get ANY visible numbers"""
         try:
@@ -919,7 +942,7 @@ IMPORTANT: Focus ONLY on numbers inside colored boxes. Extract EXACT values."""
 }
 
 Include ANY number you see, even partial ones. Focus on price-like numbers (with decimals)."""
-            
+
             response = await asyncio.to_thread(
                 self.client.chat.completions.create,
                 model="gpt-4o",
@@ -942,10 +965,10 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                 max_tokens=500,
                 temperature=0.1
             )
-            
+
             content = response.choices[0].message.content
             logger.info(f"Emergency extraction response: {content}")
-            
+
             # Clean JSON response - handle multiple markdown formats
             if '```' in content:
                 # Extract content between backticks
@@ -956,12 +979,12 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                 else:
                     # Just remove backticks
                     content = content.replace('```json', '').replace('```', '').strip()
-            
+
             # Try to parse and make sense of the numbers
             import json
             data = json.loads(content)
             numbers = data.get("numbers", [])
-            
+
             if len(numbers) >= 3:
                 # Convert to decimals and sort
                 decimals = []
@@ -971,7 +994,7 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                         decimals.append(val)
                     except:
                         continue
-                
+
                 if len(decimals) >= 3:
                     decimals.sort()
                     # Assume middle is entry, highest is TP, lowest is SL
@@ -988,28 +1011,28 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                         },
                         "notes": "Emergency extraction - parameters guessed from visible numbers"
                     }
-            
+
             return self._error_result("Could not extract enough numbers")
-            
+
         except Exception as e:
             logger.error(f"Emergency extraction failed: {e}")
             return self._error_result(f"Emergency extraction error: {str(e)}")
-    
+
     async def _parse_numbers_only_response(self, content: str, symbol: str, side: str) -> Dict[str, Any]:
         """Parse response from numbers-only extraction using colored box information"""
         try:
             import json
-            
+
             # Clean JSON response
             if content.startswith('```'):
                 content = content.replace('```json', '').replace('```', '').strip()
-            
+
             data = json.loads(content)
             numbers_found = data.get("numbers_found", [])
-            
+
             if not numbers_found:
                 return self._error_result("No numbers found in colored boxes")
-            
+
             # First pass: collect all prices to understand the scale
             all_prices = []
             for item in numbers_found:
@@ -1018,19 +1041,19 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                     all_prices.append(value)
                 except:
                     continue
-            
+
             # Separate by label and box color
             entry_prices = []
             tp_prices = []
             sl_price = None
-            
+
             for item in numbers_found:
                 try:
                     value = Decimal(str(item["value"]).replace(',', ''))
                     box_color = item.get("box_color", "").lower()
                     label = item.get("label", "").lower()
                     position = item.get("position", "")
-                    
+
                     # Use label as primary identifier
                     if "trailing stop loss" in label or ("grey" in box_color or "gray" in box_color):
                         sl_price = value
@@ -1049,7 +1072,7 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                                 normalized_value = value / 1000   # 171 -> 0.171
                             else:
                                 normalized_value = value / 100    # 17 -> 0.17
-                            
+
                             # Verify normalized value is in reasonable range of other prices
                             if normalized_value > avg_decimal * 0.1 and normalized_value < avg_decimal * 10:
                                 logger.info(f"Normalizing entry price: {value} -> {normalized_value} (context: avg decimal price {avg_decimal:.4f})")
@@ -1061,16 +1084,17 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                     elif "take profit" in label:
                         tp_prices.append((value, position))
                         logger.info(f"Found TP from 'take profit' label: {value}")
-                    elif "red" in box_color:
-                        # If no label but red box, we'll determine based on position later
-                        logger.info(f"Found unlabeled red box value: {value}")
+                    elif "red" in box_color or "green" in box_color:
+                        # If no label but colored box (red for short, green for long)
+                        # we'll determine based on position later
+                        logger.info(f"Found unlabeled {box_color} box value: {value}")
                 except:
                     continue
-            
-            
+
+
             if not sl_price:
                 return self._error_result("No stop loss found (should have 'GG-Shot:Trailing Stop Loss' label)")
-            
+
             # Sort entries and TPs based on labels
             if side == "Sell":
                 # For SHORT trades
@@ -1078,24 +1102,24 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                 entries = sorted([v for v, _ in entry_prices])
                 # Sort TPs: highest to lowest
                 tps = sorted([v for v, _ in tp_prices], reverse=True)
-                
+
             else:  # Buy/LONG
                 # For LONG trades
                 # Sort entries: highest to lowest (primary entry is highest/closest to market)
                 entries = sorted([v for v, _ in entry_prices], reverse=True)
                 # Sort TPs: lowest to highest
                 tps = sorted([v for v, _ in tp_prices])
-            
+
             # Determine strategy type
             strategy_type = "conservative" if len(entries) >= 3 or len(tps) >= 4 else "fast"
-            
+
             # Build parameters
             internal_params = {
                 SL_PRICE: sl_price,
                 "leverage": 10,
                 "margin_amount": Decimal("100")
             }
-            
+
             # Add entries
             if entries:
                 internal_params[PRIMARY_ENTRY_PRICE] = entries[0]
@@ -1105,7 +1129,7 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                     internal_params[LIMIT_ENTRY_2_PRICE] = entries[2]
                 if len(entries) > 3:
                     internal_params[LIMIT_ENTRY_3_PRICE] = entries[3]
-            
+
             # Add TPs
             if tps:
                 internal_params[TP1_PRICE] = tps[0]
@@ -1115,11 +1139,11 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                     internal_params[TP3_PRICE] = tps[2]
                 if len(tps) > 3:
                     internal_params[TP4_PRICE] = tps[3]
-            
+
             # Validate we have minimum requirements
             if PRIMARY_ENTRY_PRICE not in internal_params or TP1_PRICE not in internal_params:
                 return self._error_result("Missing required entry or TP1")
-            
+
             return {
                 "success": True,
                 "confidence": 0.9,  # Higher confidence with color information
@@ -1127,16 +1151,16 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                 "parameters": internal_params,
                 "notes": f"Found {len(entries)} entries with 'add' labels, {len(tps)} TPs with 'GG-Shot' labels, SL with trailing stop label"
             }
-            
+
         except Exception as e:
             logger.error(f"Error parsing numbers-only response: {e}")
             return self._error_result("Failed to parse colored box numbers")
-    
-    async def _calculate_extraction_confidence(self, result: Dict[str, Any], 
+
+    async def _calculate_extraction_confidence(self, result: Dict[str, Any],
                                              symbol: str, side: str) -> float:
         """
         Calculate composite confidence score for extraction result
-        
+
         Weights:
         - Field completeness: 40%
         - Logical consistency: 30%
@@ -1145,28 +1169,28 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
         """
         if not result.get("success"):
             return 0.0
-        
+
         params = result.get("parameters", {})
         strategy = result.get("strategy_type", "fast")
         scores = {}
-        
+
         # 1. Field Completeness (40%)
         required_fields = [PRIMARY_ENTRY_PRICE, TP1_PRICE, SL_PRICE]
         if strategy == "conservative":
             required_fields.extend([TP2_PRICE, TP3_PRICE, TP4_PRICE])
-        
+
         present_fields = sum(1 for field in required_fields if field in params)
         field_completeness = present_fields / len(required_fields)
         scores["field_completeness"] = field_completeness * 0.4
-        
+
         # 2. Logical Consistency (30%)
         logic_score = 1.0
-        
+
         # Check entry vs SL relationship
         if PRIMARY_ENTRY_PRICE in params and SL_PRICE in params:
             entry = params[PRIMARY_ENTRY_PRICE]
             sl = params[SL_PRICE]
-            
+
             # Check for potential decimal point issues
             if entry > 100 and sl < 10:
                 # Likely decimal point issue with entry price
@@ -1178,7 +1202,7 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                     entry = entry / 1000
                 params[PRIMARY_ENTRY_PRICE] = entry
                 logger.info(f"Auto-corrected entry price to {entry}")
-            
+
             if side == "Buy":
                 if sl >= entry:
                     logic_score *= 0.0  # Critical failure
@@ -1189,12 +1213,12 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                     logger.warning(f"Sell SL ({sl}) <= entry ({entry})")
         else:
             logic_score *= 0.5  # Missing critical fields
-        
+
         # Check TP vs entry relationship
         if PRIMARY_ENTRY_PRICE in params and TP1_PRICE in params:
             entry = params[PRIMARY_ENTRY_PRICE]
             tp1 = params[TP1_PRICE]
-            
+
             # Check for potential decimal point issues
             if entry > 100 and tp1 < 10:
                 # Likely decimal point issue with entry price
@@ -1202,7 +1226,7 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                 # Use the corrected entry if available
                 if PRIMARY_ENTRY_PRICE in params:
                     entry = params[PRIMARY_ENTRY_PRICE]
-            
+
             if side == "Buy":
                 if tp1 <= entry:
                     logic_score *= 0.3
@@ -1211,10 +1235,10 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                 if tp1 >= entry:
                     logic_score *= 0.3
                     logger.warning(f"Sell TP1 ({tp1}) >= entry ({entry})")
-        
+
         # Check TP ordering for conservative
         if strategy == "conservative":
-            tps = [params.get(tp) for tp in [TP1_PRICE, TP2_PRICE, TP3_PRICE, TP4_PRICE] 
+            tps = [params.get(tp) for tp in [TP1_PRICE, TP2_PRICE, TP3_PRICE, TP4_PRICE]
                    if tp in params]
             if len(tps) >= 2:
                 if side == "Buy":
@@ -1227,21 +1251,21 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                     if not all(tps[i] >= tps[i+1] for i in range(len(tps)-1)):
                         logic_score *= 0.7
                         logger.warning("Sell TPs not in descending order")
-        
+
         scores["logical_consistency"] = logic_score * 0.3
-        
+
         # 3. Price Relationships (20%)
         relationship_score = 1.0
-        
+
         if all(field in params for field in [PRIMARY_ENTRY_PRICE, TP1_PRICE, SL_PRICE]):
             entry = params[PRIMARY_ENTRY_PRICE]
             tp1 = params[TP1_PRICE]
             sl = params[SL_PRICE]
-            
+
             # Check price distances
             tp_distance = abs((tp1 - entry) / entry)
             sl_distance = abs((sl - entry) / entry)
-            
+
             # Penalize if distances are too small (<0.1%) or too large (>50%)
             if tp_distance < Decimal("0.001"):
                 relationship_score *= 0.5
@@ -1249,14 +1273,14 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
             elif tp_distance > Decimal("0.5"):
                 relationship_score *= 0.7
                 logger.warning(f"TP1 too far from entry: {tp_distance:.4%}")
-            
+
             if sl_distance < Decimal("0.001"):
                 relationship_score *= 0.5
                 logger.warning(f"SL too close to entry: {sl_distance:.4%}")
             elif sl_distance > Decimal("0.5"):
                 relationship_score *= 0.7
                 logger.warning(f"SL too far from entry: {sl_distance:.4%}")
-            
+
             # Check risk/reward ratio
             if side == "Buy":
                 risk = entry - sl
@@ -1264,7 +1288,7 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
             else:
                 risk = sl - entry
                 reward = entry - tp1
-            
+
             if risk > 0:
                 rr_ratio = reward / risk
                 if rr_ratio < Decimal("0.5"):
@@ -1275,34 +1299,34 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                     logger.warning(f"Unrealistic R:R ratio: {rr_ratio:.2f}:1")
         else:
             relationship_score = 0.5  # Missing fields for calculation
-        
+
         scores["price_relationships"] = relationship_score * 0.2
-        
+
         # 4. OpenAI Confidence (10%)
         openai_confidence = float(result.get("confidence", 0.5))
         scores["openai_confidence"] = openai_confidence * 0.1
-        
+
         # Calculate total
         total_confidence = sum(scores.values())
-        
+
         # Log breakdown
         logger.info(f"Confidence breakdown: Field={scores['field_completeness']:.2f}, "
                    f"Logic={scores['logical_consistency']:.2f}, "
                    f"Relationships={scores['price_relationships']:.2f}, "
                    f"OpenAI={scores['openai_confidence']:.2f}, "
                    f"Total={total_confidence:.2f}")
-        
+
         return total_confidence
-    
+
     def _identify_missing_fields(self, result: Dict[str, Any]) -> List[str]:
         """Identify which critical fields are missing from extraction"""
         if not result or not result.get("success"):
             return ["all"]
-        
+
         params = result.get("parameters", {})
         strategy = result.get("strategy_type", "fast")
         missing = []
-        
+
         # Check required fields
         if PRIMARY_ENTRY_PRICE not in params:
             missing.append("primary_entry")
@@ -1310,14 +1334,14 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
             missing.append("tp1")
         if SL_PRICE not in params:
             missing.append("sl")
-        
+
         # Check conservative strategy fields
         if strategy == "conservative":
             if LIMIT_ENTRY_1_PRICE not in params:
                 missing.append("limit_entries")
             if TP4_PRICE not in params:
                 missing.append("tp4")
-        
+
         return missing
 
 # Global analyzer instance
@@ -1326,12 +1350,12 @@ screenshot_analyzer = ScreenshotAnalyzer()
 async def analyze_trading_screenshot(image_url: str, symbol: str, side: str) -> Dict[str, Any]:
     """
     Convenience function to analyze trading screenshot
-    
+
     Args:
         image_url: URL or file path to the screenshot
         symbol: Trading symbol (e.g., "BTCUSDT")
         side: Trade direction ("Buy" or "Sell")
-        
+
     Returns:
         Dict containing analysis results and extracted parameters
     """

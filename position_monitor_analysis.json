@@ -1,0 +1,29 @@
+{
+  "missing_main": [],
+  "missing_mirror": [],
+  "extra_main": [
+    {
+      "key": "WLDUSDT_Buy_main",
+      "symbol": "WLDUSDT",
+      "side": "Buy"
+    },
+    {
+      "key": "1INCHUSDT_Buy_main",
+      "symbol": "1INCHUSDT",
+      "side": "Buy"
+    },
+    {
+      "key": "LDOUSDT_Buy_main",
+      "symbol": "LDOUSDT",
+      "side": "Buy"
+    },
+    {
+      "key": "ARKMUSDT_Buy_main",
+      "symbol": "ARKMUSDT",
+      "side": "Buy"
+    }
+  ],
+  "extra_mirror": [],
+  "found_positions": 40,
+  "expected_positions": 47
+}

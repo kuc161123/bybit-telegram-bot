@@ -1,0 +1,817 @@
+#!/usr/bin/env python3
+"""
+Enhanced Mirror TP/SL Manager with Comprehensive Error Handling
+==============================================================
+
+This module handles TP/SL order synchronization for mirror accounts with:
+- Robust error handling and retry logic
+- Circuit breaker pattern to prevent cascading failures
+- Position size tolerance checks
+- Order validation before execution
+- Detailed error logging and categorization
+"""
+
+import asyncio
+import logging
+from datetime import datetime
+from decimal import Decimal, ROUND_DOWN
+from typing import Dict, List, Optional, Any, Tuple
+import time
+import pickle
+import os
+
+from pybit.unified_trading import HTTP
+from pybit.exceptions import InvalidRequestError
+
+# Import error handler
+from create_enhanced_mirror_error_handling import EnhancedMirrorErrorHandler, CircuitBreaker
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+# Note: Position size sync has been removed - mirror positions use percentage-based sizing
+
+
+class MirrorEnhancedTPSLManager:
+    """
+    Legacy wrapper for compatibility with enhanced_tp_sl_manager
+    """
+
+    def __init__(self, main_manager):
+        self.main_manager = main_manager
+        # Get mirror client from mirror_trader
+        try:
+            from execution.mirror_trader import bybit_client_2
+            self.mirror_client = bybit_client_2
+            self.enhanced_mirror = MirrorEnhancedTPSL(bybit_client_2, "Mirror")
+        except Exception as e:
+            logger.error(f"Failed to initialize mirror client: {e}")
+            self.mirror_client = None
+            self.enhanced_mirror = None
+
+    async def sync_position_increase(self, symbol: str, side: str, main_monitor: dict):
+        """Legacy method for position sync"""
+        if self.enhanced_mirror:
+            try:
+                # Get mirror position
+                positions = self.mirror_client.get_positions(
+                    category="linear",
+                    symbol=symbol
+                )
+
+                mirror_position = None
+                if positions['retCode'] == 0:
+                    for pos in positions['result']['list']:
+                        if pos['symbol'] == symbol and pos['side'] == side:
+                            mirror_position = pos
+                            break
+
+                # Use new sync method
+                return await self.enhanced_mirror.sync_tp_sl_orders(main_monitor, mirror_position)
+            except Exception as e:
+                logger.error(f"Error in legacy position sync: {e}")
+                return False
+        return False
+
+    async def sync_breakeven_movement(self, symbol: str, side: str, breakeven_price: str):
+        """Legacy method for breakeven sync"""
+        logger.info(f"Legacy breakeven sync called for {symbol} {side}")
+        # This functionality is now handled by the sync_tp_sl_orders method
+        return True
+
+    async def setup_mirror_tp_sl_orders(self, symbol: str, side: str, position_size: str,
+                                      entry_price: str, tp_prices: list, sl_price: str,
+                                      tp_percentages: list = None, position_idx: int = 0,
+                                      chat_id: int = None, **kwargs):
+        """
+        Setup mirror TP/SL orders for a new position
+        This method is called from trader.py when creating mirror positions
+        """
+        try:
+            if not self.enhanced_mirror:
+                logger.error("Enhanced mirror not initialized")
+                return False
+
+            # Convert strings to Decimal for precision
+            position_size_decimal = Decimal(str(position_size))
+            entry_price_decimal = Decimal(str(entry_price))
+            sl_price_decimal = Decimal(str(sl_price))
+
+            # Create monitor data structure
+            monitor_data = {
+                "symbol": symbol,
+                "side": side,
+                "position_size": position_size_decimal,
+                "remaining_size": position_size_decimal,
+                "entry_price": entry_price_decimal,
+                "avg_price": entry_price_decimal,
+                "approach": "conservative" if len(tp_prices) > 1 else "fast",
+                "tp_orders": {},  # Always use dict format for consistency
+                "sl_order": None,
+                "filled_tps": [],
+                "cancelled_limits": False,
+                "tp1_hit": False,
+                "tp1_info": None,
+                "sl_moved_to_be": False,
+                "sl_move_attempts": 0,
+                "created_at": time.time(),
+                "last_check": time.time(),
+                "limit_orders": [],
+                "limit_orders_cancelled": False,
+                "phase": "MONITORING",
+                "chat_id": chat_id,
+                "account_type": "mirror",
+                "has_mirror": True
+            }
+
+            # Create monitor key
+            monitor_key = f"{symbol}_{side}_mirror"
+
+            # Add to main manager's monitors
+            if self.main_manager:
+                self.main_manager.position_monitors[monitor_key] = monitor_data
+                logger.info(f"✅ Added {monitor_key} to Enhanced TP/SL monitors")
+
+                # Also save to persistence directly
+                try:
+                    import pickle
+                    pkl_path = 'bybit_bot_dashboard_v4.1_enhanced.pkl'
+
+                    with open(pkl_path, 'rb') as f:
+                        data = pickle.load(f)
+
+                    if 'bot_data' not in data:
+                        data['bot_data'] = {}
+                    if 'enhanced_tp_sl_monitors' not in data['bot_data']:
+                        data['bot_data']['enhanced_tp_sl_monitors'] = {}
+
+                    # Clean monitor data before adding to persistence
+                    clean_monitor = {}
+                    for field_key, field_value in monitor_data.items():
+                        # Skip any non-serializable fields
+                        if any([
+                            'task' in str(field_key).lower(),
+                            'monitoring_task' in str(field_key),
+                            hasattr(field_value, '_callbacks'),
+                            hasattr(field_value, '__await__'),
+                            hasattr(field_value, 'cancel'),
+                            callable(field_value) and not isinstance(field_value, type)
+                        ]):
+                            continue
+                        clean_monitor[field_key] = field_value
+                    
+                    # Add cleaned monitor to persistence
+                    data['bot_data']['enhanced_tp_sl_monitors'][monitor_key] = clean_monitor
+
+                    with open(pkl_path, 'wb') as f:
+                        pickle.dump(data, f)
+
+                    logger.info(f"✅ Saved {monitor_key} to persistence")
+
+                except Exception as e:
+                    logger.error(f"Error saving mirror monitor to persistence: {e}")
+
+            # Get mirror position
+            positions = self.mirror_client.get_positions(
+                category="linear",
+                symbol=symbol
+            )
+
+            mirror_position = None
+            if positions['retCode'] == 0:
+                for pos in positions['result']['list']:
+                    if pos['symbol'] == symbol and pos['side'] == side:
+                        mirror_position = pos
+                        break
+
+            if not mirror_position:
+                logger.error(f"No mirror position found for {symbol} {side}")
+                return False
+
+            # Use enhanced sync method to place orders
+            result = await self.enhanced_mirror.setup_tp_sl_from_monitor(monitor_data, mirror_position, tp_prices, tp_percentages, sl_price_decimal)
+
+            # Ensure tp_orders is in dict format immediately after setup
+            if result and isinstance(result, dict) and "tp_orders" in result:
+                if isinstance(result["tp_orders"], list):
+                    # Convert to dict format
+                    tp_dict = {}
+                    for order in result["tp_orders"]:
+                        if isinstance(order, dict) and "order_id" in order:
+                            tp_dict[order["order_id"]] = order
+                    result["tp_orders"] = tp_dict
+                    # Also update monitor_data
+                    if self.main_manager and monitor_key in self.main_manager.position_monitors:
+                        self.main_manager.position_monitors[monitor_key]["tp_orders"] = tp_dict
+
+            # Update monitor with order information if successful
+            if result and isinstance(result, dict) and self.main_manager and monitor_key in self.main_manager.position_monitors:
+                # Start monitoring task
+                monitor_task = asyncio.create_task(
+                    self.main_manager._run_monitor_loop(symbol, side, "mirror")
+                )
+                # Don't store the task in the monitor data to avoid pickle serialization errors
+                # The task will be tracked separately in memory
+                logger.info(f"🔄 Started monitoring task for {monitor_key}")
+
+            # Create dashboard monitor if we have chat_id
+            if result and chat_id and self.main_manager:
+                try:
+                    await self.main_manager.create_dashboard_monitor_entry(
+                        symbol=symbol,
+                        side=side,
+                        chat_id=chat_id,
+                        approach=monitor_data["approach"],
+                        account_type="mirror"
+                    )
+                    logger.info(f"✅ Created dashboard monitor for mirror {symbol} {side}")
+                except Exception as e:
+                    logger.error(f"Failed to create dashboard monitor: {e}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error setting up mirror TP/SL orders: {e}")
+            return False
+
+class MirrorEnhancedTPSL:
+    """Enhanced TP/SL management for mirror trading with comprehensive error handling"""
+
+    def __init__(self, client: HTTP, account_prefix: str = "Mirror"):
+        self.client = client
+        self.account_prefix = account_prefix
+        self.error_handler = EnhancedMirrorErrorHandler()
+
+        logger.info(f"Initialized {account_prefix} Enhanced TP/SL Manager with error handling")
+
+    def validate_quantity(self, symbol: str, quantity: Decimal) -> Decimal:
+        """Validate and format quantity for order placement"""
+        try:
+            # Get instrument info for precision
+            response = self.client.get_instruments_info(
+                category="linear",
+                symbol=symbol
+            )
+
+            if response['retCode'] == 0 and response['result']['list']:
+                instrument = response['result']['list'][0]
+
+                # Get quantity precision
+                qty_filter = instrument['lotSizeFilter']
+                min_qty = Decimal(qty_filter['minOrderQty'])
+                max_qty = Decimal(qty_filter['maxOrderQty'])
+                qty_step = Decimal(qty_filter['qtyStep'])
+
+                # Validate quantity
+                if quantity < min_qty:
+                    logger.warning(f"{symbol}: Quantity {quantity} below minimum {min_qty}")
+                    return min_qty
+
+                if quantity > max_qty:
+                    logger.warning(f"{symbol}: Quantity {quantity} above maximum {max_qty}")
+                    return max_qty
+
+                # Round to qty step
+                if qty_step > 0:
+                    quantity = (quantity / qty_step).quantize(Decimal('1'), rounding=ROUND_DOWN) * qty_step
+
+                return quantity
+
+        except Exception as e:
+            logger.error(f"Error validating quantity for {symbol}: {e}")
+            return quantity
+
+    def validate_price(self, symbol: str, price: Decimal, side: str) -> Decimal:
+        """Validate and format price for order placement"""
+        try:
+            # Get instrument info for precision
+            response = self.client.get_instruments_info(
+                category="linear",
+                symbol=symbol
+            )
+
+            if response['retCode'] == 0 and response['result']['list']:
+                instrument = response['result']['list'][0]
+
+                # Get price precision
+                price_filter = instrument['priceFilter']
+                tick_size = Decimal(price_filter['tickSize'])
+
+                # Round to tick size
+                if tick_size > 0:
+                    price = (price / tick_size).quantize(Decimal('1'), rounding=ROUND_DOWN) * tick_size
+
+                return price
+
+        except Exception as e:
+            logger.error(f"Error validating price for {symbol}: {e}")
+            return price
+
+    async def _calculate_target_size_with_limits(self, symbol: str, side: str, current_size: Decimal) -> Decimal:
+        """
+        Calculate target position size including unfilled limit orders
+        This ensures SL covers full intended position like main account
+        """
+        try:
+            # Get open orders for the symbol
+            response = self.client.get_open_orders(
+                category="linear",
+                symbol=symbol
+            )
+            
+            if response['retCode'] != 0:
+                logger.error(f"Failed to get open orders: {response.get('retMsg')}")
+                return current_size
+            
+            # Calculate unfilled limit order quantity
+            unfilled_limit_qty = Decimal('0')
+            orders = response.get('result', {}).get('list', [])
+            
+            for order in orders:
+                # Check if this is an unfilled entry limit order
+                if (order.get('orderType') == 'Limit' and 
+                    not order.get('reduceOnly') and 
+                    order.get('side') == side and
+                    order.get('orderStatus') in ['New', 'PartiallyFilled'] and
+                    ('BOT_' in order.get('orderLinkId', '') or 'MIR_' in order.get('orderLinkId', ''))):
+                    
+                    # For partially filled orders, only count the remaining qty
+                    if order.get('orderStatus') == 'PartiallyFilled':
+                        total_qty = Decimal(str(order.get('qty', '0')))
+                        filled_qty = Decimal(str(order.get('cumExecQty', '0')))
+                        remaining_qty = total_qty - filled_qty
+                        unfilled_limit_qty += remaining_qty
+                    else:
+                        unfilled_limit_qty += Decimal(str(order.get('qty', '0')))
+                    
+                    logger.info(f"Found unfilled limit order: {order.get('orderId')[:8]}... qty={order.get('qty')}")
+            
+            # Target size is current position + unfilled limits
+            target_size = current_size + unfilled_limit_qty
+            
+            if unfilled_limit_qty > 0:
+                logger.info(f"📊 Target size calculation for {symbol}:")
+                logger.info(f"   Current position: {current_size}")
+                logger.info(f"   Unfilled limits: {unfilled_limit_qty}")
+                logger.info(f"   Target size: {target_size}")
+            
+            return target_size
+            
+        except Exception as e:
+            logger.error(f"Error calculating target size with limits: {e}")
+            # Fallback to current size if calculation fails
+            return current_size
+
+    async def cancel_order_safe(self, symbol: str, order_id: str) -> bool:
+        """Safely cancel an order with error handling"""
+        try:
+            result = await self.error_handler.execute_with_retry(
+                self._cancel_order_internal,
+                symbol=symbol,
+                order_id=order_id
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Failed to cancel order {order_id} for {symbol}: {e}")
+            return False
+
+    async def _cancel_order_internal(self, symbol: str, order_id: str):
+        """Internal method to cancel order"""
+        response = self.client.cancel_order(
+            category="linear",
+            symbol=symbol,
+            orderId=order_id
+        )
+
+        if response['retCode'] != 0:
+            raise Exception(f"Cancel failed: {response.get('retMsg', 'Unknown error')}")
+
+        return True
+
+    async def place_order_safe(self, order_params: Dict) -> Optional[str]:
+        """Safely place an order with validation and error handling"""
+        try:
+            # Validate parameters
+            symbol = order_params.get('symbol')
+            if not symbol:
+                raise ValueError("Symbol is required")
+
+            # Validate and format quantity
+            if 'qty' in order_params:
+                order_params['qty'] = str(self.validate_quantity(
+                    symbol,
+                    Decimal(str(order_params['qty']))
+                ))
+
+            # Validate and format price
+            if 'price' in order_params:
+                order_params['price'] = str(self.validate_price(
+                    symbol,
+                    Decimal(str(order_params['price'])),
+                    order_params.get('side', 'Buy')
+                ))
+
+            # Place order with retry
+            result = await self.error_handler.execute_with_retry(
+                self._place_order_internal,
+                order_params=order_params,
+                symbol=symbol
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to place order for {symbol}: {e}")
+            return None
+
+    async def _place_order_internal(self, order_params: Dict, symbol: str):
+        """Internal method to place order"""
+        response = self.client.place_order(**order_params)
+
+        if response['retCode'] != 0:
+            raise Exception(f"Place order failed: {response.get('retMsg', 'Unknown error')}")
+
+        return response['result']['orderId']
+
+    async def setup_tp_sl_from_monitor(self, monitor_data: Dict, mirror_position: Dict,
+                                       tp_prices: list, tp_percentages: list, sl_price: Decimal) -> Dict:
+        """
+        Setup TP/SL orders for mirror position and return order information
+        Returns dict with tp_orders and sl_order like enhanced_tp_sl_manager
+        """
+        try:
+            symbol = monitor_data['symbol']
+            side = monitor_data['side']
+            position_size = Decimal(str(mirror_position['size']))
+
+            result = {
+                "tp_orders": {},
+                "sl_order": None,
+                "errors": []
+            }
+
+            # Calculate target size including pending limit orders
+            target_size = await self._calculate_target_size_with_limits(symbol, side, position_size)
+
+            # Get minimum quantity for the symbol
+            min_qty = Decimal('0')
+            try:
+                response = self.client.get_instruments_info(
+                    category="linear",
+                    symbol=symbol
+                )
+                if response['retCode'] == 0 and response['result']['list']:
+                    min_qty = Decimal(response['result']['list'][0]['lotSizeFilter']['minOrderQty'])
+            except Exception as e:
+                logger.error(f"Error getting min quantity for {symbol}: {e}")
+            
+            # Place TP orders with quantity consolidation
+            tp_side = "Sell" if side == "Buy" else "Buy"
+            tp_percentages_list = tp_percentages or [85, 5, 5, 5]
+            
+            # Calculate all TP quantities first
+            tp_quantities = []
+            for tp_pct in tp_percentages_list:
+                qty = position_size * Decimal(str(tp_pct / 100))
+                tp_quantities.append(qty)
+            
+            # Consolidate small quantities
+            consolidated_tps = []
+            accumulated_qty = Decimal('0')
+            accumulated_idx = None
+            
+            for i, (tp_price, tp_qty) in enumerate(zip(tp_prices, tp_quantities)):
+                validated_qty = self.validate_quantity(symbol, tp_qty)
+                
+                # If quantity is below minimum, accumulate it
+                if validated_qty < min_qty and i < len(tp_prices) - 1:
+                    accumulated_qty += tp_qty
+                    if accumulated_idx is None:
+                        accumulated_idx = i
+                    logger.warning(f"Mirror TP{i+1} quantity {tp_qty} below minimum {min_qty}, accumulating...")
+                else:
+                    # Add accumulated quantity to this TP
+                    final_qty = tp_qty + accumulated_qty
+                    final_qty = self.validate_quantity(symbol, final_qty)
+                    
+                    if final_qty >= min_qty:
+                        consolidated_tps.append((tp_price, final_qty, i+1))
+                        accumulated_qty = Decimal('0')
+                        accumulated_idx = None
+                    else:
+                        # Even with accumulation, still below minimum
+                        logger.warning(f"Mirror TP{i+1} consolidated quantity {final_qty} still below minimum {min_qty}, skipping")
+            
+            # Place consolidated TP orders
+            for tp_price, tp_qty, tp_level in consolidated_tps:
+                try:
+
+                    order_params = {
+                        'category': 'linear',
+                        'symbol': symbol,
+                        'side': tp_side,
+                        'orderType': 'Limit',
+                        'qty': str(tp_qty),
+                        'price': str(tp_price),
+                        'orderLinkId': f"MIR_TP{i+1}_{symbol}_{int(time.time()*1000)}",
+                        'positionIdx': mirror_position.get('positionIdx', 0),
+                        'reduceOnly': True
+                    }
+
+                    order_result = self.client.place_order(**order_params)
+
+                    if order_result['retCode'] == 0:
+                        order_info = {
+                            "order_id": order_result['result']['orderId'],
+                            "order_link_id": order_params['orderLinkId'],
+                            "price": tp_price,
+                            "quantity": tp_qty,
+                            "tp_level": i + 1
+                        }
+                        result["tp_orders"][order_result['result']['orderId']] = order_info
+                        logger.info(f"✅ Mirror TP{i+1} placed: {tp_qty} @ {tp_price}")
+                    else:
+                        error_msg = f"Failed to place TP{i+1}: {order_result.get('retMsg')}"
+                        result["errors"].append(error_msg)
+                        logger.error(error_msg)
+
+                except Exception as e:
+                    error_msg = f"Error placing TP{i+1}: {e}"
+                    result["errors"].append(error_msg)
+                    logger.error(error_msg)
+
+            # Place SL order with full coverage including limits
+            try:
+                sl_side = tp_side  # Same as TP side
+
+                # Use target size for SL to cover full position including unfilled limits
+                sl_quantity = self.validate_quantity(symbol, target_size)
+                logger.info(f"📊 SL will cover full target position: {sl_quantity} (current: {position_size}, unfilled: {target_size - position_size})")
+
+                order_params = {
+                    'category': 'linear',
+                    'symbol': symbol,
+                    'side': sl_side,
+                    'orderType': 'Market',
+                    'qty': str(sl_quantity),
+                    'triggerPrice': str(sl_price),
+                    'triggerDirection': 2 if side == "Buy" else 1,
+                    'orderLinkId': f"MIR_SL_{symbol}_{int(time.time()*1000)}",
+                    'positionIdx': mirror_position.get('positionIdx', 0),
+                    'reduceOnly': True,
+                    'stopOrderType': 'StopLoss'
+                }
+
+                sl_result = self.client.place_order(**order_params)
+
+                if sl_result['retCode'] == 0:
+                    result["sl_order"] = {
+                        "order_id": sl_result['result']['orderId'],
+                        "order_link_id": order_params['orderLinkId'],
+                        "price": sl_price,
+                        "quantity": sl_quantity,
+                        "original_quantity": sl_quantity,
+                        "covers_full_position": True,
+                        "target_position_size": target_size,
+                        "account": "mirror"
+                    }
+                    logger.info(f"✅ Mirror SL placed: {sl_quantity} @ {sl_price} (covers full target: {target_size})")
+                else:
+                    error_msg = f"Failed to place SL: {sl_result.get('retMsg')}"
+                    result["errors"].append(error_msg)
+                    logger.error(error_msg)
+
+            except Exception as e:
+                error_msg = f"Error placing SL: {e}"
+                result["errors"].append(error_msg)
+                logger.error(error_msg)
+
+            # Update monitor data with order info and target size
+            if monitor_data and result["tp_orders"]:
+                monitor_data["tp_orders"] = result["tp_orders"]
+            if monitor_data and result["sl_order"]:
+                monitor_data["sl_order"] = result["sl_order"]
+            
+            # Update monitor with target size information
+            if monitor_data:
+                monitor_data["target_size"] = str(target_size)
+                monitor_data["position_size"] = str(target_size)  # Full intended size
+                monitor_data["remaining_size"] = str(position_size)  # Current filled size
+                logger.info(f"📊 Updated monitor with target size: {target_size}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error setting up mirror TP/SL orders: {e}")
+            return {"tp_orders": {}, "sl_order": None, "errors": [str(e)]}
+
+    async def sync_tp_sl_orders(self, main_position: Dict, mirror_position: Optional[Dict]) -> bool:
+        """Sync TP/SL orders with comprehensive error handling"""
+        symbol = main_position['symbol']
+        side = main_position['side']
+
+        try:
+            # Check if we have a mirror position to sync
+            if not mirror_position:
+                logger.info(f"{symbol}: No mirror position found, skipping TP/SL sync")
+                return False
+
+            # Get current orders
+            main_orders = await self.get_active_orders(symbol, "Main")
+            mirror_orders = await self.get_active_orders(symbol, "Mirror")
+
+            # Sync TP orders
+            tp_success = await self.sync_order_type(
+                symbol, side, main_orders, mirror_orders,
+                mirror_position, "TakeProfit"
+            )
+
+            # Sync SL orders
+            sl_success = await self.sync_order_type(
+                symbol, side, main_orders, mirror_orders,
+                mirror_position, "StopLoss"
+            )
+
+            success = tp_success and sl_success
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Error syncing TP/SL for {symbol}: {e}")
+            return False
+
+    async def sync_order_type(self, symbol: str, side: str, main_orders: List[Dict],
+                            mirror_orders: List[Dict], mirror_position: Dict,
+                            order_type: str) -> bool:
+        """Sync specific order type with error handling"""
+        try:
+            # Filter orders by type
+            main_type_orders = [o for o in main_orders if o.get('orderType') == order_type]
+            mirror_type_orders = [o for o in mirror_orders if o.get('orderType') == order_type]
+
+            # Cancel excess mirror orders
+            if len(mirror_type_orders) > len(main_type_orders):
+                for order in mirror_type_orders[len(main_type_orders):]:
+                    await self.cancel_order_safe(symbol, order['orderId'])
+
+            # Create or update mirror orders
+            for i, main_order in enumerate(main_type_orders):
+                if i < len(mirror_type_orders):
+                    # Update existing order if needed
+                    mirror_order = mirror_type_orders[i]
+                    if not self.orders_match(main_order, mirror_order):
+                        await self.cancel_order_safe(symbol, mirror_order['orderId'])
+                        await self.create_mirror_order(main_order, mirror_position)
+                else:
+                    # Create new mirror order
+                    await self.create_mirror_order(main_order, mirror_position)
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error syncing {order_type} orders for {symbol}: {e}")
+            return False
+
+    def orders_match(self, main_order: Dict, mirror_order: Dict) -> bool:
+        """Check if orders match within tolerance"""
+        try:
+            # Compare trigger prices
+            main_trigger = Decimal(str(main_order.get('triggerPrice', '0')))
+            mirror_trigger = Decimal(str(mirror_order.get('triggerPrice', '0')))
+
+            if main_trigger != mirror_trigger:
+                return False
+
+            # Compare quantities within tolerance
+            main_qty = Decimal(str(main_order.get('qty', '0')))
+            mirror_qty = Decimal(str(mirror_order.get('qty', '0')))
+
+            qty_diff = abs(main_qty - mirror_qty)
+            tolerance = main_qty * POSITION_SIZE_TOLERANCE
+
+            return qty_diff <= tolerance
+
+        except Exception as e:
+            logger.error(f"Error comparing orders: {e}")
+            return False
+
+    async def create_mirror_order(self, main_order: Dict, mirror_position: Dict) -> bool:
+        """Create mirror order based on main order"""
+        try:
+            order_params = {
+                'category': 'linear',
+                'symbol': main_order['symbol'],
+                'side': main_order['side'],
+                'orderType': main_order['orderType'],
+                'qty': main_order['qty'],
+                'triggerPrice': main_order['triggerPrice'],
+                'triggerDirection': main_order.get('triggerDirection', 1),
+                'orderLinkId': f"{self.account_prefix}_Enhanced_{main_order['symbol']}_{main_order['orderType']}_{int(time.time()*1000)}",
+                'positionIdx': mirror_position.get('positionIdx', 0),
+                'reduceOnly': True
+            }
+
+            # Add price for limit orders
+            if main_order.get('price'):
+                order_params['price'] = main_order['price']
+                order_params['orderType'] = 'Limit'
+            else:
+                order_params['orderType'] = 'Market'
+
+            result = await self.place_order_safe(order_params)
+            return result is not None
+
+        except Exception as e:
+            logger.error(f"Error creating mirror order: {e}")
+            return False
+
+    async def get_active_orders(self, symbol: str, account_type: str) -> List[Dict]:
+        """Get active orders with error handling"""
+        try:
+            response = self.client.get_open_orders(
+                category="linear",
+                symbol=symbol
+            )
+
+            if response['retCode'] == 0:
+                return response['result']['list']
+            else:
+                logger.error(f"Error getting orders: {response.get('retMsg')}")
+                return []
+
+        except Exception as e:
+            logger.error(f"Error fetching active orders for {symbol}: {e}")
+            return []
+
+    def create_dashboard_monitor_entry(self, symbol: str, side: str, chat_id: int) -> bool:
+        """Create dashboard monitor entry for tracking"""
+        try:
+            # Load current pickle data
+            pickle_file = 'bybit_bot_dashboard_v4.1_enhanced.pkl'
+
+            if os.path.exists(pickle_file):
+                with open(pickle_file, 'rb') as f:
+                    data = pickle.load(f)
+            else:
+                data = {'bot_data': {}, 'user_data': {}}
+
+            # Ensure structure exists
+            if 'monitor_tasks' not in data['bot_data']:
+                data['bot_data']['monitor_tasks'] = {}
+
+            # Create monitor key
+            monitor_key = f"{chat_id}_{symbol}_enhanced_{self.account_prefix.lower()}"
+
+            # Add monitor entry
+            data['bot_data']['monitor_tasks'][monitor_key] = {
+                'symbol': symbol,
+                'side': side,
+                'approach': 'enhanced',
+                'account_type': self.account_prefix.lower(),
+                'chat_id': chat_id,
+                'created_at': datetime.now().isoformat(),
+                'status': 'active'
+            }
+
+            # Save updated data
+            with open(pickle_file, 'wb') as f:
+                pickle.dump(data, f)
+
+            logger.info(f"Created dashboard monitor entry: {monitor_key}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error creating dashboard monitor entry: {e}")
+            return False
+
+# Export the enhanced class
+__all__ = ['MirrorEnhancedTPSL']
+
+# Create singleton instance for import
+mirror_enhanced_tp_sl_manager = None
+
+def initialize_mirror_manager(main_manager):
+    """Initialize the mirror manager with main manager reference"""
+    global mirror_enhanced_tp_sl_manager
+    if not mirror_enhanced_tp_sl_manager:
+        # Use the legacy wrapper for compatibility
+        mirror_enhanced_tp_sl_manager = MirrorEnhancedTPSLManager(main_manager)
+    return mirror_enhanced_tp_sl_manager
+
+async def sync_mirror_positions_on_startup(mirror_manager):
+    """Sync mirror positions on startup - legacy compatibility function"""
+    logger.info("Mirror position sync called (legacy compatibility)")
+    # The actual sync is handled by the monitoring loop
+    return True
+
+
+async def start_mirror_monitoring_task(symbol: str, side: str, enhanced_result: dict):
+    """Start monitoring task for mirror enhanced TP/SL orders"""
+    try:
+        # This is a compatibility function - monitoring is handled automatically
+        # by the mirror manager when orders are placed
+        logger.info(f"📊 Mirror monitoring task called for {symbol} {side} (handled by manager)")
+        return True
+    except Exception as e:
+        logger.error(f"Error in mirror monitoring task: {e}")
+        return False

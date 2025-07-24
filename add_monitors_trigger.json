@@ -1,0 +1,41 @@
+{
+  "action": "add_monitors",
+  "timestamp": "2025-07-12T14:52:22.981340",
+  "monitors": {
+    "LFLUSDT_Sell_main": {
+      "symbol": "LFLUSDT",
+      "side": "Sell",
+      "account": "main",
+      "chat_id": 1559190851,
+      "approach": "conservative"
+    },
+    "XAIUSDT_Buy_main": {
+      "symbol": "XAIUSDT",
+      "side": "Buy",
+      "account": "main",
+      "chat_id": 1559190851,
+      "approach": "conservative"
+    },
+    "XAIUSDT_Buy_mirror": {
+      "symbol": "XAIUSDT",
+      "side": "Buy",
+      "account": "mirror",
+      "chat_id": 1559190851,
+      "approach": "conservative"
+    },
+    "AIUSDT_Buy_main": {
+      "symbol": "AIUSDT",
+      "side": "Buy",
+      "account": "main",
+      "chat_id": 1559190851,
+      "approach": "conservative"
+    },
+    "AIUSDT_Buy_mirror": {
+      "symbol": "AIUSDT",
+      "side": "Buy",
+      "account": "mirror",
+      "chat_id": 1559190851,
+      "approach": "conservative"
+    }
+  }
+}

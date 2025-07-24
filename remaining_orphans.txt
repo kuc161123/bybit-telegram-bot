@@ -1,0 +1,8 @@
+Remaining Orphaned Monitors:
+==================================================
+1INCHUSDT_Buy_main
+ARKMUSDT_Buy_main
+LDOUSDT_Buy_main
+WLDUSDT_Buy_main
+1INCHUSDT_Buy_mirror
+ARKMUSDT_Buy_mirror

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class ExecutionSummary:
     """Tracks comprehensive execution details for dashboard display"""
-    
+
     def __init__(self):
         self._executions: Dict[str, Dict[str, Any]] = {}
         self._merge_decisions: Dict[str, List[Dict[str, Any]]] = {}
@@ -24,20 +24,20 @@ class ExecutionSummary:
         self._lock = asyncio.Lock()
         self._max_history = 100
         self._max_executions = 50  # Keep last 50 executions
-        
+
     async def record_execution(self, trade_id: str, execution_data: Dict[str, Any]):
         """Record a trade execution with all details"""
         async with self._lock:
             timestamp = time.time()
-            
+
             # Clean old executions if needed
             if len(self._executions) >= self._max_executions:
                 # Remove oldest executions
-                sorted_keys = sorted(self._executions.keys(), 
+                sorted_keys = sorted(self._executions.keys(),
                                    key=lambda k: self._executions[k].get('timestamp', 0))
                 for key in sorted_keys[:10]:  # Remove 10 oldest
                     del self._executions[key]
-            
+
             self._executions[trade_id] = {
                 'timestamp': timestamp,
                 'datetime': datetime.now().isoformat(),
@@ -48,7 +48,7 @@ class ExecutionSummary:
                 'margin': execution_data.get('margin_amount'),
                 'position_size': execution_data.get('position_size'),
                 'entry_price': execution_data.get('entry_price'),
-                
+
                 # Main account execution
                 'main_account': {
                     'orders_placed': execution_data.get('main_orders', []),
@@ -57,7 +57,7 @@ class ExecutionSummary:
                     'execution_time': execution_data.get('main_execution_time', 0),
                     'errors': execution_data.get('main_errors', [])
                 },
-                
+
                 # Mirror account execution
                 'mirror_account': {
                     'enabled': execution_data.get('mirror_enabled', False),
@@ -68,7 +68,7 @@ class ExecutionSummary:
                     'sync_status': execution_data.get('mirror_sync_status', 'N/A'),
                     'errors': execution_data.get('mirror_errors', [])
                 },
-                
+
                 # Position merge details
                 'merge_info': {
                     'position_merged': execution_data.get('position_merged', False),
@@ -77,7 +77,7 @@ class ExecutionSummary:
                     'new_position': execution_data.get('new_position'),
                     'merged_parameters': execution_data.get('merged_parameters', {})
                 },
-                
+
                 # Order details
                 'orders': {
                     'market_orders': execution_data.get('market_orders', []),
@@ -86,7 +86,7 @@ class ExecutionSummary:
                     'sl_orders': execution_data.get('sl_orders', []),
                     'cancelled_orders': execution_data.get('cancelled_orders', [])
                 },
-                
+
                 # Execution metrics
                 'metrics': {
                     'total_orders': execution_data.get('total_orders', 0),
@@ -96,17 +96,17 @@ class ExecutionSummary:
                     'risk_reward_ratio': execution_data.get('risk_reward_ratio', 0)
                 }
             }
-            
+
             # Add to order history
             self._add_to_history(trade_id, self._executions[trade_id])
-            
+
     async def record_merge_decision(self, symbol: str, side: str, decision: Dict[str, Any]):
         """Record a position merge decision"""
         async with self._lock:
             key = f"{symbol}_{side}"
             if key not in self._merge_decisions:
                 self._merge_decisions[key] = []
-            
+
             merge_record = {
                 'timestamp': time.time(),
                 'datetime': datetime.now().isoformat(),
@@ -120,13 +120,13 @@ class ExecutionSummary:
                 'tp_changed': decision.get('tp_changed', False),
                 'details': decision.get('details', {})
             }
-            
+
             self._merge_decisions[key].append(merge_record)
-            
+
             # Keep only recent decisions
             if len(self._merge_decisions[key]) > 10:
                 self._merge_decisions[key] = self._merge_decisions[key][-10:]
-    
+
     async def update_monitor_health(self, monitor_id: str, health_data: Dict[str, Any]):
         """Update monitor health status"""
         async with self._lock:
@@ -143,7 +143,7 @@ class ExecutionSummary:
                 'unrealized_pnl': health_data.get('unrealized_pnl'),
                 'monitoring_mode': health_data.get('monitoring_mode')
             }
-    
+
     def _add_to_history(self, trade_id: str, execution: Dict[str, Any]):
         """Add execution to history with size limit"""
         history_entry = {
@@ -154,13 +154,13 @@ class ExecutionSummary:
             'approach': execution['approach'],
             'success': execution['metrics']['failed_orders'] == 0
         }
-        
+
         self._order_history.append(history_entry)
-        
+
         # Keep only recent history
         if len(self._order_history) > self._max_history:
             self._order_history = self._order_history[-self._max_history:]
-    
+
     async def get_latest_executions(self, limit: int = 5) -> List[Dict[str, Any]]:
         """Get latest trade executions"""
         async with self._lock:
@@ -170,7 +170,7 @@ class ExecutionSummary:
                 reverse=True
             )
             return [exec_data for _, exec_data in sorted_executions[:limit]]
-    
+
     async def get_monitor_summary(self) -> Dict[str, Any]:
         """Get summary of all monitors"""
         async with self._lock:
@@ -178,22 +178,22 @@ class ExecutionSummary:
                 'primary': {'fast': 0, 'conservative': 0, 'ggshot': 0, 'total': 0},
                 'mirror': {'fast': 0, 'conservative': 0, 'ggshot': 0, 'total': 0}
             }
-            
+
             monitor_details = []
             current_time = time.time()
-            
+
             for monitor_id, health in self._monitor_health.items():
                 # Skip stale monitors (no update in 5 minutes)
                 if current_time - health['last_update'] > 300:
                     continue
-                
+
                 account = health.get('account', 'primary')
                 approach = health.get('approach', 'unknown')
-                
+
                 if approach in ['fast', 'conservative', 'ggshot']:
                     active_monitors[account][approach] += 1
                     active_monitors[account]['total'] += 1
-                
+
                 monitor_details.append({
                     'id': monitor_id,
                     'symbol': health.get('symbol'),
@@ -203,12 +203,12 @@ class ExecutionSummary:
                     'pnl': health.get('unrealized_pnl', 0),
                     'errors': health.get('errors', 0)
                 })
-            
+
             return {
                 'counts': active_monitors,
                 'details': sorted(monitor_details, key=lambda x: x['symbol'])
             }
-    
+
     async def get_merge_history(self, symbol: str = None) -> Dict[str, List[Dict[str, Any]]]:
         """Get merge decision history"""
         async with self._lock:
@@ -222,7 +222,7 @@ class ExecutionSummary:
             else:
                 # Return all merge history
                 return dict(self._merge_decisions)
-    
+
     async def get_execution_stats(self) -> Dict[str, Any]:
         """Get overall execution statistics"""
         async with self._lock:
@@ -231,31 +231,31 @@ class ExecutionSummary:
                 1 for exec in self._executions.values()
                 if exec['metrics']['failed_orders'] == 0
             )
-            
+
             total_orders = sum(
-                exec['metrics']['total_orders'] 
+                exec['metrics']['total_orders']
                 for exec in self._executions.values()
             )
-            
+
             successful_orders = sum(
                 exec['metrics']['successful_orders']
                 for exec in self._executions.values()
             )
-            
+
             # Calculate average execution times
             main_exec_times = [
                 exec['main_account']['execution_time']
                 for exec in self._executions.values()
                 if exec['main_account']['execution_time'] > 0
             ]
-            
+
             mirror_exec_times = [
                 exec['mirror_account']['execution_time']
                 for exec in self._executions.values()
-                if exec['mirror_account']['enabled'] and 
+                if exec['mirror_account']['enabled'] and
                    exec['mirror_account']['execution_time'] > 0
             ]
-            
+
             return {
                 'total_trades': total_trades,
                 'successful_trades': successful_trades,
@@ -275,15 +275,15 @@ class ExecutionSummary:
                     'ggshot': sum(1 for exec in self._executions.values() if exec['approach'] == 'ggshot')
                 }
             }
-    
+
     async def format_execution_details(self, trade_id: str) -> str:
         """Format execution details for display"""
         async with self._lock:
             if trade_id not in self._executions:
                 return "❌ Execution details not found"
-            
+
             exec_data = self._executions[trade_id]
-            
+
             # Format the execution summary
             summary = f"""
 📊 <b>EXECUTION DETAILS - {trade_id}</b>
@@ -302,12 +302,12 @@ class ExecutionSummary:
 ├ Slippage: {exec_data['main_account']['slippage']:.3f}%
 ├ Time: {exec_data['main_account']['execution_time']:.2f}s
 """
-            
+
             if exec_data['main_account']['errors']:
                 summary += f"└ ⚠️ Errors: {', '.join(exec_data['main_account']['errors'])}\n"
             else:
                 summary += "└ ✅ No errors\n"
-            
+
             # Mirror account section
             if exec_data['mirror_account']['enabled']:
                 summary += f"""
@@ -321,7 +321,7 @@ class ExecutionSummary:
                     summary += f"└ ⚠️ Errors: {', '.join(exec_data['mirror_account']['errors'])}\n"
                 else:
                     summary += "└ ✅ Synced successfully\n"
-            
+
             # Merge information
             if exec_data['merge_info']['position_merged']:
                 summary += f"""
@@ -331,7 +331,7 @@ class ExecutionSummary:
 ├ Previous: {exec_data['merge_info']['existing_position']}
 └ New Total: {exec_data['merge_info']['new_position']}
 """
-            
+
             # Order breakdown
             summary += f"""
 📋 <b>Order Breakdown</b>
@@ -346,7 +346,7 @@ class ExecutionSummary:
 ├ Avg Fill Time: {exec_data['metrics']['avg_fill_time']:.2f}s
 └ Risk/Reward: 1:{exec_data['metrics']['risk_reward_ratio']:.1f}
 """
-            
+
             return summary
 
 # Global instance

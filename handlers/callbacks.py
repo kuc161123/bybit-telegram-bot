@@ -11,13 +11,9 @@ from telegram.constants import ParseMode
 
 from config.constants import *
 from utils.helpers import initialize_chat_data
-from dashboard.generator_analytics_compact import build_mobile_dashboard_text as build_dashboard_text_async
+from dashboard.generator_v2 import build_mobile_dashboard_text as build_dashboard_text_async
 # Removed old imports that don't exist anymore
-from dashboard.keyboards_analytics import (
-    build_enhanced_dashboard_keyboard, build_settings_keyboard,
-    build_stats_keyboard, build_position_management_keyboard,
-    build_help_keyboard
-)
+from dashboard.keyboards_v2 import DashboardKeyboards
 from shared import msg_manager
 from handlers.commands import start_auto_refresh, stop_auto_refresh
 
@@ -28,48 +24,57 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
     query = update.callback_query
     if not query:
         return
-        
+
     try:
         await query.answer()
-        
+
         if query.data == "refresh_dashboard":
             # Enhanced dashboard refresh
             if context.chat_data is None:
                 context.chat_data = {}
             initialize_chat_data(context.chat_data)
-            
-            # Clear any cached data to ensure fresh UI
-            from utils.cache import invalidate_all_caches
-            invalidate_all_caches()
-            
+
+            # Clear volatile cached data to ensure fresh UI + market status for timestamps
+            from utils.cache import invalidate_volatile_caches, invalidate_market_analysis_cache
+            invalidate_volatile_caches()
+            invalidate_market_analysis_cache()  # Clear market status cache for fresh timestamps
+
             # Force reload persistence to get latest stats
             try:
                 await context.application.persistence.flush()
                 logger.info("Flushed persistence before refresh")
             except Exception as e:
                 logger.warning(f"Could not flush persistence: {e}")
-            
+
             # Delete the current message (which is the old dashboard)
             try:
                 await query.message.delete()
                 logger.debug("Deleted old dashboard message via refresh")
             except Exception as e:
                 logger.debug(f"Could not delete message: {e}")
-            
+
             # Clear stored message ID since we deleted it
             context.chat_data[LAST_UI_MESSAGE_ID] = None
-            
+
             # Load fresh data
-            dashboard_text = await build_dashboard_text_async(context.chat_data, context.application.bot_data)
-            
+            dashboard_text = await build_dashboard_text_async(query.message.chat.id, context)
+
             # Get position count for keyboard
             from clients.bybit_client import get_all_positions
             positions = await get_all_positions()
             active_positions = len([p for p in positions if float(p.get('size', 0)) > 0])
             has_monitors = context.chat_data.get('ACTIVE_MONITOR_TASK', {}) != {}
-            
-            keyboard = build_enhanced_dashboard_keyboard(query.message.chat.id, context, active_positions, has_monitors)
-            
+
+            # Check if mirror trading is enabled
+            has_mirror = False
+            try:
+                from execution.mirror_trader import is_mirror_trading_enabled
+                has_mirror = is_mirror_trading_enabled()
+            except:
+                pass
+                
+            keyboard = DashboardKeyboards.main_dashboard(active_positions > 0, has_mirror)
+
             # Send new message with enhanced UI
             try:
                 sent = await context.bot.send_message(
@@ -80,9 +85,9 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
                 )
                 # Store message ID for future updates
                 context.chat_data[LAST_UI_MESSAGE_ID] = sent.message_id
-                    
+
                 logger.info(f"Dashboard refreshed for chat {query.message.chat.id}")
-                
+
                 # Restart auto-refresh after manual refresh
                 await start_auto_refresh(query.message.chat.id, context)
             except Exception as e:
@@ -93,27 +98,74 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
                     parse_mode=ParseMode.HTML,
                     reply_markup=keyboard
                 )
-        
+
+        elif query.data == "refresh_ai_insights":
+            # Refresh AI insights with cache bypass
+            if context.chat_data is None:
+                context.chat_data = {}
+            initialize_chat_data(context.chat_data)
+            
+            try:
+                # Clear AI insights and market analysis caches to force fresh data
+                from utils.cache import invalidate_ai_insights_cache, invalidate_market_analysis_cache
+                
+                # Determine the primary symbol from positions
+                from clients.bybit_helpers import get_all_positions
+                positions = await get_all_positions()
+                primary_symbol = "BTCUSDT"  # Default
+                if positions:
+                    primary_symbol = positions[0].get("symbol", "BTCUSDT")
+                
+                invalidate_ai_insights_cache(primary_symbol)
+                invalidate_market_analysis_cache(primary_symbol)
+                
+                logger.info(f"🔄 Force refreshed AI insights for {primary_symbol}")
+                
+                # Refresh dashboard with new AI data
+                await query.edit_message_text(
+                    "🔄 <b>Refreshing AI Market Insights...</b>\n\nFetching fresh analysis...",
+                    parse_mode=ParseMode.HTML
+                )
+                
+                # Generate fresh dashboard with bypassed cache
+                from dashboard.generator_analytics import generate_enhanced_dashboard_v4
+                dashboard_text, keyboard = await generate_enhanced_dashboard_v4(context.chat_data)
+                
+                await query.edit_message_text(
+                    dashboard_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard
+                )
+                
+                logger.info(f"✅ AI insights refreshed successfully for {primary_symbol}")
+                
+            except Exception as e:
+                logger.error(f"Error refreshing AI insights: {e}")
+                await query.edit_message_text(
+                    "⚠️ Error refreshing AI insights. Please try again.",
+                    parse_mode=ParseMode.HTML
+                )
+
         elif query.data == "view_positions":
             # Professional position viewing
             await query.edit_message_text(
                 "📊 <b>Loading Portfolio Positions...</b>\n\nAnalyzing current positions...",
                 parse_mode=ParseMode.HTML
             )
-            
+
             positions_text = await fetch_all_trades_status()
             keyboard = build_position_management_keyboard()
-            
+
             await query.edit_message_text(
                 positions_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-        
+
         elif query.data == "trade_settings":
             # Beautiful settings display
             from dashboard.generator_analytics_compact import create_beautiful_header, create_info_line, create_elegant_divider
-            
+
             settings_text = f"""╔═══════════════════════════════╗
 ║      ⚙️ <b>TRADING CONFIGURATION</b>      ║
 ╚═══════════════════════════════╝
@@ -132,29 +184,29 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
 {create_elegant_divider()}
 <i>✨ Professional Trading Configuration Panel ✨</i>
 """
-            
+
             keyboard = build_settings_keyboard()
-            
+
             await query.edit_message_text(
                 settings_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-        
+
         elif query.data == "view_stats":
             # Beautiful statistics display
             from dashboard.generator_analytics_compact import create_beautiful_header, create_status_line, create_info_line, create_elegant_divider
-            
+
             # Get current stats
             total_trades = context.application.bot_data.get(STATS_TOTAL_TRADES, 0)
             total_wins = context.application.bot_data.get(STATS_TOTAL_WINS, 0)
             total_losses = context.application.bot_data.get(STATS_TOTAL_LOSSES, 0)
             total_pnl = context.application.bot_data.get(STATS_TOTAL_PNL, 0)
-            
+
             win_rate = (total_wins / (total_wins + total_losses) * 100) if (total_wins + total_losses) > 0 else 0
             pnl_status = "positive" if total_pnl >= 0 else "negative"
             win_rate_status = "excellent" if win_rate >= 70 else "success" if win_rate >= 60 else "warning" if win_rate >= 40 else "negative"
-            
+
             stats_text = f"""╔═══════════════════════════════╗
 ║      📊 <b>PERFORMANCE ANALYTICS</b>      ║
 ╚═══════════════════════════════╝
@@ -172,35 +224,48 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
 {create_elegant_divider()}
 <i>✨ Professional Analytics Dashboard ✨</i>
 """
-            
+
             keyboard = build_stats_keyboard()
-            
+
             await query.edit_message_text(
                 stats_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-        
+
         elif query.data == "back_to_dashboard":
             # Enhanced back to dashboard - DELETE old message and send new
             if context.chat_data is None:
                 context.chat_data = {}
             initialize_chat_data(context.chat_data)
-            
+
             # Delete the current message
             try:
                 await query.message.delete()
                 logger.debug("Deleted old message when returning to dashboard")
             except Exception as e:
                 logger.debug(f"Could not delete message: {e}")
-            
+
             # Clear stored message ID
             context.chat_data[LAST_UI_MESSAGE_ID] = None
+
+            # Build fresh dashboard  
+            dashboard_text = await build_dashboard_text_async(query.message.chat.id, context)
+            # Get position count and mirror status for keyboard
+            from clients.bybit_helpers import get_all_positions
+            positions = await get_all_positions()
+            active_positions = len([p for p in positions if float(p.get('size', 0)) > 0])
             
-            # Build fresh dashboard
-            dashboard_text = await build_dashboard_text_async(context.chat_data, context.application.bot_data)
-            keyboard = build_enhanced_dashboard_keyboard()
-            
+            # Check if mirror trading is enabled
+            has_mirror = False
+            try:
+                from execution.mirror_trader import is_mirror_trading_enabled
+                has_mirror = is_mirror_trading_enabled()
+            except:
+                pass
+                
+            keyboard = DashboardKeyboards.main_dashboard(active_positions > 0, has_mirror)
+
             # Send new dashboard message
             try:
                 sent = await context.bot.send_message(
@@ -220,27 +285,27 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
                     text="🏠 <b>Dashboard</b>\n\nError loading dashboard. Please try /start",
                     parse_mode=ParseMode.HTML
                 )
-        
+
         elif query.data == "show_comprehensive_help":
             # Show comprehensive help documentation
             try:
                 help_text = await generate_comprehensive_help()
                 keyboard = build_help_keyboard()
-                
+
                 # Check message length and split if needed
                 from utils.formatters import split_long_message_mobile
-                
+
                 if len(help_text) > 4000:
                     # Send as multiple messages if too long
                     message_parts = split_long_message_mobile(help_text)
-                    
+
                     # Edit first message with first part
                     await query.edit_message_text(
                         message_parts[0],
                         parse_mode=ParseMode.HTML,
                         reply_markup=keyboard if len(message_parts) == 1 else None
                     )
-                    
+
                     # Send additional parts if any
                     for i, part in enumerate(message_parts[1:], 1):
                         reply_markup = keyboard if i == len(message_parts) - 1 else None
@@ -256,7 +321,7 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
                         parse_mode=ParseMode.HTML,
                         reply_markup=keyboard
                     )
-                    
+
                 logger.info(f"Comprehensive help displayed for chat {query.message.chat.id}")
             except Exception as e:
                 logger.error(f"Error showing comprehensive help: {e}")
@@ -265,7 +330,7 @@ async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAU
                     parse_mode=ParseMode.HTML,
                     reply_markup=build_enhanced_dashboard_keyboard()
                 )
-            
+
     except Exception as e:
         logger.error(f"Error in dashboard callbacks: {e}")
         try:
@@ -278,7 +343,7 @@ async def handle_trading_callbacks(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     if not query:
         return
-        
+
     try:
         if query.data == "start_conversation":
             # Enhanced conversation start - redirect to conversation handler
@@ -286,34 +351,39 @@ async def handle_trading_callbacks(update: Update, context: ContextTypes.DEFAULT
             from .conversation import start_conversation
             await start_conversation(update, context)
             return
-        
+
         await query.answer()
-        
+
         if query.data == "execute_trade":
             # Enhanced trade execution
             await execute_current_trade_with_monitoring(update, context)
-        
+
         elif query.data == "cancel_trade":
             # Enhanced trade cancellation
             if context.chat_data:
                 context.chat_data.clear()
                 initialize_chat_data(context.chat_data)
-            
+
             cancel_text = """
 ❌ <b>Trade Cancelled</b>
 
 ✅ Trade setup cleared
 🏠 Returning to dashboard...
 """
-            
+
             await query.edit_message_text(
                 cancel_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=build_enhanced_dashboard_keyboard()
             )
-        
+
         elif query.data == "modify_trade":
-            # Enhanced trade modification
+            # Check if we're in a conversation context
+            if context.chat_data and context.chat_data.get("in_conversation", False):
+                # Let ConversationHandler handle this
+                return
+            
+            # Enhanced trade modification (only for non-conversation context)
             modify_text = """
 🔧 <b>MODIFY TRADE</b>
 {'═' * 25}
@@ -326,25 +396,25 @@ async def handle_trading_callbacks(update: Update, context: ContextTypes.DEFAULT
 
 💡 <b>Choose your preferred method:</b>
 """
-            
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📝 New Manual Setup", callback_data="start_conversation")],
                 [InlineKeyboardButton("📊 Review Current", callback_data="refresh_dashboard")],
                 [InlineKeyboardButton("⚙️ Quick Settings", callback_data="trade_settings")]
             ])
-            
+
             await query.edit_message_text(
                 modify_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-        
+
         elif query.data.startswith("select_symbol_"):
             # Enhanced symbol selection
             symbol = query.data.replace("select_symbol_", "")
             if context.chat_data:
                 context.chat_data[SYMBOL] = symbol
-            
+
             selection_text = f"""
 ✅ <b>Symbol Selected: {symbol}</b>
 
@@ -352,28 +422,28 @@ async def handle_trading_callbacks(update: Update, context: ContextTypes.DEFAULT
 
 Choose your position direction:
 """
-            
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📈 LONG (Buy)", callback_data="select_side_Buy")],
                 [InlineKeyboardButton("📉 SHORT (Sell)", callback_data="select_side_Sell")],
                 [InlineKeyboardButton("📝 Manual Setup", callback_data="start_conversation")]
             ])
-            
+
             await query.edit_message_text(
                 selection_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-        
+
         elif query.data.startswith("select_side_"):
             # Enhanced side selection
             side = query.data.replace("select_side_", "")
             if context.chat_data:
                 context.chat_data[SIDE] = side
-            
+
             direction = "LONG" if side == "Buy" else "SHORT"
             direction_emoji = "📈" if side == "Buy" else "📉"
-            
+
             selection_text = f"""
 ✅ <b>Direction: {direction_emoji} {direction}</b>
 
@@ -381,19 +451,19 @@ Choose your position direction:
 
 Choose how to continue:
 """
-            
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📝 Complete Manual Setup", callback_data="start_conversation")],
                 [InlineKeyboardButton("📊 Dashboard", callback_data="refresh_dashboard")],
                 [InlineKeyboardButton("⚙️ Settings", callback_data="trade_settings")]
             ])
-            
+
             await query.edit_message_text(
                 selection_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-            
+
     except Exception as e:
         logger.error(f"Error in trading callbacks: {e}")
         try:
@@ -406,13 +476,13 @@ async def handle_settings_callbacks(update: Update, context: ContextTypes.DEFAUL
     query = update.callback_query
     if not query:
         return
-        
+
     try:
         await query.answer()
-        
+
         if query.data.startswith("set_"):
             setting_type = query.data.replace("set_", "")
-            
+
             if setting_type == "leverage":
                 settings_text = """
 ⚡ <b>LEVERAGE SETTINGS</b>
@@ -426,7 +496,7 @@ async def handle_settings_callbacks(update: Update, context: ContextTypes.DEFAUL
 
 💡 <b>Current Default:</b> 10x
 """
-                
+
                 keyboard = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🟢 5x Safe", callback_data="save_leverage_5"),
                      InlineKeyboardButton("🟢 10x Safe", callback_data="save_leverage_10")],
@@ -434,13 +504,13 @@ async def handle_settings_callbacks(update: Update, context: ContextTypes.DEFAUL
                      InlineKeyboardButton("🟠 50x Aggressive", callback_data="save_leverage_50")],
                     [InlineKeyboardButton("⚙️ Back to Settings", callback_data="trade_settings")]
                 ])
-                
+
                 await query.edit_message_text(
                     settings_text,
                     parse_mode=ParseMode.HTML,
                     reply_markup=keyboard
                 )
-            
+
             elif setting_type == "margin":
                 settings_text = """
 💰 <b>MARGIN SETTINGS</b>
@@ -454,7 +524,7 @@ async def handle_settings_callbacks(update: Update, context: ContextTypes.DEFAUL
 
 💡 <b>Current Default:</b> 50 USDT
 """
-                
+
                 keyboard = InlineKeyboardMarkup([
                     [InlineKeyboardButton("💚 $25", callback_data="save_margin_25"),
                      InlineKeyboardButton("💚 $50", callback_data="save_margin_50")],
@@ -462,17 +532,17 @@ async def handle_settings_callbacks(update: Update, context: ContextTypes.DEFAUL
                      InlineKeyboardButton("💜 $200", callback_data="save_margin_200")],
                     [InlineKeyboardButton("⚙️ Back to Settings", callback_data="trade_settings")]
                 ])
-                
+
                 await query.edit_message_text(
                     settings_text,
                     parse_mode=ParseMode.HTML,
                     reply_markup=keyboard
                 )
-        
+
         elif query.data.startswith("save_"):
             # Enhanced save handling
             setting_data = query.data.replace("save_", "")
-            
+
             if setting_data.startswith("leverage_"):
                 leverage = setting_data.replace("leverage_", "")
                 success_text = f"""
@@ -485,19 +555,19 @@ async def handle_settings_callbacks(update: Update, context: ContextTypes.DEFAUL
 
 💡 <b>Saved successfully!</b>
 """
-                
+
                 keyboard = InlineKeyboardMarkup([
                     [InlineKeyboardButton("📝 Start Trading", callback_data="start_conversation")],
                     [InlineKeyboardButton("⚙️ More Settings", callback_data="trade_settings")],
                     [InlineKeyboardButton("📊 Dashboard", callback_data="refresh_dashboard")]
                 ])
-                
+
                 await query.edit_message_text(
                     success_text,
                     parse_mode=ParseMode.HTML,
                     reply_markup=keyboard
                 )
-            
+
             elif setting_data.startswith("margin_"):
                 margin = setting_data.replace("margin_", "")
                 success_text = f"""
@@ -510,19 +580,19 @@ async def handle_settings_callbacks(update: Update, context: ContextTypes.DEFAUL
 
 💡 <b>Saved successfully!</b>
 """
-                
+
                 keyboard = InlineKeyboardMarkup([
                     [InlineKeyboardButton("📝 Start Trading", callback_data="start_conversation")],
                     [InlineKeyboardButton("⚙️ More Settings", callback_data="trade_settings")],
                     [InlineKeyboardButton("📊 Dashboard", callback_data="refresh_dashboard")]
                 ])
-                
+
                 await query.edit_message_text(
                     success_text,
                     parse_mode=ParseMode.HTML,
                     reply_markup=keyboard
                 )
-                
+
     except Exception as e:
         logger.error(f"Error in settings callbacks: {e}")
         try:
@@ -535,10 +605,10 @@ async def handle_stats_callbacks(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     if not query:
         return
-        
+
     try:
         await query.answer()
-        
+
         if query.data == "detailed_stats":
             await show_detailed_stats(update, context)
         elif query.data == "performance_chart":
@@ -558,44 +628,61 @@ async def handle_stats_callbacks(update: Update, context: ContextTypes.DEFAULT_T
 
 This will permanently delete:
 • All trade history
-• Win/loss records  
+• Win/loss records
 • P&L data
 • Performance metrics
 
 ❌ <b>This cannot be undone!</b>
 """
-            
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ Yes, Reset All", callback_data="confirm_reset_stats")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="view_stats")],
                 [InlineKeyboardButton("📊 Dashboard", callback_data="refresh_dashboard")]
             ])
-            
+
             await query.edit_message_text(
                 confirm_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-        
+
         elif query.data == "confirm_reset_stats":
+            # Backup stats before reset
+            try:
+                from utils.stats_backup import backup_stats
+                await backup_stats(context.application.bot_data)
+                logger.info("📊 Stats backed up before reset")
+            except Exception as e:
+                logger.warning(f"Could not backup stats before reset: {e}")
+
             # Reset all statistics
             from decimal import Decimal
             stats_keys = [
                 STATS_TOTAL_TRADES, STATS_TOTAL_WINS, STATS_TOTAL_LOSSES,
                 STATS_TP1_HITS, STATS_SL_HITS, STATS_OTHER_CLOSURES,
                 STATS_TOTAL_PNL, STATS_WIN_STREAK, STATS_LOSS_STREAK,
-                STATS_BEST_TRADE, STATS_WORST_TRADE
+                STATS_BEST_TRADE, STATS_WORST_TRADE,
+                STATS_CONSERVATIVE_TRADES, STATS_FAST_TRADES,
+                STATS_CONSERVATIVE_TP1_CANCELLATIONS,
+                'stats_total_wins_pnl', 'stats_total_losses_pnl',
+                'stats_max_drawdown', 'stats_peak_equity',
+                'stats_current_drawdown', 'recent_trade_pnls'
             ]
-            
+
             for key in stats_keys:
-                if key in [STATS_TOTAL_PNL, STATS_BEST_TRADE, STATS_WORST_TRADE]:
+                if key in [STATS_TOTAL_PNL, STATS_BEST_TRADE, STATS_WORST_TRADE,
+                          'stats_total_wins_pnl', 'stats_total_losses_pnl',
+                          'stats_max_drawdown', 'stats_peak_equity', 'stats_current_drawdown']:
                     context.application.bot_data[key] = Decimal("0")
+                elif key == 'recent_trade_pnls':
+                    context.application.bot_data[key] = []
                 else:
                     context.application.bot_data[key] = 0
-            
+
             import time
             context.application.bot_data[STATS_LAST_RESET] = time.time()
-            
+
             success_text = """
 ✅ <b>Statistics Reset Complete</b>
 
@@ -605,18 +692,18 @@ This will permanently delete:
 
 💡 <b>Ready for new trades!</b>
 """
-            
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📝 Start Trading", callback_data="start_conversation")],
                 [InlineKeyboardButton("📊 Dashboard", callback_data="refresh_dashboard")]
             ])
-            
+
             await query.edit_message_text(
                 success_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-            
+
     except Exception as e:
         logger.error(f"Error in stats callbacks: {e}")
         try:
@@ -629,13 +716,13 @@ async def handle_device_size_callbacks(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     if not query:
         return
-        
+
     try:
         await query.answer()
-        
+
         if query.data.startswith("set_device:"):
             device_size = query.data.split(":")[1]
-            
+
             # Save device size preference
             if device_size == "auto":
                 # Remove custom setting to use auto-detection
@@ -644,7 +731,7 @@ async def handle_device_size_callbacks(update: Update, context: ContextTypes.DEF
             else:
                 context.chat_data["device_size"] = device_size
                 device_display = device_size.upper()
-            
+
             # Confirmation message
             success_text = f"""
 ✅ <b>Device Size Updated</b>
@@ -660,18 +747,18 @@ The dashboard has been optimized for your device with:
 
 💡 Your preference has been saved.
 """
-            
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 View Dashboard", callback_data="refresh_dashboard")],
                 [InlineKeyboardButton("📱 Change Device", callback_data="show_device_settings")]
             ])
-            
+
             await query.edit_message_text(
                 success_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-            
+
         elif query.data == "show_device_settings":
             # Show device settings again
             context.args = []
@@ -682,14 +769,14 @@ The dashboard has been optimized for your device with:
                     self.chat = type('obj', (object,), {'id': chat_id})
                 async def reply_text(self, *args, **kwargs):
                     await context.bot.send_message(self.chat.id, *args, **kwargs)
-            
+
             fake_update = type('obj', (object,), {
                 'message': FakeMessage(query.message.chat.id),
                 'effective_chat': query.message.chat
             })()
-            
+
             await device_size_command(fake_update, context)
-            
+
     except Exception as e:
         logger.error(f"Error in device size callbacks: {e}")
         try:
@@ -702,10 +789,10 @@ async def handle_position_callbacks(update: Update, context: ContextTypes.DEFAUL
     query = update.callback_query
     if not query:
         return
-        
+
     try:
         await query.answer()
-        
+
         if query.data == "close_position":
             positions_text = """
 ⚠️ <b>CLOSE POSITIONS</b>
@@ -720,19 +807,19 @@ Choose your action:
 
 💡 <b>Safety First!</b>
 """
-            
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📊 View All Positions", callback_data="view_positions")],
                 [InlineKeyboardButton("⚠️ Close All (Emergency)", callback_data="emergency_close_all")],
                 [InlineKeyboardButton("📊 Dashboard", callback_data="refresh_dashboard")]
             ])
-            
+
             await query.edit_message_text(
                 positions_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-        
+
         elif query.data == "modify_position":
             modify_text = """
 🔧 <b>MODIFY POSITIONS</b>
@@ -747,19 +834,19 @@ Choose your action:
 
 💡 <b>Select your preferred action:</b>
 """
-            
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📊 View Positions First", callback_data="view_positions")],
                 [InlineKeyboardButton("🔧 Advanced Settings", callback_data="trade_settings")],
                 [InlineKeyboardButton("📊 Dashboard", callback_data="refresh_dashboard")]
             ])
-            
+
             await query.edit_message_text(
                 modify_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-            
+
     except Exception as e:
         logger.error(f"Error in position callbacks: {e}")
         try:
@@ -772,9 +859,9 @@ async def execute_current_trade_with_monitoring(update: Update, context: Context
     query = update.callback_query
     if not query:
         return
-        
+
     chat_id = query.message.chat.id
-    
+
     try:
         # Enhanced execution message
         execution_msg = """
@@ -788,16 +875,16 @@ async def execute_current_trade_with_monitoring(update: Update, context: Context
 ⏳ <b>Please wait...</b>
 This may take a few seconds...
 """
-        
+
         try:
             await query.edit_message_text(execution_msg, parse_mode=ParseMode.HTML)
         except:
             pass
-        
+
         # Validate trade data
         symbol = context.chat_data.get(SYMBOL, "N/A") if context.chat_data else "N/A"
         side = context.chat_data.get(SIDE, "N/A") if context.chat_data else "N/A"
-        
+
         if not context.chat_data or symbol == "N/A" or side == "N/A":
             error_text = """
 ❌ <b>Execution Failed</b>
@@ -809,12 +896,12 @@ This may take a few seconds...
 • Set up a new trade manually
 • Check all required fields
 """
-            
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📝 Start New Trade", callback_data="start_conversation")],
                 [InlineKeyboardButton("📊 Dashboard", callback_data="refresh_dashboard")]
             ])
-            
+
             await context.bot.send_message(
                 chat_id,
                 error_text,
@@ -822,22 +909,22 @@ This may take a few seconds...
                 reply_markup=keyboard
             )
             return
-        
+
         # Store execution info
         context.chat_data["_temp_chat_id"] = chat_id
         context.chat_data["_execution_source"] = "enhanced_callback"
-        
+
         # Execute trade
         try:
             from execution.trader import execute_trade_logic
-            
+
             loop = asyncio.get_running_loop()
             cfg = context.chat_data.copy() if context.chat_data else {}
             cfg["_temp_chat_id"] = chat_id
-            
+
             # Execute with monitoring
             result = await asyncio.to_thread(execute_trade_logic, cfg, context.application, loop)
-            
+
             # Enhanced success message
             success_text = f"""
 ✅ <b>TRADE EXECUTED!</b>
@@ -849,20 +936,20 @@ This may take a few seconds...
 • Check performance stats
 • Set up another trade
 """
-            
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📊 View Position", callback_data="view_positions")],
                 [InlineKeyboardButton("📝 New Trade", callback_data="start_conversation")],
                 [InlineKeyboardButton("📊 Dashboard", callback_data="refresh_dashboard")]
             ])
-            
+
             await context.bot.send_message(
                 chat_id,
                 success_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-            
+
         except Exception as e:
             logger.error(f"Trade execution error: {e}")
             error_text = f"""
@@ -876,26 +963,26 @@ This may take a few seconds...
 • Try again in a moment
 • Contact support if needed
 """
-            
+
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Try Again", callback_data="execute_trade")],
                 [InlineKeyboardButton("📊 Dashboard", callback_data="refresh_dashboard")]
             ])
-            
+
             await context.bot.send_message(
                 chat_id,
                 error_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-        
+
         # Return to dashboard
         try:
             from handlers.commands import _send_or_edit_dashboard_message
             await _send_or_edit_dashboard_message(chat_id, context, new_msg=True)
         except:
             pass
-            
+
     except Exception as e:
         logger.error(f"Error in enhanced trade execution: {e}")
         try:
@@ -912,7 +999,7 @@ async def show_detailed_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     if not query:
         return
-    
+
     try:
         # Get all statistics
         total_trades = context.application.bot_data.get(STATS_TOTAL_TRADES, 0)
@@ -926,10 +1013,10 @@ async def show_detailed_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
         loss_streak = context.application.bot_data.get(STATS_LOSS_STREAK, 0)
         best_trade = context.application.bot_data.get(STATS_BEST_TRADE, 0)
         worst_trade = context.application.bot_data.get(STATS_WORST_TRADE, 0)
-        
+
         win_rate = (total_wins / (total_wins + total_losses) * 100) if (total_wins + total_losses) > 0 else 0
         avg_win = (total_pnl / total_wins) if total_wins > 0 else 0
-        
+
         stats_text = f"""
 📊 <b>DETAILED TRADING STATISTICS</b>
 {'═' * 35}
@@ -957,15 +1044,15 @@ async def show_detailed_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 📱 <b>Performance Tracking Active</b>
 """
-        
+
         keyboard = build_stats_keyboard()
-        
+
         await query.edit_message_text(
             stats_text,
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard
         )
-        
+
     except Exception as e:
         logger.error(f"Error showing detailed stats: {e}")
         await query.answer("❌ Error loading detailed statistics")
@@ -975,20 +1062,20 @@ async def show_performance_chart(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     if not query:
         return
-    
+
     try:
         # Get performance data
         total_trades = context.application.bot_data.get(STATS_TOTAL_TRADES, 0)
         total_wins = context.application.bot_data.get(STATS_TOTAL_WINS, 0)
         total_losses = context.application.bot_data.get(STATS_TOTAL_LOSSES, 0)
         total_pnl = context.application.bot_data.get(STATS_TOTAL_PNL, 0)
-        
+
         win_rate = (total_wins / (total_wins + total_losses) * 100) if (total_wins + total_losses) > 0 else 0
-        
+
         # Create simple text-based chart
         win_bars = int(win_rate / 10)
         loss_bars = 10 - win_bars
-        
+
         chart_text = f"""
 📈 <b>PERFORMANCE CHART</b>
 {'═' * 35}
@@ -1005,15 +1092,15 @@ Losses: {'█' * min(20, int(total_losses/max(1, total_trades)*20))} {total_loss
 
 📊 <b>Visual performance tracking</b>
 """
-        
+
         keyboard = build_stats_keyboard()
-        
+
         await query.edit_message_text(
             chart_text,
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard
         )
-        
+
     except Exception as e:
         logger.error(f"Error showing performance chart: {e}")
         await query.answer("❌ Error loading performance chart")
@@ -1023,7 +1110,7 @@ async def show_fast_approach_stats(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     if not query:
         return
-    
+
     try:
         # Get fast approach specific stats
         stats_text = f"""
@@ -1046,15 +1133,15 @@ async def show_fast_approach_stats(update: Update, context: ContextTypes.DEFAULT
 
 📱 <b>Fast approach tracking enabled</b>
 """
-        
+
         keyboard = build_stats_keyboard()
-        
+
         await query.edit_message_text(
             stats_text,
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard
         )
-        
+
     except Exception as e:
         logger.error(f"Error showing fast approach stats: {e}")
         await query.answer("❌ Error loading fast approach statistics")
@@ -1064,7 +1151,7 @@ async def show_conservative_approach_stats(update: Update, context: ContextTypes
     query = update.callback_query
     if not query:
         return
-    
+
     try:
         # Get conservative approach specific stats
         stats_text = f"""
@@ -1087,15 +1174,15 @@ async def show_conservative_approach_stats(update: Update, context: ContextTypes
 
 📱 <b>Conservative approach tracking enabled</b>
 """
-        
+
         keyboard = build_stats_keyboard()
-        
+
         await query.edit_message_text(
             stats_text,
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard
         )
-        
+
     except Exception as e:
         logger.error(f"Error showing conservative approach stats: {e}")
         await query.answer("❌ Error loading conservative approach statistics")
@@ -1105,10 +1192,10 @@ async def export_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     query = update.callback_query
     if not query:
         return
-    
+
     try:
         import json
-        
+
         # Prepare export data
         export_data = {
             "total_trades": context.application.bot_data.get(STATS_TOTAL_TRADES, 0),
@@ -1124,7 +1211,7 @@ async def export_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "worst_trade": float(context.application.bot_data.get(STATS_WORST_TRADE, 0)),
             "last_reset": context.application.bot_data.get(STATS_LAST_RESET, 0)
         }
-        
+
         export_text = f"""
 📤 <b>EXPORT STATISTICS</b>
 {'═' * 35}
@@ -1143,15 +1230,15 @@ async def export_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 📱 <b>Data exported successfully</b>
 """
-        
+
         keyboard = build_stats_keyboard()
-        
+
         await query.edit_message_text(
             export_text,
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard
         )
-        
+
     except Exception as e:
         logger.error(f"Error exporting stats: {e}")
         await query.answer("❌ Error exporting statistics")

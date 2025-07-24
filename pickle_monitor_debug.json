@@ -1,0 +1,40 @@
+{
+  "timestamp": "2025-07-12T12:43:52.972051",
+  "total_monitors": 26,
+  "monitor_keys": [
+    "ARBUSDT_Buy_main",
+    "ARBUSDT_Buy_mirror",
+    "AUCTIONUSDT_Buy_main",
+    "AUCTIONUSDT_Buy_mirror",
+    "BELUSDT_Buy_main",
+    "BELUSDT_Buy_mirror",
+    "BIGTIMEUSDT_Buy_main",
+    "BIGTIMEUSDT_Buy_mirror",
+    "CRVUSDT_Buy_main",
+    "CRVUSDT_Buy_mirror",
+    "INJUSDT_Buy_main",
+    "INJUSDT_Buy_mirror",
+    "JASMYUSDT_Buy_main",
+    "JASMYUSDT_Buy_mirror",
+    "NEARUSDT_Buy_main",
+    "NEARUSDT_Buy_mirror",
+    "NTRNUSDT_Buy_main",
+    "NTRNUSDT_Buy_mirror",
+    "ONTUSDT_Buy_main",
+    "ONTUSDT_Buy_mirror",
+    "PENDLEUSDT_Buy_main",
+    "PENDLEUSDT_Buy_mirror",
+    "SEIUSDT_Buy_main",
+    "SEIUSDT_Buy_mirror",
+    "SOLUSDT_Buy_main",
+    "SOLUSDT_Buy_mirror"
+  ],
+  "idusdt_monitors": [],
+  "monitors_without_chat_id": [
+    "AUCTIONUSDT_Buy_main",
+    "AUCTIONUSDT_Buy_mirror",
+    "CRVUSDT_Buy_mirror",
+    "SEIUSDT_Buy_mirror",
+    "ARBUSDT_Buy_mirror"
+  ]
+}

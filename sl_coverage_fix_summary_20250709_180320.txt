@@ -1,0 +1,120 @@
+SL Coverage Fix Summary - 2025-07-09 18:03:20.402141
+================================================================================
+
+Issues Found: 23
+
+MAIN - 1INCHUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 992.5
+  Actual SL: 2977.5
+
+MAIN - APTUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 258.12
+  Actual SL: 258.13
+
+MAIN - AUCTIONUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 61.8
+  Actual SL: 61.9
+
+MAIN - CAKEUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 83.3
+  Actual SL: 249.9
+
+MAIN - COTIUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 30
+  Actual SL: 84
+
+MAIN - HIGHUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 1050.3
+  Actual SL: 700.2
+
+MAIN - JASMYUSDT Buy:
+  Issue: missing_sl
+
+MAIN - SNXUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 50.8
+  Actual SL: 1015.1
+
+MAIN - STRKUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 7153.1
+  Actual SL: 499.1
+
+MAIN - SUSHIUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 48.8
+  Actual SL: 976.1
+
+MAIN - ZRXUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 2637
+  Actual SL: 2639
+
+MIRROR - APTUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 85.47
+  Actual SL: 28.49
+
+MIRROR - AUCTIONUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 20.4
+  Actual SL: 6.8
+
+MIRROR - COTIUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 63
+  Actual SL: 1231
+
+MIRROR - HIGHUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 347.7
+  Actual SL: 115.9
+
+MIRROR - JASMYUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 29718
+  Actual SL: 9906
+
+MIRROR - SNXUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 16.8
+  Actual SL: 112
+
+MIRROR - SOLUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 4.5
+  Actual SL: 1.5
+
+MIRROR - STRKUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 2368.9
+  Actual SL: 1101.8
+
+MIRROR - SUSHIUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 16.2
+  Actual SL: 107.7
+
+MIRROR - WOOUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 2754.3
+  Actual SL: 918.1
+
+MIRROR - ZENUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 24
+  Actual SL: 8
+
+MIRROR - ZRXUSDT Buy:
+  Issue: sl_quantity_mismatch
+  Expected SL: 873
+  Actual SL: 291
+
+
+Fixes Applied: 0

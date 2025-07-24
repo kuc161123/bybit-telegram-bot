@@ -22,10 +22,10 @@ def build_mobile_optimized_quick_trade_keyboard():
             InlineKeyboardButton("⚡ SOL Long 10x", callback_data="quick_trade:long:SOLUSDT:10"),
             InlineKeyboardButton("⚡ SOL Short 10x", callback_data="quick_trade:short:SOLUSDT:10")
         ],
-        
+
         # Separator for visual grouping
         [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", callback_data="noop")],
-        
+
         # Secondary actions (thumb-friendly grouping)
         [
             InlineKeyboardButton("📊 Portfolio", callback_data="view_status"),
@@ -45,13 +45,13 @@ def build_mobile_dashboard_primary_keyboard():
             InlineKeyboardButton("🎤 Voice Trade", callback_data="voice_command"),
             InlineKeyboardButton("📝 Manual", callback_data="start_conversation")
         ],
-        
+
         # Second tier (comfortable reach) - monitoring actions
         [
             InlineKeyboardButton("🔄 Refresh", callback_data="refresh_dashboard"),
             InlineKeyboardButton("📊 Positions", callback_data="view_positions")
         ],
-        
+
         # Third tier (still reachable) - secondary actions
         [
             InlineKeyboardButton("📈 Stats", callback_data="view_stats"),
@@ -64,10 +64,10 @@ def build_mobile_position_management_keyboard():
     return InlineKeyboardMarkup([
         # Critical actions first (large buttons for safety)
         [InlineKeyboardButton("⚠️ CLOSE ALL POSITIONS", callback_data="close_all_positions_confirm")],
-        
+
         # Separator
         [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", callback_data="noop")],
-        
+
         # Individual position actions
         [
             InlineKeyboardButton("🎯 Modify TP/SL", callback_data="modify_tp_sl"),
@@ -77,7 +77,7 @@ def build_mobile_position_management_keyboard():
             InlineKeyboardButton("➕ Add to Position", callback_data="add_to_position"),
             InlineKeyboardButton("📋 Position Details", callback_data="position_details")
         ],
-        
+
         # Navigation
         [
             InlineKeyboardButton("📊 View All", callback_data="view_positions"),
@@ -90,10 +90,10 @@ def build_mobile_voice_keyboard():
     return InlineKeyboardMarkup([
         # Primary voice actions (prominent placement)
         [InlineKeyboardButton("🎤 START VOICE COMMAND", callback_data="voice_command")],
-        
+
         # Separator for visual clarity
         [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", callback_data="noop")],
-        
+
         # Support actions
         [
             InlineKeyboardButton("💡 Examples", callback_data="voice_examples"),
@@ -131,19 +131,19 @@ def build_mobile_settings_keyboard():
             InlineKeyboardButton("⚡ Default Leverage", callback_data="set_default_leverage"),
             InlineKeyboardButton("💰 Default Margin", callback_data="set_default_margin")
         ],
-        
+
         # Feature settings
         [
             InlineKeyboardButton("🎤 Voice Settings", callback_data="voice_settings"),
             InlineKeyboardButton("🧠 AI Settings", callback_data="ai_settings")
         ],
-        
+
         # Risk & notifications
         [
             InlineKeyboardButton("🛡️ Risk Management", callback_data="risk_settings"),
             InlineKeyboardButton("🔔 Notifications", callback_data="notification_settings")
         ],
-        
+
         # App settings
         [
             InlineKeyboardButton("📱 Mobile Prefs", callback_data="mobile_preferences"),
@@ -163,13 +163,13 @@ def build_mobile_stats_keyboard():
             InlineKeyboardButton("📋 Trade History", callback_data="trade_history"),
             InlineKeyboardButton("💰 P&L Breakdown", callback_data="pnl_breakdown")
         ],
-        
+
         # Export options
         [
             InlineKeyboardButton("📤 Export CSV", callback_data="export_csv"),
             InlineKeyboardButton("📄 Export PDF", callback_data="export_pdf")
         ],
-        
+
         # Management
         [
             InlineKeyboardButton("🔄 Reset Stats", callback_data="reset_stats"),
@@ -182,7 +182,7 @@ def build_mobile_error_recovery_keyboard():
     return InlineKeyboardMarkup([
         # Primary recovery actions
         [InlineKeyboardButton("🔄 Try Again", callback_data="retry_last_action")],
-        
+
         # Alternative actions
         [
             InlineKeyboardButton("🎤 Voice Trade", callback_data="voice_command"),
@@ -192,7 +192,7 @@ def build_mobile_error_recovery_keyboard():
             InlineKeyboardButton("📊 Check Positions", callback_data="view_positions"),
             InlineKeyboardButton("🏠 Dashboard", callback_data="refresh_dashboard")
         ],
-        
+
         # Support
         [InlineKeyboardButton("❓ Get Help", callback_data="mobile_help")]
     ])
@@ -205,7 +205,7 @@ def build_mobile_help_keyboard():
             InlineKeyboardButton("🚀 Quick Start", callback_data="help:quick_start"),
             InlineKeyboardButton("📱 Mobile Guide", callback_data="help:mobile_guide")
         ],
-        
+
         # Feature help
         [
             InlineKeyboardButton("🎤 Voice Help", callback_data="help:voice_trading"),
@@ -215,13 +215,13 @@ def build_mobile_help_keyboard():
             InlineKeyboardButton("📊 Trading Help", callback_data="help:trading_basics"),
             InlineKeyboardButton("🛡️ Risk Guide", callback_data="help:risk_management")
         ],
-        
+
         # Troubleshooting
         [
             InlineKeyboardButton("🔧 Troubleshooting", callback_data="help:troubleshooting"),
             InlineKeyboardButton("❓ FAQ", callback_data="help:faq")
         ],
-        
+
         # Navigation
         [InlineKeyboardButton("🏠 Back to Dashboard", callback_data="back_to_dashboard")]
     ])
@@ -231,16 +231,16 @@ def build_mobile_trade_confirmation_keyboard():
     return InlineKeyboardMarkup([
         # EXECUTE button (prominent, green, large)
         [InlineKeyboardButton("🚀 EXECUTE TRADE", callback_data="confirm_execute_trade")],
-        
+
         # Visual separator for safety
         [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", callback_data="noop")],
-        
+
         # Modification options
         [
             InlineKeyboardButton("🔧 Modify", callback_data="modify_trade"),
             InlineKeyboardButton("📝 Review", callback_data="review_trade_setup")
         ],
-        
+
         # Cancel options
         [
             InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation"),
@@ -263,21 +263,21 @@ def build_mobile_symbol_selection_keyboard():
             InlineKeyboardButton("● DOT", callback_data="select_symbol_DOTUSDT"),
             InlineKeyboardButton("🔗 LINK", callback_data="select_symbol_LINKUSDT")
         ],
-        
+
         # DeFi & Layer 2
         [
             InlineKeyboardButton("🔺 AVAX", callback_data="select_symbol_AVAXUSDT"),
             InlineKeyboardButton("🟣 MATIC", callback_data="select_symbol_MATICUSDT"),
             InlineKeyboardButton("🟡 BNB", callback_data="select_symbol_BNBUSDT")
         ],
-        
+
         # Meme & trending
         [
             InlineKeyboardButton("🐕 DOGE", callback_data="select_symbol_DOGEUSDT"),
             InlineKeyboardButton("🐸 PEPE", callback_data="select_symbol_PEPEUSDT"),
             InlineKeyboardButton("🔥 SHIB", callback_data="select_symbol_SHIBUSDT")
         ],
-        
+
         # Search & navigation
         [
             InlineKeyboardButton("🔍 Search Symbol", callback_data="search_symbol"),
@@ -294,58 +294,60 @@ def build_mobile_leverage_selection_keyboard():
             InlineKeyboardButton("🟢 5x (Safe)", callback_data="select_leverage_5"),
             InlineKeyboardButton("🟢 10x (Safe)", callback_data="select_leverage_10")
         ],
-        
+
         # Moderate (yellow)
         [
             InlineKeyboardButton("🟡 20x (Moderate)", callback_data="select_leverage_20"),
             InlineKeyboardButton("🟡 25x (Moderate)", callback_data="select_leverage_25")
         ],
-        
+
         # Aggressive (orange)
         [
             InlineKeyboardButton("🟠 50x (High Risk)", callback_data="select_leverage_50"),
             InlineKeyboardButton("🟠 75x (High Risk)", callback_data="select_leverage_75")
         ],
-        
+
         # Extreme (red)
         [
             InlineKeyboardButton("🔴 100x (EXTREME)", callback_data="select_leverage_100"),
             InlineKeyboardButton("📝 Custom", callback_data="custom_leverage")
         ],
-        
+
         # Navigation
         [InlineKeyboardButton("🏠 Dashboard", callback_data="refresh_dashboard")]
     ])
 
 def build_mobile_margin_selection_keyboard():
-    """Mobile-optimized margin selection with dollar amounts"""
+    """Mobile-optimized margin selection with percentage options"""
     return InlineKeyboardMarkup([
-        # Small amounts
+        # Percentage options (aligned with conversation.py)
         [
-            InlineKeyboardButton("💰 $25", callback_data="conv_margin:25"),
-            InlineKeyboardButton("💰 $50", callback_data="conv_margin:50"),
-            InlineKeyboardButton("💰 $100", callback_data="conv_margin:100")
+            InlineKeyboardButton("📊 0.5%", callback_data="conv_margin_pct:0.5"),
+            InlineKeyboardButton("📊 1%", callback_data="conv_margin_pct:1"),
+            InlineKeyboardButton("📊 2%", callback_data="conv_margin_pct:2")
         ],
-        
-        # Medium amounts
         [
-            InlineKeyboardButton("💰 $200", callback_data="conv_margin:200"),
+            InlineKeyboardButton("📊 5%", callback_data="conv_margin_pct:5"),
+            InlineKeyboardButton("📊 10%", callback_data="conv_margin_pct:10")
+        ],
+
+        # Fixed amounts for quick selection
+        [
+            InlineKeyboardButton("💰 $50", callback_data="conv_margin:50"),
+            InlineKeyboardButton("💰 $100", callback_data="conv_margin:100"),
+            InlineKeyboardButton("💰 $200", callback_data="conv_margin:200")
+        ],
+        [
             InlineKeyboardButton("💰 $500", callback_data="conv_margin:500"),
             InlineKeyboardButton("💰 $1000", callback_data="conv_margin:1000")
         ],
-        
-        # Large amounts
+
+        # Custom percentage input
         [
-            InlineKeyboardButton("💰 $2000", callback_data="conv_margin:2000"),
-            InlineKeyboardButton("💰 $5000", callback_data="conv_margin:5000")
+            InlineKeyboardButton("📝 Custom %", callback_data="conv_margin:custom_percentage"),
+            InlineKeyboardButton("💵 Custom $", callback_data="conv_margin:custom_amount")
         ],
-        
-        # Custom & percentage
-        [
-            InlineKeyboardButton("📝 Custom Amount", callback_data="conv_margin:custom"),
-            InlineKeyboardButton("📊 Percentage", callback_data="conv_margin:percentage")
-        ],
-        
+
         # Navigation
         [InlineKeyboardButton("🏠 Dashboard", callback_data="refresh_dashboard")]
     ])

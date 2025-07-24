@@ -24,6 +24,7 @@ from telegram.ext import (
 
 # Import configuration
 from config import *
+from config.constants import BOT_PREFIX
 
 # Import clients and core components
 from clients import bybit_client, openai_client
@@ -160,9 +161,10 @@ def detect_approach_from_orders(orders: List[Dict]) -> Optional[str]:
     if not orders:
         return None
     
-    conservative_patterns = ['TP1_', 'TP2_', 'TP3_', 'TP4_', '_LIMIT']
-    fast_patterns = ['_FAST_TP', '_FAST_SL', '_FAST_MARKET']
-    ggshot_patterns = ['_GGSHOT_', 'GGShot']
+    # Updated patterns to include BOT_ prefix
+    conservative_patterns = ['CONS_', 'TP1_', 'TP2_', 'TP3_', 'TP4_', '_LIMIT']
+    fast_patterns = ['FAST_', '_FAST_TP', '_FAST_SL', '_FAST_MARKET']
+    ggshot_patterns = ['GGSHOT_', '_GGSHOT_', 'GGShot']
     
     conservative_count = 0
     fast_count = 0
@@ -225,7 +227,7 @@ async def find_chat_data_for_symbol(application: Application, symbol: str, side:
             try:
                 chat_symbol = chat_data.get(SYMBOL)
                 chat_side = chat_data.get(SIDE)
-                chat_approach = chat_data.get(TRADING_APPROACH, "fast")
+                chat_approach = "conservative"
                 
                 # Match symbol first
                 if chat_symbol == symbol:
@@ -258,7 +260,7 @@ async def verify_monitor_status(chat_id: int, chat_data: dict):
         # Check if we have a stored task reference
         from execution.monitor import get_monitor_task_status
         symbol = chat_data.get(SYMBOL, "")
-        approach = chat_data.get(TRADING_APPROACH, "fast")
+        approach = "conservative"
         status = await get_monitor_task_status(chat_id, symbol, approach)
         
         if status.get("running", False):
@@ -330,7 +332,7 @@ async def cleanup_stale_monitors(application: Application):
             if task_info.get('active', False):
                 chat_id = task_info.get('chat_id')
                 symbol = task_info.get('symbol')
-                approach = task_info.get('approach', 'fast')
+                approach = "conservative"
                 
                 if chat_id and symbol:
                     from execution.monitor import get_monitor_task_status
@@ -386,7 +388,7 @@ async def restore_monitoring_for_position(application: Application, position: di
                 chat_data[LAST_KNOWN_POSITION_SIZE] = position["size"]
                 
                 # Determine approach for proper monitoring
-                approach = chat_data.get(TRADING_APPROACH, "fast")
+                approach = "conservative"
                 
                 # Start monitoring
                 from execution.monitor import start_position_monitoring
@@ -555,7 +557,7 @@ async def check_and_restart_position_monitors(application: Application):
             for key, monitor_info in application.bot_data['monitor_tasks'].items():
                 if isinstance(monitor_info, dict) and monitor_info.get('active'):
                     symbol = monitor_info.get('symbol')
-                    approach = monitor_info.get('approach', 'fast')
+                    approach = "conservative"
                     if symbol:
                         if symbol not in existing_monitors:
                             existing_monitors[symbol] = []
@@ -568,6 +570,26 @@ async def check_and_restart_position_monitors(application: Application):
             
             # Get orders for this position to detect approach
             position_orders = orders_by_symbol.get(symbol, [])
+            
+            # Check if this position has any bot-initiated orders
+            has_bot_orders = any(
+                BOT_PREFIX in o.get('orderLinkId', '')
+                for o in position_orders
+            )
+            
+            # Skip monitoring for positions without bot orders (protect external positions)
+            from config.constants import MANAGE_EXTERNAL_POSITIONS
+            from utils.position_identifier import position_identifier
+            
+            # Use position identifier to check if this is a bot position
+            is_bot_pos = position_identifier.is_bot_position(position, position_orders)
+            
+            if not is_bot_pos:
+                logger.info(f"🛡️ Skipping external position {symbol} {side} - no bot orders found")
+                continue
+            
+            logger.info(f"✅ Identified {symbol} {side} as bot position - will restore monitoring")
+            
             detected_approach = detect_approach_from_orders(position_orders)
             
             # Get configured approaches for this symbol
@@ -585,7 +607,7 @@ async def check_and_restart_position_monitors(application: Application):
                         # Restore monitoring for existing chat data
                         for chat_id, chat_data in matching_chats:
                             try:
-                                chat_approach = chat_data.get(TRADING_APPROACH, "fast")
+                                chat_approach = "conservative"
                                 
                                 # Ensure approach matches
                                 if chat_approach != approach:
@@ -624,19 +646,26 @@ async def check_and_restart_position_monitors(application: Application):
                             PRIMARY_ENTRY_PRICE: position.get("avgPrice", "0"),
                             TRADING_APPROACH: approach,
                             "position_created": True,
-                            "bot_position": True
+                            "bot_position": True,  # Already filtered for bot orders above
+                            "has_bot_orders": True  # Explicit flag for persistence
                         }
                         
                         # Add approach-specific order IDs if they match
                         if approach == "conservative" and position_orders:
                             tp_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('TP')]
                             sl_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('SL')]
+                            # Detect limit entry orders (non-reduce-only Limit orders)
+                            limit_orders = [o for o in position_orders if o.get('orderType') == 'Limit' and not o.get('reduceOnly', False)]
                             
                             if tp_orders:
                                 tp_order_ids = [o.get('orderId') for o in sorted(tp_orders, key=lambda x: x.get('orderLinkId', ''))]
                                 new_chat_data[CONSERVATIVE_TP_ORDER_IDS] = tp_order_ids
                             if sl_orders:
                                 new_chat_data[CONSERVATIVE_SL_ORDER_ID] = sl_orders[0].get('orderId')
+                            if limit_orders:
+                                limit_order_ids = [o.get('orderId') for o in sorted(limit_orders, key=lambda x: float(x.get('price', 0)))]
+                                new_chat_data[LIMIT_ORDER_IDS] = limit_order_ids
+                                logger.info(f"📝 Detected {len(limit_order_ids)} limit orders for {symbol} conservative approach")
                         
                         # Store in the main chat's data
                         if main_chat_id not in application.chat_data:
@@ -679,11 +708,16 @@ async def check_and_restart_position_monitors(application: Application):
                     # Restore monitoring for existing chat data
                     for chat_id, chat_data in matching_chats:
                         try:
-                            chat_approach = chat_data.get(TRADING_APPROACH, "fast")
+                            chat_approach = "conservative"
                             
                             # Skip if approach doesn't match detected approach (if we detected one)
                             if detected_approach and chat_approach != detected_approach:
                                 logger.info(f"⚠️ Skipping chat {chat_id} - approach mismatch: {chat_approach} != {detected_approach}")
+                                continue
+                            
+                            # Check if this was a bot-initiated trade (from persistence)
+                            if not chat_data.get("has_bot_orders", False) and not chat_data.get("bot_position", False):
+                                logger.info(f"⏭️ Skipping external position from persistence: {symbol} {side}")
                                 continue
                             
                             # All positions are bot trades now - no external positions
@@ -728,25 +762,26 @@ async def check_and_restart_position_monitors(application: Application):
                     if position_orders:
                         # Check for conservative patterns
                         has_conservative = any(
+                            'CONS_' in o.get('orderLinkId', '') or
                             o.get('orderLinkId', '').startswith(('TP1_', 'TP2_', 'TP3_', 'TP4_', 'SL_', '_LIMIT'))
                             for o in position_orders
                         )
                         # Check for fast patterns  
                         has_fast = any(
-                            '_FAST_' in o.get('orderLinkId', '') or
+                            'FAST_' in o.get('orderLinkId', '') or
                             o.get('orderLinkId', '').startswith(('TP_', 'SL_')) or
-                            o.get('stopOrderType') in ['TakeProfit', 'StopLoss']
+                            (o.get('stopOrderType') in ['TakeProfit', 'StopLoss'] and 'CONS_' not in o.get('orderLinkId', ''))
                             for o in position_orders
                         )
                         
                         if has_conservative:
                             approaches_used.add("conservative")
                         if has_fast:
-                            approaches_used.add("fast")
+                            approach = "conservative"
                     
-                    # If no patterns detected, use detected approach or default to fast
+                    # If no patterns detected, use detected approach = "conservative"
                     if not approaches_used:
-                        approaches_used.add(detected_approach or "fast")
+                        approach = "conservative"
                     
                     logger.info(f"📝 Creating monitors for {symbol} {side} with approaches: {list(approaches_used)}")
                     
@@ -762,27 +797,64 @@ async def check_and_restart_position_monitors(application: Application):
                             PRIMARY_ENTRY_PRICE: position.get("avgPrice", "0"),
                             TRADING_APPROACH: approach,
                             "position_created": True,
-                            "bot_position": True
+                            "bot_position": True,  # Already filtered for bot orders above
+                            "has_bot_orders": True  # Explicit flag for persistence
                         }
                         
                         # Add approach-specific order IDs if available
                         if approach == "conservative" and position_orders:
                             tp_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('TP')]
                             sl_orders = [o for o in position_orders if o.get('orderLinkId', '').startswith('SL')]
+                            # Detect limit entry orders (non-reduce-only Limit orders)
+                            limit_orders = [o for o in position_orders if o.get('orderType') == 'Limit' and not o.get('reduceOnly', False)]
                             
                             if tp_orders:
                                 tp_order_ids = [o.get('orderId') for o in sorted(tp_orders, key=lambda x: x.get('orderLinkId', ''))]
                                 new_chat_data[CONSERVATIVE_TP_ORDER_IDS] = tp_order_ids
                             if sl_orders:
                                 new_chat_data[CONSERVATIVE_SL_ORDER_ID] = sl_orders[0].get('orderId')
-                        elif approach == "fast" and position_orders:
-                            fast_tp_orders = [o for o in position_orders if '_FAST_TP' in o.get('orderLinkId', '') or o.get('stopOrderType') == 'TakeProfit']
-                            fast_sl_orders = [o for o in position_orders if '_FAST_SL' in o.get('orderLinkId', '') or o.get('stopOrderType') == 'StopLoss']
+                            if limit_orders:
+                                limit_order_ids = [o.get('orderId') for o in sorted(limit_orders, key=lambda x: float(x.get('price', 0)))]
+                                new_chat_data[LIMIT_ORDER_IDS] = limit_order_ids
+                                logger.info(f"📝 Detected {len(limit_order_ids)} limit orders for {symbol} conservative approach")
+                        elif approach == "conservative" and position_orders:
+                            # Enhanced Fast approach order detection
+                            fast_tp_orders = []
+                            fast_sl_orders = []
+                            
+                            for order in position_orders:
+                                order_link_id = order.get('orderLinkId', '')
+                                stop_order_type = order.get('stopOrderType', '')
+                                
+                                # TP detection - more flexible patterns
+                                if (stop_order_type == 'TakeProfit' or 
+                                    any(pattern in order_link_id for pattern in ['_FAST_TP', 'FAST_TP', '_TP', 'BOT_TP', 'BOT_FAST']) and
+                                    'TP' in order_link_id):
+                                    fast_tp_orders.append(order)
+                                    
+                                # SL detection - more flexible patterns
+                                elif (stop_order_type == 'StopLoss' or 
+                                      any(pattern in order_link_id for pattern in ['_FAST_SL', 'FAST_SL', '_SL', 'BOT_SL', 'BOT_FAST']) and
+                                      'SL' in order_link_id):
+                                    fast_sl_orders.append(order)
                             
                             if fast_tp_orders:
-                                new_chat_data[TP_ORDER_ID] = fast_tp_orders[0].get('orderId')
+                                tp_order = fast_tp_orders[0]
+                                tp_order_id = tp_order.get('orderId')
+                                new_chat_data["tp_order_id"] = tp_order_id
+                                new_chat_data[TP_ORDER_IDS] = [tp_order_id]
+                                logger.info(f"📝 Detected fast TP order for {symbol}: {tp_order_id[:8]}... (trigger: {tp_order.get('triggerPrice')})")
+                            else:
+                                logger.warning(f"⚠️ No TP order found for {symbol} fast position")
+                                
                             if fast_sl_orders:
-                                new_chat_data[SL_ORDER_ID] = fast_sl_orders[0].get('orderId')
+                                sl_order = fast_sl_orders[0]
+                                sl_order_id = sl_order.get('orderId')
+                                new_chat_data[SL_ORDER_ID] = sl_order_id
+                                new_chat_data["sl_order_id"] = sl_order_id
+                                logger.info(f"📝 Detected fast SL order for {symbol}: {sl_order_id[:8]}... (trigger: {sl_order.get('triggerPrice')})")
+                            else:
+                                logger.warning(f"⚠️ No SL order found for {symbol} fast position")
                         
                         # Store in the main chat's data
                         if main_chat_id not in application.chat_data:
@@ -842,6 +914,13 @@ async def auto_restart_monitors_with_delay(application: Application):
         await asyncio.sleep(3)
         logger.info("🔄 Starting automatic monitor restart check...")
         await check_and_restart_position_monitors(application)
+        
+        # Check and rebalance Conservative positions on startup
+        logger.info("🔄 Checking Conservative positions for rebalancing...")
+        from startup_conservative_rebalancer import check_and_rebalance_conservative_positions
+        # Get positions first
+        positions = await get_positions_requiring_monitoring()
+        await check_and_rebalance_conservative_positions(positions)
     except Exception as e:
         logger.error(f"❌ Error in delayed monitor restart: {e}")
 
@@ -961,6 +1040,73 @@ async def start_background_tasks():
         # Start order cleanup
         await start_periodic_order_cleanup()
         
+        # Start stats backup task
+        try:
+            from utils.stats_backup import auto_backup_stats
+            stats_backup_task = asyncio.create_task(auto_backup_stats(_global_app))
+            _cleanup_tasks.append(stats_backup_task)
+            logger.info("✅ Stats backup task started")
+        except Exception as e:
+            logger.warning(f"Could not start stats backup task: {e}")
+        
+        # Start Enhanced TP/SL monitoring loop if enabled
+        try:
+            from config.settings import ENABLE_ENHANCED_TP_SL
+            if ENABLE_ENHANCED_TP_SL:
+                from helpers.background_tasks import enhanced_tp_sl_monitoring_loop
+                enhanced_tp_sl_task = asyncio.create_task(enhanced_tp_sl_monitoring_loop())
+                _cleanup_tasks.append(enhanced_tp_sl_task)
+                logger.info("✅ Enhanced TP/SL monitoring task started (5s interval)")
+                
+                # Log mirror alert configuration status
+                from config.constants import ENABLE_MIRROR_ALERTS
+                if ENABLE_MIRROR_ALERTS:
+                    logger.info("🔔 Mirror account alerts: ENABLED - Mirror positions will send separate alerts")
+                else:
+                    logger.info("🔕 Mirror account alerts: DISABLED - Preventing duplicate notifications")
+                
+                # Sync existing positions on startup
+                try:
+                    from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+                    await enhanced_tp_sl_manager.sync_existing_positions()
+                    logger.info("✅ Initial position sync completed")
+                except Exception as sync_error:
+                    logger.warning(f"Could not sync existing positions: {sync_error}")
+            else:
+                logger.info("ℹ️ Enhanced TP/SL monitoring disabled")
+        except Exception as e:
+            logger.warning(f"Could not start Enhanced TP/SL monitoring: {e}")
+        
+        # Start conservative rebalancer only if enhanced TP/SL is disabled
+        try:
+            from config.settings import ENABLE_ENHANCED_TP_SL
+            if not ENABLE_ENHANCED_TP_SL:
+                from execution.conservative_rebalancer import conservative_rebalancer
+                await conservative_rebalancer.start()
+                logger.info("✅ Conservative rebalancer started (preserving trigger prices)")
+            else:
+                logger.info("ℹ️ Conservative rebalancer disabled - using Enhanced TP/SL system for order management")
+        except Exception as e:
+            logger.warning(f"Could not start conservative rebalancer: {e}")
+        
+        # Ensure all conservative positions are monitored
+        try:
+            from scripts.maintenance.ensure_conservative_monitoring import ensure_all_conservative_positions_monitored
+            await ensure_all_conservative_positions_monitored()
+            logger.info("✅ Conservative position monitoring check complete")
+        except Exception as e:
+            logger.warning(f"Could not run conservative monitoring check: {e}")
+        
+        # Start real-time market data WebSocket stream
+        try:
+            from market_analysis.realtime_data_stream import start_realtime_stream
+            symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "SOLUSDT", "XRPUSDT"]
+            realtime_task = asyncio.create_task(start_realtime_stream(symbols))
+            _cleanup_tasks.append(realtime_task)
+            logger.info(f"✅ Real-time market data stream started for {len(symbols)} symbols")
+        except Exception as e:
+            logger.warning(f"Could not start real-time market data stream: {e}")
+        
         logger.info("✅ All background tasks started successfully")
         
     except Exception as e:
@@ -973,13 +1119,44 @@ async def enhanced_post_init(application: Application) -> None:
     
     logger.info("🚀 Enhanced Trading Bot initializing...")
     
+    # Initialize alert system with application reference
+    try:
+        from utils.alert_helpers import set_application
+        set_application(application)
+        logger.info("✅ Alert system initialized with application reference")
+    except Exception as e:
+        logger.warning(f"Could not initialize alert system: {e}")
+    
+    # Initialize persistence optimizer
+    try:
+        from utils.persistence_optimizer import persistence_optimizer
+        persistence_optimizer.set_app(application)
+        logger.info("✅ Persistence optimizer initialized")
+    except Exception as e:
+        logger.warning(f"Could not initialize persistence optimizer: {e}")
+    
+    # First, try to restore stats from backup if needed
+    try:
+        from utils.stats_backup import restore_stats
+        stats_restored = await restore_stats(application.bot_data)
+        if stats_restored:
+            logger.info("📊 Stats restored from backup")
+            await application.update_persistence()
+    except Exception as e:
+        logger.warning(f"Could not restore stats from backup: {e}")
+    
+    # Check if we have existing stats before initializing
+    has_existing_stats = (
+        application.bot_data.get(STATS_TOTAL_TRADES, 0) > 0 or
+        application.bot_data.get(STATS_TOTAL_PNL, Decimal("0")) != Decimal("0")
+    )
+    
     # Initialize enhanced bot data
     stats_defaults = {
         STATS_TOTAL_TRADES: 0,
         STATS_TP1_HITS: 0,
         STATS_SL_HITS: 0,
         STATS_OTHER_CLOSURES: 0,
-        STATS_LAST_RESET: time.time(),
         STATS_TOTAL_PNL: Decimal("0"),
         STATS_WIN_STREAK: 0,
         STATS_LOSS_STREAK: 0,
@@ -988,7 +1165,6 @@ async def enhanced_post_init(application: Application) -> None:
         STATS_TOTAL_WINS: 0,
         STATS_TOTAL_LOSSES: 0,
         STATS_CONSERVATIVE_TRADES: 0,
-        STATS_FAST_TRADES: 0,
         STATS_CONSERVATIVE_TP1_CANCELLATIONS: 0,
         # Additional stats for portfolio metrics
         'stats_total_wins_pnl': Decimal("0"),
@@ -999,9 +1175,22 @@ async def enhanced_post_init(application: Application) -> None:
         'recent_trade_pnls': []
     }
     
+    # Special handling for STATS_LAST_RESET
+    if STATS_LAST_RESET not in application.bot_data:
+        if has_existing_stats:
+            # We have stats but STATS_LAST_RESET is missing - preserve stats
+            application.bot_data[STATS_LAST_RESET] = application.bot_data.get('bot_start_time', time.time() - 86400)
+            logger.warning("Found existing stats but STATS_LAST_RESET missing - preserving stats")
+        else:
+            # First time initialization
+            application.bot_data[STATS_LAST_RESET] = time.time()
+            logger.info("First time initialization - setting STATS_LAST_RESET")
+    
+    # Initialize only missing stats
     for stat_key, default_val in stats_defaults.items():
         if stat_key not in application.bot_data:
             application.bot_data[stat_key] = default_val
+            logger.info(f"Initialized missing stat: {stat_key}")
     
     # Clean up stale monitors on startup
     try:
@@ -1063,9 +1252,13 @@ async def enhanced_post_init(application: Application) -> None:
     logger.info("🧹 Cleaning up stale monitors...")
     await cleanup_stale_monitors(application)
     
-    # Monitor restoration
-    logger.info("🔄 Initializing monitor restoration...")
-    asyncio.create_task(auto_restart_monitors_with_delay(application))
+    # Monitor restoration (disabled when Enhanced TP/SL is active)
+    from config.settings import ENABLE_ENHANCED_TP_SL
+    if not ENABLE_ENHANCED_TP_SL:
+        logger.info("🔄 Initializing monitor restoration...")
+        asyncio.create_task(auto_restart_monitors_with_delay(application))
+    else:
+        logger.info("ℹ️ Monitor restoration disabled - Enhanced TP/SL system handles monitoring")
     
     # Order cleanup
     logger.info("🧹 Initializing order cleanup...")
@@ -1079,7 +1272,21 @@ def setup_signal_handlers():
     def signal_handler(signum, frame):
         """Handle shutdown signals"""
         logger.info(f"🛑 Received signal {signum}, initiating graceful shutdown...")
-        asyncio.create_task(graceful_shutdown())
+        
+        # Try to get the current event loop
+        try:
+            loop = asyncio.get_running_loop()
+            if loop and not loop.is_closed():
+                loop.create_task(graceful_shutdown())
+            else:
+                logger.warning("Event loop is not running or closed, cannot schedule graceful shutdown")
+        except RuntimeError:
+            # No event loop running, try to run shutdown directly
+            logger.warning("No event loop running, attempting direct shutdown")
+            try:
+                asyncio.run(graceful_shutdown())
+            except Exception as e:
+                logger.error(f"Failed to run graceful shutdown: {e}")
     
     # Register signal handlers
     try:
@@ -1096,14 +1303,24 @@ async def graceful_shutdown():
     logger.info("🛑 Starting graceful shutdown...")
     
     try:
-        # Cancel all background tasks
-        for task in _cleanup_tasks:
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        # Cancel all background tasks with timeout
+        if _cleanup_tasks:
+            logger.info(f"🔄 Cancelling {len(_cleanup_tasks)} background tasks...")
+            for task in _cleanup_tasks:
+                if not task.done():
+                    task.cancel()
+            
+            # Wait for all tasks to complete with timeout
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*_cleanup_tasks, return_exceptions=True),
+                    timeout=5.0
+                )
+                logger.info("✅ All background tasks cancelled successfully")
+            except asyncio.TimeoutError:
+                logger.warning("⚠️ Some background tasks did not complete within timeout")
+            except Exception as e:
+                logger.warning(f"⚠️ Error during task cancellation: {e}")
         
         # Stop alert manager
         if _global_app:
@@ -1114,6 +1331,15 @@ async def graceful_shutdown():
                     logger.info("✅ Alert manager stopped")
             except Exception as e:
                 logger.error(f"Error stopping alert manager: {e}")
+        
+        # Stop auto-rebalancer - DISABLED
+        # try:
+        #     from execution.auto_rebalancer import stop_auto_rebalancer, is_auto_rebalancer_running
+        #     if is_auto_rebalancer_running():
+        #         await stop_auto_rebalancer()
+        #         logger.info("✅ Auto-rebalancer stopped")
+        # except Exception as e:
+        #     logger.error(f"Error stopping auto-rebalancer: {e}")
         
         # Stop all monitors
         if _global_app:
@@ -1136,12 +1362,27 @@ async def graceful_shutdown():
         # except Exception as e:
         #     logger.error(f"Error shutting down social media sentiment: {e}")
         
+        # Cleanup real-time data stream
+        try:
+            from market_analysis.realtime_data_stream import realtime_stream
+            await realtime_stream.disconnect()
+            logger.info("✅ Real-time data stream disconnected")
+        except Exception as e:
+            logger.error(f"Error disconnecting real-time data stream: {e}")
+        
         # Cleanup HTTP sessions
         try:
             from clients.bybit_client import cleanup_http_session
             await cleanup_http_session()
         except Exception as e:
             logger.error(f"Error cleaning up HTTP sessions: {e}")
+        
+        # Shutdown persistence optimizer and perform final update
+        try:
+            from utils.persistence_optimizer import shutdown_persistence_optimizer
+            await shutdown_persistence_optimizer()
+        except Exception as e:
+            logger.error(f"Error shutting down persistence optimizer: {e}")
         
         # Final persistence update
         if _global_app:
@@ -1162,8 +1403,27 @@ def main():
     validate_config()
     setup_signal_handlers()
     
-    # Register cleanup function
-    atexit.register(lambda: asyncio.run(graceful_shutdown()) if _global_app else None)
+    # Register cleanup function with better error handling
+    def cleanup_handler():
+        if _global_app:
+            try:
+                # Try to use existing event loop if available
+                loop = asyncio.get_event_loop()
+                if loop and not loop.is_closed():
+                    loop.run_until_complete(graceful_shutdown())
+                else:
+                    # Event loop is closed, create new one for cleanup
+                    asyncio.run(graceful_shutdown())
+            except RuntimeError:
+                # No event loop or closed, create new one
+                try:
+                    asyncio.run(graceful_shutdown())
+                except Exception as e:
+                    logger.error(f"Failed to run cleanup: {e}")
+            except Exception as e:
+                logger.error(f"Error in atexit cleanup: {e}")
+    
+    atexit.register(cleanup_handler)
     
     logger.info(f"🚀 Enhanced Trading Bot starting!")
     logger.info(f"📱 Mobile-first design with manual trading optimization")
@@ -1255,7 +1515,7 @@ def main():
     logger.info(f"   • Direct Bybit API verification")
     logger.info(f"   • Position and order cross-referencing")
     logger.info(f"   • All trades have chat data and persistence")
-    logger.info(f"   • Conservative and fast approach support")
+    logger.info(f"   • Conservative approach support only")
     
     logger.info(f"🤖 All Positions Bot Mode:")
     logger.info(f"   • Every position gets full monitoring capabilities")

@@ -1,0 +1,108 @@
+================================================================================
+COMPREHENSIVE MONITOR STATUS REPORT
+Generated: 2025-07-14 12:48:34
+================================================================================
+
+Total Monitors: 26
+
+
+MONITOR PHASES:
+----------------------------------------
+BUILDING: 8 monitors
+  - ARBUSDT_Buy_main (66.7% filled)
+  - CRVUSDT_Buy_main (66.7% filled)
+  - JASMYUSDT_Buy_main (66.7% filled)
+  - NTRNUSDT_Buy_main (66.7% filled)
+  - ONTUSDT_Buy_main (66.7% filled)
+  - PENDLEUSDT_Buy_main (67.1% filled)
+  - SEIUSDT_Buy_main (66.7% filled)
+  - SOLUSDT_Buy_main (66.9% filled)
+MONITORING: 14 monitors
+  - ARBUSDT_Buy_mirror (0.0% filled)
+  - AUCTIONUSDT_Buy_main (0.0% filled)
+  - AUCTIONUSDT_Buy_mirror (0.0% filled)
+  - BELUSDT_Buy_mirror (0.0% filled)
+  - BIGTIMEUSDT_Buy_mirror (0.0% filled)
+  - CRVUSDT_Buy_mirror (0.0% filled)
+  - INJUSDT_Buy_mirror (0.0% filled)
+  - JASMYUSDT_Buy_mirror (0.0% filled)
+  - NEARUSDT_Buy_mirror (0.0% filled)
+  - NTRNUSDT_Buy_mirror (0.0% filled)
+  - ONTUSDT_Buy_mirror (0.0% filled)
+  - PENDLEUSDT_Buy_mirror (0.0% filled)
+  - SEIUSDT_Buy_mirror (0.0% filled)
+  - SOLUSDT_Buy_mirror (0.0% filled)
+PROFIT_TAKING: 4 monitors
+  - BELUSDT_Buy_main (96.6% filled)
+  - BIGTIMEUSDT_Buy_main (95.0% filled)
+  - INJUSDT_Buy_main (95.0% filled)
+  - NEARUSDT_Buy_main (95.0% filled)
+
+
+ACCOUNT DISTRIBUTION:
+----------------------------------------
+MAIN: 13 monitors
+MIRROR: 13 monitors
+
+
+FILL STATUS DISTRIBUTION:
+----------------------------------------
+Building: 8 monitors
+Not Started: 14 monitors
+Profit Taking: 4 monitors
+
+
+EXPECTED UPCOMING ALERTS:
+================================================================================
+
+1. POSITIONS APPROACHING TP1 (Currently 66-67% filled):
+------------------------------------------------------------
+  NTRNUSDT (main): 66.7% filled → Expecting 3rd limit fill → TP1 at 85%
+  SOLUSDT (main): 66.9% filled → Expecting 3rd limit fill → TP1 at 85%
+  JASMYUSDT (main): 66.7% filled → Expecting 3rd limit fill → TP1 at 85%
+  PENDLEUSDT (main): 67.1% filled → Expecting 3rd limit fill → TP1 at 85%
+  CRVUSDT (main): 66.7% filled → Expecting 3rd limit fill → TP1 at 85%
+  ARBUSDT (main): 66.7% filled → Expecting 3rd limit fill → TP1 at 85%
+  SEIUSDT (main): 66.7% filled → Expecting 3rd limit fill → TP1 at 85%
+  ONTUSDT (main): 66.7% filled → Expecting 3rd limit fill → TP1 at 85%
+
+2. POSITIONS IN PROFIT TAKING (TP1 hit, waiting for TP2-TP4):
+------------------------------------------------------------
+  BIGTIMEUSDT (main): 95.0% filled → Waiting for TP2
+  NEARUSDT (main): 95.0% filled → Waiting for TP2
+  INJUSDT (main): 95.0% filled → Waiting for TP2
+  BELUSDT (main): 96.6% filled → Waiting for TP3
+
+3. POSITIONS NOT YET STARTED (0% filled):
+------------------------------------------------------------
+  BIGTIMEUSDT (mirror): Waiting for 1st limit fill
+  NEARUSDT (mirror): Waiting for 1st limit fill
+  INJUSDT (mirror): Waiting for 1st limit fill
+  BELUSDT (mirror): Waiting for 1st limit fill
+  SOLUSDT (mirror): Waiting for 1st limit fill
+  JASMYUSDT (mirror): Waiting for 1st limit fill
+  NTRNUSDT (mirror): Waiting for 1st limit fill
+  PENDLEUSDT (mirror): Waiting for 1st limit fill
+  AUCTIONUSDT (main): Waiting for 1st limit fill
+  AUCTIONUSDT (mirror): Waiting for 1st limit fill
+  CRVUSDT (mirror): Waiting for 1st limit fill
+  SEIUSDT (mirror): Waiting for 1st limit fill
+  ARBUSDT (mirror): Waiting for 1st limit fill
+  ONTUSDT (mirror): Waiting for 1st limit fill
+
+
+KEY FINDINGS:
+================================================================================
+✅ All positions have monitors (26 total)
+✅ No false TP1 detections found
+✅ Monitor phases match actual fill percentages
+✅ 4 Unknown phase monitors updated to MONITORING
+✅ System is tracking positions correctly
+
+
+ALERT EXPECTATIONS SUMMARY:
+================================================================================
+• 8 main positions at ~67% fill → Expecting final limit fills then TP1
+• 4 main positions in profit taking → Expecting TP2-TP4 alerts
+• 14 positions (mostly mirror) at 0% → Waiting for initial limit fills
+• When TP1 hits: SL moves to breakeven + unfilled limits cancelled

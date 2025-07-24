@@ -1,0 +1,220 @@
+{
+  "timestamp": "2025-07-15T04:07:59.589635",
+  "bybit_positions": {
+    "main": [
+      {
+        "symbol": "ONTUSDT",
+        "side": "Buy",
+        "size": 1563.0,
+        "avgPrice": 0.1475,
+        "markPrice": 0.1426,
+        "unrealisedPnl": -7.6587,
+        "account": "main"
+      },
+      {
+        "symbol": "SNXUSDT",
+        "side": "Buy",
+        "size": 350.2,
+        "avgPrice": 0.66472773,
+        "markPrice": 0.6317,
+        "unrealisedPnl": -11.56631,
+        "account": "main"
+      },
+      {
+        "symbol": "SOLUSDT",
+        "side": "Buy",
+        "size": 10.9,
+        "avgPrice": 167.81,
+        "markPrice": 160.823,
+        "unrealisedPnl": -76.1583,
+        "account": "main"
+      }
+    ],
+    "mirror": [
+      {
+        "symbol": "ONTUSDT",
+        "side": "Buy",
+        "size": 599.0,
+        "avgPrice": 0.1475,
+        "markPrice": 0.1426,
+        "unrealisedPnl": -2.9351,
+        "account": "mirror"
+      },
+      {
+        "symbol": "SNXUSDT",
+        "side": "Buy",
+        "size": 134.2,
+        "avgPrice": 0.6649,
+        "markPrice": 0.6317,
+        "unrealisedPnl": -4.45544,
+        "account": "mirror"
+      },
+      {
+        "symbol": "SOLUSDT",
+        "side": "Buy",
+        "size": 4.1,
+        "avgPrice": 167.8,
+        "markPrice": 160.823,
+        "unrealisedPnl": -28.6057,
+        "account": "mirror"
+      }
+    ]
+  },
+  "pickle_monitors": {
+    "SOLUSDT_Buy_mirror": {
+      "symbol": "SOLUSDT",
+      "side": "Buy",
+      "account_type": "mirror",
+      "position_size": "12.5241",
+      "remaining_size": "12.5241",
+      "entry_price": "157.6666666666666666666666667",
+      "phase": "MONITORING",
+      "tp_orders": [],
+      "sl_order": null,
+      "limit_orders": [],
+      "created_at": 1752538035.7321029,
+      "last_updated": 1752538035.7321029,
+      "chat_id": 5634913742,
+      "approach": "conservative",
+      "close_detections": 0,
+      "last_check": 1752541661.3578959
+    },
+    "ONTUSDT_Buy_main": {
+      "symbol": "ONTUSDT",
+      "side": "Buy",
+      "position_size": "1563.0",
+      "remaining_size": "1563.0",
+      "entry_price": "0.1475",
+      "avg_price": "0.1475",
+      "approach": "conservative",
+      "tp_orders": {},
+      "sl_order": null,
+      "filled_tps": [],
+      "cancelled_limits": false,
+      "tp1_hit": false,
+      "tp1_info": null,
+      "sl_moved_to_be": false,
+      "sl_move_attempts": 0,
+      "created_at": 1752541195.861802,
+      "last_check": 1752541667.7299368,
+      "limit_orders": [],
+      "limit_orders_cancelled": false,
+      "phase": "MONITORING",
+      "chat_id": 5634913742,
+      "account_type": "main"
+    },
+    "SNXUSDT_Buy_main": {
+      "symbol": "SNXUSDT",
+      "side": "Buy",
+      "position_size": "350.2",
+      "remaining_size": "350.2",
+      "entry_price": "0.66472773",
+      "avg_price": "0.66472773",
+      "approach": "conservative",
+      "tp_orders": {},
+      "sl_order": null,
+      "filled_tps": [],
+      "cancelled_limits": false,
+      "tp1_hit": false,
+      "tp1_info": null,
+      "sl_moved_to_be": false,
+      "sl_move_attempts": 0,
+      "created_at": 1752541196.364748,
+      "last_check": 1752541669.101033,
+      "limit_orders": [],
+      "limit_orders_cancelled": false,
+      "phase": "MONITORING",
+      "chat_id": 5634913742,
+      "account_type": "main"
+    },
+    "SOLUSDT_Buy_main": {
+      "symbol": "SOLUSDT",
+      "side": "Buy",
+      "position_size": "10.9",
+      "remaining_size": "10.9",
+      "entry_price": "167.81",
+      "avg_price": "167.81",
+      "approach": "conservative",
+      "tp_orders": {},
+      "sl_order": null,
+      "filled_tps": [],
+      "cancelled_limits": false,
+      "tp1_hit": false,
+      "tp1_info": null,
+      "sl_moved_to_be": false,
+      "sl_move_attempts": 0,
+      "created_at": 1752541196.537729,
+      "last_check": 1752541670.45311,
+      "limit_orders": [],
+      "limit_orders_cancelled": false,
+      "phase": "MONITORING",
+      "chat_id": 5634913742,
+      "account_type": "main"
+    }
+  },
+  "issues": {
+    "positions_without_monitors": [
+      {
+        "position_key": "ONTUSDT_Buy_mirror",
+        "symbol": "ONTUSDT",
+        "side": "Buy",
+        "account": "mirror",
+        "size": 599.0,
+        "avgPrice": 0.1475,
+        "unrealisedPnl": -2.9351
+      },
+      {
+        "position_key": "SNXUSDT_Buy_mirror",
+        "symbol": "SNXUSDT",
+        "side": "Buy",
+        "account": "mirror",
+        "size": 134.2,
+        "avgPrice": 0.6649,
+        "unrealisedPnl": -4.45544
+      }
+    ],
+    "monitors_without_chat_id": [],
+    "orphaned_monitors": [],
+    "monitors_missing_orders": [
+      {
+        "monitor_key": "SOLUSDT_Buy_mirror",
+        "symbol": "SOLUSDT",
+        "side": "Buy",
+        "missing_tp": true,
+        "missing_sl": true
+      },
+      {
+        "monitor_key": "ONTUSDT_Buy_main",
+        "symbol": "ONTUSDT",
+        "side": "Buy",
+        "missing_tp": true,
+        "missing_sl": true
+      },
+      {
+        "monitor_key": "SNXUSDT_Buy_main",
+        "symbol": "SNXUSDT",
+        "side": "Buy",
+        "missing_tp": true,
+        "missing_sl": true
+      },
+      {
+        "monitor_key": "SOLUSDT_Buy_main",
+        "symbol": "SOLUSDT",
+        "side": "Buy",
+        "missing_tp": true,
+        "missing_sl": true
+      }
+    ]
+  },
+  "statistics": {
+    "total_bybit_positions": 6,
+    "total_pickle_monitors": 4,
+    "monitors_with_chat_id": 4,
+    "monitors_without_chat_id": 0,
+    "coverage_percentage": 66.66666666666666
+  },
+  "recommendations": [
+    "Create 2 missing monitors for positions without monitoring",
+    "Fix 4 monitors missing TP/SL orders"
+  ]
+}

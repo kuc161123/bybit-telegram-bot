@@ -1,0 +1,81 @@
+--- a/clients/bybit_helpers.py
++++ b/clients/bybit_helpers.py
+@@ -2115,6 +2115,39 @@ async def periodic_order_cleanup_task():
+         await asyncio.sleep(300)  # Run every 5 minutes
+ 
+ 
++async def set_symbol_leverage(symbol: str, leverage: int, client=None) -> bool:
++    """
++    Set leverage for a symbol before placing orders.
++    
++    Args:
++        symbol: Trading symbol (e.g., 'BTCUSDT')
++        leverage: Leverage value (e.g., 10 for 10x)
++        client: Bybit client instance (defaults to main client)
++        
++    Returns:
++        bool: True if successful, False otherwise
++    """
++    if client is None:
++        client = bybit_client
++        
++    try:
++        logger.info(f"⚡ Setting leverage for {symbol} to {leverage}x...")
++        
++        response = await api_call_with_retry(
++            lambda: client.set_leverage(
++                category="linear",
++                symbol=symbol,
++                buyLeverage=str(leverage),
++                sellLeverage=str(leverage)
++            ),
++            timeout=30
++        )
++        
++        if response and response.get('retCode') == 0:
++            logger.info(f"✅ Successfully set {symbol} leverage to {leverage}x")
++            return True
++        else:
++            logger.error(f"❌ Failed to set leverage for {symbol}: {response}")
++            return False
++            
++    except Exception as e:
++        logger.error(f"❌ Error setting leverage for {symbol}: {e}")
++        return False
++
++
+ def calculate_order_metrics(order: Dict, current_price: float) -> Dict[str, float]:
+--- a/execution/trader.py
++++ b/execution/trader.py
+@@ -25,6 +25,7 @@ from clients.bybit_helpers import (
+     cancel_order_with_retry,
+     get_symbol_info,
+     get_current_price,
++    set_symbol_leverage,
+     validate_order_parameters,
+     get_correct_position_idx,
+     add_trade_group_id,
+@@ -401,6 +402,11 @@ class Trader:
+             self.logger.info(f"Margin amount: ${margin_amount}")
+             self.logger.info(f"Position size: {position_size} {symbol}")
+             
++            # Set leverage before placing orders
++            leverage_set = await set_symbol_leverage(symbol, leverage)
++            if not leverage_set:
++                self.logger.warning(f"⚠️ Failed to set leverage, continuing with existing leverage")
++            
+             position_size = margin_amount * leverage
+             
+             # Get symbol info for precision
+@@ -1473,6 +1479,11 @@ class Trader:
+             self.logger.info(f"Total position size: {total_position_size} {symbol}")
+             self.logger.info(f"Adjusted position size: {adjusted_position_size} {symbol}")
+             
++            # Set leverage before placing orders
++            leverage_set = await set_symbol_leverage(symbol, leverage)
++            if not leverage_set:
++                self.logger.warning(f"⚠️ Failed to set leverage, continuing with existing leverage")
++            
+             total_position_size = margin_amount * leverage
+             
+             # Store approach type for monitoring

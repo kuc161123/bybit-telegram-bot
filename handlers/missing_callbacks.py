@@ -24,7 +24,7 @@ async def perf_daily_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Show daily P&L performance"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📈 Daily P&L Analysis\n\n"
         "Today: +$125.40 (+3.2%)\n"
@@ -38,7 +38,7 @@ async def perf_weekly_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Show weekly P&L performance"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📊 Weekly P&L Analysis\n\n"
         "This Week: +$576.80 (+14.2%)\n"
@@ -52,7 +52,7 @@ async def perf_monthly_pnl(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Show monthly P&L performance"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📉 Monthly P&L Analysis\n\n"
         "This Month: +$2,345.60 (+58.6%)\n"
@@ -66,7 +66,7 @@ async def perf_win_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Show win rate analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "🎯 Win Rate Analysis\n\n"
         "Overall: 68.5% (137W / 63L)\n"
@@ -82,7 +82,7 @@ async def perf_profit_factor(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Show profit factor analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "💰 Profit Factor Analysis\n\n"
         "Overall: 2.34\n"
@@ -98,7 +98,7 @@ async def perf_sharpe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     """Show Sharpe ratio analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📊 Sharpe Ratio Analysis\n\n"
         "Current: 1.85\n"
@@ -113,7 +113,7 @@ async def download_performance_report(update: Update, context: ContextTypes.DEFA
     """Download performance report"""
     query = update.callback_query
     await query.answer("Generating report...")
-    
+
     await query.edit_message_text(
         "📑 Performance Report\n\n"
         "Report generation coming soon!\n"
@@ -130,7 +130,7 @@ async def risk_var(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show VaR analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "⚠️ Value at Risk (VaR) Analysis\n\n"
         "95% VaR (1-day): $156.80\n"
@@ -144,7 +144,7 @@ async def risk_drawdown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Show drawdown analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📉 Drawdown Analysis\n\n"
         "Current: -3.2%\n"
@@ -159,7 +159,7 @@ async def risk_stress_test(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Show stress test results"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "🎲 Stress Test Results\n\n"
         "Market Crash (-20%): -$823.40\n"
@@ -174,7 +174,7 @@ async def risk_correlation(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Show correlation analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "🔗 Correlation Analysis\n\n"
         "Portfolio Correlation: 0.42\n"
@@ -189,7 +189,7 @@ async def risk_beta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show beta analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📊 Beta Analysis\n\n"
         "Portfolio Beta: 1.23\n"
@@ -204,7 +204,7 @@ async def risk_liquidity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Show liquidity analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "💧 Liquidity Analysis\n\n"
         "Available Margin: $984.62\n"
@@ -219,7 +219,7 @@ async def set_risk_limits(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Set risk limits"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "🛡️ Risk Limit Settings\n\n"
         "Max Position Size: 10%\n"
@@ -235,7 +235,7 @@ async def time_hourly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     """Show hourly analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "⏰ Hourly Performance\n\n"
         "Best Hour: 14:00-15:00 UTC\n"
@@ -251,7 +251,7 @@ async def time_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """Show daily analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📅 Daily Performance\n\n"
         "Best Day: Tuesday\n"
@@ -267,7 +267,7 @@ async def time_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     """Show weekly analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📆 Weekly Performance\n\n"
         "This Week: +$576.80\n"
@@ -282,7 +282,7 @@ async def time_best_hours(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Show best trading hours"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "🌅 Best Trading Hours\n\n"
         "Top 5 Hours:\n"
@@ -299,7 +299,7 @@ async def time_patterns(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Show time patterns"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📊 Time Patterns\n\n"
         "Morning (6-12): 65.2% win\n"
@@ -315,7 +315,7 @@ async def time_seasonality(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Show seasonality analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "🎯 Seasonality Analysis\n\n"
         "Monthly Pattern:\n"
@@ -332,7 +332,7 @@ async def trade_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Show trade settings"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "🎯 Trade Settings\n\n"
         "Default Leverage: 10x\n"
@@ -348,7 +348,7 @@ async def notification_settings(update: Update, context: ContextTypes.DEFAULT_TY
     """Show notification settings"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "🔔 Notification Settings\n\n"
         "Trade Opened: ✅\n"
@@ -364,7 +364,7 @@ async def display_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Show display settings"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📊 Display Options\n\n"
         "Decimal Places: 2\n"
@@ -380,7 +380,7 @@ async def api_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Show API settings"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "🔗 API Settings\n\n"
         "Bybit: Connected ✅\n"
@@ -396,7 +396,7 @@ async def refresh_positions(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Refresh positions list"""
     query = update.callback_query
     await query.answer("Refreshing positions...")
-    
+
     # Reuse list_positions handler
     from .callbacks import list_positions
     await list_positions(update, context)
@@ -405,7 +405,7 @@ async def set_hedge_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Set hedge mode"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "⚖️ Hedge Mode Settings\n\n"
         "Current Mode: One-Way\n"
@@ -418,7 +418,7 @@ async def set_one_way_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Set one-way mode"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "➡️ One-Way Mode Settings\n\n"
         "Current Mode: One-Way ✅\n"
@@ -432,7 +432,7 @@ async def show_user_guide(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Show user guide"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📚 User Guide\n\n"
         "1. Start with /trade\n"
@@ -447,7 +447,7 @@ async def show_trading_tips(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Show trading tips"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "🎯 Trading Tips\n\n"
         "• Always use stop loss\n"
@@ -463,7 +463,7 @@ async def show_faq(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show FAQ"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "❓ Frequently Asked Questions\n\n"
         "Q: How to change leverage?\n"
@@ -478,7 +478,7 @@ async def contact_support(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Show support contact"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "💬 Contact Support\n\n"
         "For issues or questions:\n"
@@ -493,7 +493,7 @@ async def performance_metrics(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Show performance metrics menu"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📈 Performance Metrics\n\n"
         "Choose a metric to analyze:",
@@ -504,7 +504,7 @@ async def suggest_rebalance(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Suggest portfolio rebalancing"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "⚖️ Rebalancing Suggestions\n\n"
         "Current Allocation:\n"
@@ -523,7 +523,7 @@ async def volume_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Show volume analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📊 Volume Analysis\n\n"
         "24h Volume: $2.3B\n"
@@ -537,7 +537,7 @@ async def sentiment_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Show sentiment analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "💭 Market Sentiment\n\n"
         "Overall: Bullish 🟢\n"
@@ -551,7 +551,7 @@ async def trend_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Show trend analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📈 Trend Detection\n\n"
         "BTC: Uptrend ↗\n"
@@ -566,7 +566,7 @@ async def momentum_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Show momentum analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "⚡ Momentum Analysis\n\n"
         "RSI Average: 68 (Strong)\n"
@@ -584,7 +584,7 @@ async def win_streaks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     """Show win streak analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "🎯 Win Streak Analysis\n\n"
         "Current Streak: 5 wins\n"
@@ -599,7 +599,7 @@ async def trade_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Show detailed trade analysis"""
     query = update.callback_query
     await query.answer()
-    
+
     await query.edit_message_text(
         "📊 Trade Analysis\n\n"
         "Avg Win: +$45.20 (+2.3%)\n"

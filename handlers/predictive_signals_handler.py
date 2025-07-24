@@ -17,7 +17,7 @@ async def show_predictive_signals(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     if query:
         await query.answer()
-    
+
     try:
         # Get stats data from bot_data
         bot_data = context.bot_data or {}
@@ -30,20 +30,20 @@ async def show_predictive_signals(update: Update, context: ContextTypes.DEFAULT_
             'stats_total_wins_pnl': bot_data.get('stats_total_wins_pnl', 0),
             'stats_total_losses_pnl': bot_data.get('stats_total_losses_pnl', 0)
         }
-        
+
         # Calculate win rate
         total_trades = stats_data[STATS_TOTAL_TRADES]
         wins = bot_data.get(STATS_TOTAL_WINS, 0)
         if total_trades > 0:
             stats_data['overall_win_rate'] = (wins / total_trades) * 100
-        
+
         # Get the primary trading symbol
         primary_symbol = None
         try:
             from clients.bybit_helpers import get_all_positions
             positions = await get_all_positions()
             active_positions = [p for p in positions if float(p.get('size', 0)) > 0]
-            
+
             if active_positions:
                 # Use the symbol with the largest position
                 primary_symbol = max(active_positions, key=lambda p: float(p.get('positionIM', 0))).get('symbol')
@@ -53,10 +53,10 @@ async def show_predictive_signals(update: Update, context: ContextTypes.DEFAULT_
         except Exception as e:
             logger.error(f"Error getting positions for predictive signals: {e}")
             primary_symbol = "BTCUSDT"
-        
+
         # Get AI market insights
         ai_data = await get_ai_market_insights(primary_symbol, stats_data)
-        
+
         # Build the predictive signals text
         signals_text = f"""🎯 <b>PREDICTIVE SIGNALS</b>
 {'═' * 35}
@@ -75,14 +75,14 @@ async def show_predictive_signals(update: Update, context: ContextTypes.DEFAULT_
 
 🎯 <b>TRADING RECOMMENDATIONS</b>
 """
-        
+
         # Add recommendations
         for i, action in enumerate(ai_data.get('recommended_actions', ['Monitor market conditions'])[:3]):
             if i == len(ai_data.get('recommended_actions', [])) - 1:
                 signals_text += f"└─ {action}\n"
             else:
                 signals_text += f"├─ {action}\n"
-        
+
         # Add key risks section
         if ai_data.get('key_risks'):
             signals_text += f"\n⚠️ <b>KEY RISK FACTORS</b>\n"
@@ -91,26 +91,26 @@ async def show_predictive_signals(update: Update, context: ContextTypes.DEFAULT_
                     signals_text += f"└─ {risk}\n"
                 else:
                     signals_text += f"├─ {risk}\n"
-        
+
         # Add technical indicators if available
         if 'technical' in ai_data and ai_data['technical']:
             signals_text += f"\n📈 <b>TECHNICAL INDICATORS</b>\n"
             signals_text += f"├─ Trend: {ai_data['technical']['trend']}\n"
             signals_text += f"├─ Momentum: {ai_data['technical']['momentum']:+.1f}%\n"
             signals_text += f"└─ Market Regime: {ai_data.get('market_outlook', 'Analyzing')}\n"
-        
+
         # Add performance metrics
         if 'performance_metrics' in ai_data:
             signals_text += f"\n💰 <b>PERFORMANCE METRICS</b>\n"
             signals_text += f"├─ Profit Factor: {ai_data['performance_metrics']['profit_factor']:.2f}\n"
             signals_text += f"└─ Expectancy: ${ai_data['performance_metrics']['expectancy']:.2f}/trade\n"
-        
+
         # Add AI insights if available
         if ai_data.get('ai_insights') and not ai_data.get('error'):
             signals_text += f"\n🧠 <b>AI INSIGHTS</b>\n{ai_data['ai_insights']}\n"
-        
+
         signals_text += f"\n<i>Last updated: {datetime.now().strftime('%H:%M:%S UTC')}</i>"
-        
+
         # Create keyboard
         keyboard = InlineKeyboardMarkup([
             [
@@ -119,7 +119,7 @@ async def show_predictive_signals(update: Update, context: ContextTypes.DEFAULT_
             ],
             [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="refresh_dashboard")]
         ])
-        
+
         # Send or edit the message
         if query:
             await query.edit_message_text(
@@ -133,11 +133,11 @@ async def show_predictive_signals(update: Update, context: ContextTypes.DEFAULT_
                 parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
-            
+
     except Exception as e:
         logger.error(f"Error showing predictive signals: {e}", exc_info=True)
         error_text = "⚠️ <b>Error Loading Predictive Signals</b>\n\nPlease try again later."
-        
+
         if query:
             await query.edit_message_text(error_text, parse_mode=ParseMode.HTML)
         else:

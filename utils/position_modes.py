@@ -25,11 +25,11 @@ def get_current_position_mode(symbol: str = None, coin: str = "USDT") -> Tuple[b
     """
     Get current position mode for symbol or coin
     ENHANCED: Better detection logic with proper API usage
-    
+
     Args:
         symbol: Specific symbol (optional)
         coin: Settle coin (default: USDT)
-    
+
     Returns:
         tuple: (success: bool, mode_info: str, details: Dict)
     """
@@ -41,9 +41,9 @@ def get_current_position_mode(symbol: str = None, coin: str = "USDT") -> Tuple[b
             if time.time() - cached_time < _cache_ttl:
                 logger.debug(f"🎯 Using cached position mode for {cache_key}")
                 return cached_result
-        
+
         logger.info(f"🔍 Checking position mode for {symbol or coin}...")
-        
+
         if symbol:
             response = bybit_client.get_positions(
                 category="linear",
@@ -54,20 +54,20 @@ def get_current_position_mode(symbol: str = None, coin: str = "USDT") -> Tuple[b
                 category="linear",
                 settleCoin=coin
             )
-        
+
         if response.get("retCode") == 0:
             positions = response.get("result", {}).get("list", [])
-            
+
             # Check if any positions have non-zero positionIdx (indicating hedge mode)
             hedge_mode_detected = False
             one_way_positions = 0
             hedge_positions = 0
-            
+
             for pos in positions:
                 pos_idx = pos.get("positionIdx", 0)
                 size = float(pos.get("size", "0"))
                 symbol_name = pos.get("symbol", "")
-                
+
                 if size > 0:  # Only check active positions
                     if pos_idx in [1, 2]:  # Hedge mode indices
                         hedge_mode_detected = True
@@ -76,7 +76,7 @@ def get_current_position_mode(symbol: str = None, coin: str = "USDT") -> Tuple[b
                     elif pos_idx == 0:  # One-way mode
                         one_way_positions += 1
                         logger.debug(f"📊 One-way mode position found: {symbol_name} positionIdx=0")
-            
+
             # Determine mode based on active positions
             if hedge_mode_detected:
                 mode = "Hedge Mode"
@@ -88,7 +88,7 @@ def get_current_position_mode(symbol: str = None, coin: str = "USDT") -> Tuple[b
                 else:
                     # No active positions - try to detect from a test order or account settings
                     mode_description = "One-Way Mode (inferred from account structure)"
-            
+
             details = {
                 "mode": mode,
                 "hedge_mode": hedge_mode_detected,
@@ -97,19 +97,19 @@ def get_current_position_mode(symbol: str = None, coin: str = "USDT") -> Tuple[b
                 "one_way_positions": one_way_positions,
                 "detection_method": "active_positions" if (hedge_positions + one_way_positions) > 0 else "inference"
             }
-            
+
             result = (True, mode_description, details)
-            
+
             # Cache the result
             _position_mode_cache[cache_key] = (time.time(), result)
-            
+
             logger.info(f"✅ Position mode detected: {mode_description}")
             return result
         else:
             error_msg = response.get("retMsg", "Unknown error")
             logger.error(f"❌ Failed to check position mode: {error_msg}")
             return False, f"Could not check mode: {error_msg}", {}
-            
+
     except Exception as e:
         logger.error(f"Error checking position mode: {e}")
         return False, f"Error: {str(e)}", {}
@@ -117,16 +117,16 @@ def get_current_position_mode(symbol: str = None, coin: str = "USDT") -> Tuple[b
 def detect_position_mode_for_symbol(symbol: str) -> Tuple[bool, str]:
     """
     ENHANCED: Detect position mode specifically for a symbol
-    
+
     Args:
         symbol: Trading symbol (e.g., "BTCUSDT")
-    
+
     Returns:
         tuple: (is_hedge_mode: bool, mode_description: str)
     """
     try:
         success, mode_info, details = get_current_position_mode(symbol=symbol)
-        
+
         if success:
             is_hedge = details.get("hedge_mode", False)
             return is_hedge, mode_info
@@ -141,7 +141,7 @@ def detect_position_mode_for_symbol(symbol: str) -> Tuple[bool, str]:
                 # Last resort: assume hedge mode for safety
                 logger.warning(f"⚠️ Could not detect any position mode, assuming hedge mode for safety")
                 return True, "Hedge Mode (assumed for safety)"
-                
+
     except Exception as e:
         logger.error(f"Error detecting position mode for {symbol}: {e}")
         return True, "Hedge Mode (error fallback)"
@@ -149,17 +149,17 @@ def detect_position_mode_for_symbol(symbol: str) -> Tuple[bool, str]:
 def get_correct_position_idx_for_side(symbol: str, side: str) -> int:
     """
     ENHANCED: Get the correct positionIdx for a symbol and side
-    
+
     Args:
         symbol: Trading symbol
         side: "Buy" or "Sell"
-    
+
     Returns:
         int: Correct positionIdx (0 for one-way, 1 for hedge Buy, 2 for hedge Sell)
     """
     try:
         is_hedge_mode, mode_description = detect_position_mode_for_symbol(symbol)
-        
+
         if is_hedge_mode:
             # Hedge mode: 1 for Buy, 2 for Sell
             position_idx = 1 if side == "Buy" else 2
@@ -168,9 +168,9 @@ def get_correct_position_idx_for_side(symbol: str, side: str) -> int:
             # One-way mode: always 0
             position_idx = 0
             logger.debug(f"📊 {symbol} one-way mode: {side} -> positionIdx=0")
-        
+
         return position_idx
-        
+
     except Exception as e:
         logger.error(f"Error determining positionIdx for {symbol} {side}: {e}")
         # Safe fallback: assume hedge mode
@@ -182,11 +182,11 @@ def enable_hedge_mode(symbol: str = None, coin: str = "USDT") -> Tuple[bool, str
     """
     Enable hedge mode to allow both long and short positions simultaneously
     ENHANCED: Better error handling and feedback
-    
+
     Args:
         symbol: Specific symbol (optional, will apply to single symbol)
         coin: Settle coin (default: USDT, will apply to all symbols)
-    
+
     Returns:
         tuple: (success: bool, message: str)
     """
@@ -196,30 +196,30 @@ def enable_hedge_mode(symbol: str = None, coin: str = "USDT") -> Tuple[bool, str
                 "category": "linear",
                 "mode": 3,  # 0: One-Way Mode, 3: Hedge Mode
             }
-            
+
             if symbol:
                 params["symbol"] = symbol
                 target_description = f"symbol {symbol}"
             else:
                 params["coin"] = coin
                 target_description = f"all {coin} perpetual contracts"
-            
+
             logger.info(f"🔄 Enabling hedge mode for {target_description}")
-            
+
             response = bybit_client.switch_position_mode(**params)
-            
+
             if response.get("retCode") == 0:
                 success_msg = f"✅ Hedge mode enabled for {target_description}"
                 logger.info(success_msg)
-                
+
                 # Clear cache to force re-detection
                 _clear_position_mode_cache()
-                
+
                 return True, success_msg
             else:
                 error_code = response.get("retCode")
                 error_msg = response.get("retMsg", "Unknown error")
-                
+
                 # Handle specific error cases
                 if error_code == 110028:
                     return False, "❌ Cannot switch mode: Open orders exist. Close all orders first."
@@ -230,7 +230,7 @@ def enable_hedge_mode(symbol: str = None, coin: str = "USDT") -> Tuple[bool, str
                 else:
                     logger.error(f"Failed to enable hedge mode: {error_msg} (Code: {error_code})")
                     return False, f"❌ Failed to enable hedge mode: {error_msg}"
-                
+
     except Exception as e:
         logger.error(f"Exception enabling hedge mode: {e}")
         return False, f"❌ Error enabling hedge mode: {str(e)}"
@@ -239,11 +239,11 @@ def enable_one_way_mode(symbol: str = None, coin: str = "USDT") -> Tuple[bool, s
     """
     Enable one-way mode (single position per symbol)
     ENHANCED: Better error handling and feedback
-    
+
     Args:
         symbol: Specific symbol (optional)
         coin: Settle coin (default: USDT)
-    
+
     Returns:
         tuple: (success: bool, message: str)
     """
@@ -253,30 +253,30 @@ def enable_one_way_mode(symbol: str = None, coin: str = "USDT") -> Tuple[bool, s
                 "category": "linear",
                 "mode": 0,  # 0: One-Way Mode, 3: Hedge Mode
             }
-            
+
             if symbol:
                 params["symbol"] = symbol
                 target_description = f"symbol {symbol}"
             else:
                 params["coin"] = coin
                 target_description = f"all {coin} perpetual contracts"
-            
+
             logger.info(f"🔄 Enabling one-way mode for {target_description}")
-            
+
             response = bybit_client.switch_position_mode(**params)
-            
+
             if response.get("retCode") == 0:
                 success_msg = f"✅ One-way mode enabled for {target_description}"
                 logger.info(success_msg)
-                
+
                 # Clear cache to force re-detection
                 _clear_position_mode_cache()
-                
+
                 return True, success_msg
             else:
                 error_code = response.get("retCode")
                 error_msg = response.get("retMsg", "Unknown error")
-                
+
                 # Handle specific error cases
                 if error_code == 110028:
                     return False, "❌ Cannot switch mode: Open orders exist. Close all orders first."
@@ -287,7 +287,7 @@ def enable_one_way_mode(symbol: str = None, coin: str = "USDT") -> Tuple[bool, s
                 else:
                     logger.error(f"Failed to enable one-way mode: {error_msg} (Code: {error_code})")
                     return False, f"❌ Failed to enable one-way mode: {error_msg}"
-                
+
     except Exception as e:
         logger.error(f"Exception enabling one-way mode: {e}")
         return False, f"❌ Error enabling one-way mode: {str(e)}"
@@ -295,10 +295,10 @@ def enable_one_way_mode(symbol: str = None, coin: str = "USDT") -> Tuple[bool, s
 def auto_switch_to_hedge_mode_if_needed(symbol: str = None) -> Tuple[bool, str]:
     """
     ENHANCED: Automatically switch to hedge mode if currently in one-way mode
-    
+
     Args:
         symbol: Specific symbol (optional)
-    
+
     Returns:
         tuple: (success: bool, message: str)
     """
@@ -313,7 +313,7 @@ def auto_switch_to_hedge_mode_if_needed(symbol: str = None) -> Tuple[bool, str]:
                 return False, "❌ Could not check current position mode"
             is_hedge = details.get("hedge_mode", False)
             target = "account"
-        
+
         if is_hedge:
             return True, f"ℹ️ {target} already in hedge mode: {mode_desc}"
         else:
@@ -322,7 +322,7 @@ def auto_switch_to_hedge_mode_if_needed(symbol: str = None) -> Tuple[bool, str]:
                 return enable_hedge_mode(symbol=symbol)
             else:
                 return enable_hedge_mode()
-                
+
     except Exception as e:
         logger.error(f"Error in auto-switch to hedge mode: {e}")
         return False, f"❌ Auto-switch failed: {str(e)}"
@@ -330,33 +330,33 @@ def auto_switch_to_hedge_mode_if_needed(symbol: str = None) -> Tuple[bool, str]:
 def check_and_fix_position_mode_mismatch(symbol: str, side: str, error_response: Dict) -> Optional[int]:
     """
     ENHANCED: Check for position mode mismatch and return corrected positionIdx
-    
+
     Args:
         symbol: Trading symbol
-        side: Order side ("Buy" or "Sell")  
+        side: Order side ("Buy" or "Sell")
         error_response: The error response from Bybit API
-    
+
     Returns:
         Optional[int]: Corrected positionIdx if fixable, None if not
     """
     try:
         error_code = error_response.get("retCode", 0)
         error_msg = error_response.get("retMsg", "")
-        
+
         if error_code == 10001 and "position idx not match position mode" in error_msg:
             logger.warning(f"🚨 Position mode mismatch detected for {symbol} {side}")
-            
+
             # Clear cache and re-detect
             _clear_position_mode_cache()
-            
+
             # Get the correct position index
             correct_idx = get_correct_position_idx_for_side(symbol, side)
-            
+
             logger.info(f"🔧 Corrected positionIdx for {symbol} {side}: {correct_idx}")
             return correct_idx
-        
+
         return None
-        
+
     except Exception as e:
         logger.error(f"Error checking position mode mismatch: {e}")
         return None
@@ -365,7 +365,7 @@ def format_position_mode_help() -> str:
     """
     Generate help text explaining position modes
     ENHANCED: Better explanations and current status
-    
+
     Returns:
         Formatted help text
     """
@@ -373,7 +373,7 @@ def format_position_mode_help() -> str:
         # Get current mode status
         success, mode_info, details = get_current_position_mode()
         current_status = f"Current: {mode_info}" if success else "Current: Unable to detect"
-        
+
         return f"""
 🔧 **POSITION MODES EXPLAINED**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -387,7 +387,7 @@ def format_position_mode_help() -> str:
 
 ⚖️ **Hedge Mode** (Advanced)
 • BOTH long AND short positions allowed
-• Can hold BUY + SELL simultaneously  
+• Can hold BUY + SELL simultaneously
 • Useful for advanced strategies
 • More complex position management
 • Uses positionIdx = 1 (Buy), 2 (Sell)
@@ -421,7 +421,7 @@ def get_position_mode_commands() -> str:
     """
     Generate command examples for position mode management
     ENHANCED: Better command descriptions
-    
+
     Returns:
         Formatted command examples
     """
@@ -434,7 +434,7 @@ def get_position_mode_commands() -> str:
 • `/hedge_mode BTCUSDT` - Enable for specific symbol
 
 **Enable One-Way Mode:**
-• `/one_way_mode` - Enable for all USDT contracts  
+• `/one_way_mode` - Enable for all USDT contracts
 • `/one_way_mode BTCUSDT` - Enable for specific symbol
 
 **Check Current Mode:**
@@ -456,10 +456,10 @@ def create_position_management_summary(positions: list) -> str:
     """
     Create a summary of current positions with mode recommendations
     ENHANCED: Better analysis and recommendations
-    
+
     Args:
         positions: List of position dictionaries
-    
+
     Returns:
         Formatted summary
     """
@@ -468,7 +468,7 @@ def create_position_management_summary(positions: list) -> str:
             # Check current mode even without positions
             success, mode_info, details = get_current_position_mode()
             mode_status = mode_info if success else "Unable to detect"
-            
+
             return f"""
 📊 **POSITION SUMMARY**
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -484,49 +484,49 @@ No active positions found.
 To trade both directions simultaneously, enable hedge mode.
 The bot will automatically use the correct positionIdx.
 """
-        
+
         # Group positions by symbol and analyze
         symbol_positions = {}
         hedge_mode_detected = False
-        
+
         for pos in positions:
             symbol = pos.get("symbol", "Unknown")
             size = float(pos.get("size", 0))
-            
+
             if size > 0:  # Only active positions
                 if symbol not in symbol_positions:
                     symbol_positions[symbol] = []
                 symbol_positions[symbol].append(pos)
-                
+
                 # Check for hedge mode indicators
                 pos_idx = pos.get("positionIdx", 0)
                 if pos_idx in [1, 2]:
                     hedge_mode_detected = True
-        
+
         summary = "📊 **POSITION SUMMARY**\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        
+
         for symbol, pos_list in symbol_positions.items():
             summary += f"**{symbol}:**\n"
-            
+
             for pos in pos_list:
                 side = pos.get("side", "Unknown")
                 size = float(pos.get("size", 0))
                 pos_idx = pos.get("positionIdx", 0)
-                
+
                 if size > 0:
                     summary += f"• {side}: {size} (idx:{pos_idx})\n"
-            
+
             # Check if multiple positions exist for same symbol
             if len(pos_list) > 1:
                 summary += f"  🔄 Multiple positions (hedge mode)\n"
-            
+
             summary += "\n"
-        
+
         # Add mode analysis
-        mode_description = "Hedge Mode" if hedge_mode_detected else "One-Way Mode" 
+        mode_description = "Hedge Mode" if hedge_mode_detected else "One-Way Mode"
         summary += f"🎯 **Detected Mode:** {mode_description}\n"
         summary += f"🤖 **Bot Status:** Auto-detects positionIdx\n\n"
-        
+
         summary += "💡 **Trade Rules:**\n"
         if hedge_mode_detected:
             summary += "✅ Same direction: Adds to existing position\n"
@@ -534,9 +534,9 @@ The bot will automatically use the correct positionIdx.
         else:
             summary += "✅ Same direction: Adds to existing position\n"
             summary += "❌ Opposite direction: Blocked (enable hedge mode)\n"
-        
+
         return summary
-        
+
     except Exception as e:
         logger.error(f"Error creating position summary: {e}")
         return f"❌ Error creating summary: {e}"

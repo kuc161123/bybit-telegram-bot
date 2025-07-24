@@ -1,0 +1,17 @@
+{
+  "AUCTIONUSDT_Buy_mirror": {
+    "symbol": "AUCTIONUSDT",
+    "side": "Buy",
+    "size": "7.1",
+    "position_size": "7.1",
+    "initial_size": "7.1",
+    "remaining_size": "7.1",
+    "filled_size": "0",
+    "account": "mirror",
+    "account_type": "mirror",
+    "avg_entry_price": "9.816",
+    "entry_price": "9.816",
+    "weighted_avg_entry": "9.816",
+    "actual_entry_prices": [
+      [
+        
