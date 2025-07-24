@@ -79,9 +79,14 @@ async def start_auto_refresh(chat_id: int, context: ContextTypes.DEFAULT_TYPE) -
     # Cancel existing task if any
     await stop_auto_refresh(chat_id, context)
 
-    # Check if we have active positions
-    from clients.bybit_client import bybit_client
-    positions = await get_all_positions()
+    # CRITICAL FIX: Use monitoring cache for positions
+    try:
+        from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+        positions = await enhanced_tp_sl_manager._get_cached_position_info("ALL", "main")
+    except Exception as e:
+        # Fallback to direct API call if cache unavailable
+        from clients.bybit_client import bybit_client
+        positions = await get_all_positions()
     active_positions = [p for p in positions if float(p.get('size', 0)) > 0]
 
     if active_positions:
@@ -102,8 +107,12 @@ async def auto_refresh_dashboard(chat_id: int, context: ContextTypes.DEFAULT_TYP
         while True:
             await asyncio.sleep(AUTO_REFRESH_INTERVAL)
 
-            # Check if we still have active positions
-            positions = await get_all_positions()
+            # CRITICAL FIX: Use monitoring cache for positions
+            try:
+                from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+                positions = await enhanced_tp_sl_manager._get_cached_position_info("ALL", "main")
+            except Exception as e:
+                positions = await get_all_positions()
             active_positions = [p for p in positions if float(p.get('size', 0)) > 0]
 
             if not active_positions:
@@ -165,9 +174,13 @@ async def _send_or_edit_dashboard_message(upd_or_cid, ctx: ContextTypes.DEFAULT_
     try:
         dashboard_text = await build_dashboard_text_async(c_id, ctx)
 
-        # Get active positions count for keyboard
-        from clients.bybit_client import bybit_client
-        positions = await get_all_positions()
+        # CRITICAL FIX: Use monitoring cache for positions
+        try:
+            from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+            positions = await enhanced_tp_sl_manager._get_cached_position_info("ALL", "main")
+        except Exception as e:
+            from clients.bybit_client import bybit_client
+            positions = await get_all_positions()
         active_positions = len([p for p in positions if float(p.get('size', 0)) > 0])
         has_monitors = ctx.chat_data.get('ACTIVE_MONITOR_TASK', {}) != {}
 
@@ -591,8 +604,12 @@ async def cleanup_monitors_command(update: Update, context: ContextTypes.DEFAULT
         # Get bot data
         bot_data = context.bot_data
 
-        # Get all active positions
-        active_positions = await get_all_positions()
+        # CRITICAL FIX: Use monitoring cache for positions
+        try:
+            from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+            active_positions = await enhanced_tp_sl_manager._get_cached_position_info("ALL", "main")
+        except Exception as e:
+            active_positions = await get_all_positions()
         active_symbols = set()
 
         for pos in active_positions:

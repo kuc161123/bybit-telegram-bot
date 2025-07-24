@@ -44,18 +44,23 @@ async def get_mirror_positions():
 async def get_mirror_orders():
     """Get mirror account orders"""
     if MIRROR_AVAILABLE and bybit_client_2:
-        # Use mirror client to get orders
-        from clients.bybit_helpers import get_all_open_orders_with_client
         try:
-            return await get_all_open_orders_with_client(bybit_client_2)
-        except:
-            # Fallback if the helper doesn't exist
+            # CRITICAL FIX: Use monitoring cache for mirror orders
+            from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+            return await enhanced_tp_sl_manager._get_cached_open_orders("ALL", "mirror")
+        except Exception as e:
+            logger.warning(f"Could not get mirror orders from cache: {e}")
+            # Fallback to direct API call if cache unavailable
             try:
-                response = bybit_client_2.get_open_orders(category="linear")
-                if response and response.get("result") and response["result"].get("list"):
-                    return response["result"]["list"]
-            except Exception as e:
-                logger.warning(f"Could not get mirror orders: {e}")
+                from clients.bybit_helpers import get_all_open_orders_with_client
+                return await get_all_open_orders_with_client(bybit_client_2)
+            except:
+                try:
+                    response = bybit_client_2.get_open_orders(category="linear")
+                    if response and response.get("result") and response["result"].get("list"):
+                        return response["result"]["list"]
+                except Exception as e:
+                    logger.warning(f"Could not get mirror orders: {e}")
     return []
 
 logger = logging.getLogger(__name__)
@@ -568,11 +573,18 @@ async def cancel_position_orders(query, account: str, symbol: str) -> None:
     try:
         client = bybit_client if account == "main" else bybit_client_2
 
-        # Get orders for symbol
-        if account == "main":
-            orders = await get_all_open_orders()
-        else:
-            orders = await get_mirror_orders()
+        # CRITICAL FIX: Use monitoring cache for orders
+        try:
+            from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+            account_type = "mirror" if account != "main" else "main"
+            orders = await enhanced_tp_sl_manager._get_cached_open_orders("ALL", account_type)
+        except Exception as e:
+            logger.warning(f"Could not get orders from cache: {e}")
+            # Fallback to direct API call
+            if account == "main":
+                orders = await get_all_open_orders()
+            else:
+                orders = await get_mirror_orders()
 
         symbol_orders = [o for o in orders if o.get('symbol') == symbol]
 

@@ -1212,19 +1212,10 @@ class EnhancedTPSLManager:
         This is a fallback when monitor data doesn't track orders properly
         """
         try:
-            # Get live orders from the appropriate account
-            if is_mirror_account and self._mirror_client:
-                from clients.bybit_helpers import api_call_with_retry
-                response = await api_call_with_retry(
-                    lambda: self._mirror_client.get_open_orders(
-                        category="linear",
-                        symbol=symbol
-                    )
-                )
-            else:
-                from clients.bybit_helpers import get_all_open_orders
-                all_orders = await get_all_open_orders()
-                response = {"result": {"list": [o for o in all_orders if o.get('symbol') == symbol]}}
+            # CRITICAL FIX: Use monitoring cache instead of direct API calls
+            account_type = "mirror" if is_mirror_account else "main"
+            cached_orders = await self._get_cached_open_orders(symbol, account_type)
+            response = {"result": {"list": cached_orders}}
 
             if not response:
                 logger.warning(f"Failed to get live orders for {symbol}")
@@ -1883,6 +1874,9 @@ class EnhancedTPSLManager:
         This replaces the conditional order logic with active management
         Now supports account-aware monitoring to prevent key collisions
         """
+        # PERFORMANCE OPTIMIZATION: Refresh monitoring cache first
+        await self._refresh_monitoring_cache()
+        
         logger.debug(f"🔍 monitor_and_adjust_orders called for {symbol} {side} ({account_type})")
         logger.debug(f"📊 Current monitors: {len(self.position_monitors)} total - Keys: {list(self.position_monitors.keys())[:5]}...")
         # Determine monitor key based on available monitors
@@ -2916,13 +2910,8 @@ class EnhancedTPSLManager:
                     
                     if limit_order_ids:
                         # Get current orders from exchange
-                        if account_type == "mirror":
-                            from clients.bybit_helpers import get_all_open_orders
-                            from execution.mirror_trader import bybit_client_2
-                            all_orders = await get_all_open_orders(client=bybit_client_2)
-                        else:
-                            from clients.bybit_helpers import get_all_open_orders
-                            all_orders = await get_all_open_orders()
+                        # CRITICAL FIX: Use monitoring cache for cleanup operations
+                        all_orders = await self._get_cached_open_orders("ALL", account_type)
                         
                         if all_orders:
                             for order in all_orders:
@@ -3740,21 +3729,44 @@ All take profit targets have been achieved! 🎯"""
                 logger.debug(f"🚀 Using cached position data for {symbol} ({account_type}) - age: {current_time - cached_entry['timestamp']:.1f}s")
                 return cached_entry['data']
         
-        # Fetch fresh data
-        logger.debug(f"🔍 Fetching fresh position data for {symbol} ({account_type})")
-        if account_type == 'mirror':
-            from clients.bybit_helpers import get_position_info_for_account
-            positions = await get_position_info_for_account(symbol, 'mirror')
-        else:
-            positions = await get_position_info(symbol)
+        # Get from refreshed cache data
+        all_positions_key = f"{account_type}_ALL_positions"
         
-        # Cache the result
-        self._monitoring_cache[cache_key] = {
-            'data': positions,
-            'timestamp': current_time
-        }
+        if all_positions_key in self._monitoring_cache:
+            cache_entry = self._monitoring_cache[all_positions_key]
+            if current_time - cache_entry['timestamp'] < self._monitoring_cache_ttl:
+                all_positions = cache_entry['data']
+                
+                if symbol == "ALL":
+                    logger.debug(f"🚀 Cache hit: Returning {len(all_positions)} positions for ALL symbols ({account_type})")
+                    return all_positions
+                else:
+                    # Filter by symbol
+                    filtered_positions = [p for p in all_positions if p.get("symbol") == symbol]
+                    logger.debug(f"🚀 Cache hit: Returning {len(filtered_positions)} positions for {symbol} ({account_type})")
+                    return filtered_positions
         
-        return positions
+        # CRITICAL FIX: If cache is empty, refresh it immediately
+        logger.info(f"⚡ Position cache miss for {symbol} ({account_type}) - triggering immediate refresh")
+        await self._refresh_monitoring_cache()
+        
+        # Try again after refresh
+        if all_positions_key in self._monitoring_cache:
+            cache_entry = self._monitoring_cache[all_positions_key]
+            all_positions = cache_entry['data']
+            
+            if symbol == "ALL":
+                logger.info(f"✅ Position cache populated: Returning {len(all_positions)} positions for ALL symbols ({account_type})")
+                return all_positions
+            else:
+                # Filter by symbol
+                filtered_positions = [p for p in all_positions if p.get("symbol") == symbol]
+                logger.info(f"✅ Position cache populated: Returning {len(filtered_positions)} positions for {symbol} ({account_type})")
+                return filtered_positions
+        
+        # If still no data after refresh, return empty list
+        logger.warning(f"⚠️ No position data available for {symbol} ({account_type}) even after cache refresh")
+        return []
 
     async def _get_cached_open_orders(self, symbol: str, account_type: str = "main"):
         """Get open orders with monitoring cache"""
@@ -3770,22 +3782,105 @@ All take profit targets have been achieved! 🎯"""
         
         # Fetch fresh data
         logger.debug(f"🔍 Fetching fresh order data for {symbol} ({account_type})")
-        if account_type == 'mirror':
-            from clients.bybit_helpers import get_all_open_orders
-            from execution.mirror_trader import bybit_client_2
-            all_orders = await get_all_open_orders(client=bybit_client_2)
-            # Filter by symbol
-            orders = [o for o in all_orders if o.get("symbol") == symbol]
-        else:
-            orders = await get_open_orders(symbol=symbol)
+        # Get from refreshed cache data
+        all_orders_key = f"{account_type}_ALL_orders"
         
-        # Cache the result
-        self._monitoring_cache[cache_key] = {
-            'data': orders,
-            'timestamp': current_time
-        }
+        if all_orders_key in self._monitoring_cache:
+            cache_entry = self._monitoring_cache[all_orders_key]
+            if time.time() - cache_entry['timestamp'] < self._monitoring_cache_ttl:
+                all_orders = cache_entry['data']
+                
+                if symbol == "ALL":
+                    logger.debug(f"🚀 Cache hit: Returning {len(all_orders)} orders for ALL symbols ({account_type})")
+                    return all_orders
+                else:
+                    # Filter by symbol
+                    filtered_orders = [o for o in all_orders if o.get("symbol") == symbol]
+                    logger.debug(f"🚀 Cache hit: Returning {len(filtered_orders)} orders for {symbol} ({account_type})")
+                    return filtered_orders
         
-        return orders
+        # CRITICAL FIX: If cache is empty, refresh it immediately
+        logger.info(f"⚡ Cache miss for {symbol} ({account_type}) - triggering immediate refresh")
+        await self._refresh_monitoring_cache()
+        
+        # Try again after refresh
+        if all_orders_key in self._monitoring_cache:
+            cache_entry = self._monitoring_cache[all_orders_key]
+            all_orders = cache_entry['data']
+            
+            if symbol == "ALL":
+                logger.info(f"✅ Cache populated: Returning {len(all_orders)} orders for ALL symbols ({account_type})")
+                return all_orders
+            else:
+                # Filter by symbol
+                filtered_orders = [o for o in all_orders if o.get("symbol") == symbol]
+                logger.info(f"✅ Cache populated: Returning {len(filtered_orders)} orders for {symbol} ({account_type})")
+                return filtered_orders
+        
+        # If still no data after refresh, return empty list
+        logger.warning(f"⚠️ No data available for {symbol} ({account_type}) even after cache refresh")
+        return []
+
+    async def _refresh_monitoring_cache(self):
+        """Refresh monitoring cache with fresh data from exchange - PERFORMANCE CRITICAL"""
+        current_time = time.time()
+        
+        # Don't refresh too frequently - minimum 15 seconds between refreshes
+        if hasattr(self, '_last_cache_refresh') and current_time - self._last_cache_refresh < 15:
+            logger.debug(f"⏭️ Cache refresh skipped - last refresh {current_time - self._last_cache_refresh:.1f}s ago")
+            return
+        
+        try:
+            logger.info("🔄 CRITICAL: Refreshing monitoring cache to reduce API calls...")
+            refresh_start = time.time()
+            
+            # Import at call time to avoid circular imports
+            from clients.bybit_helpers import get_all_positions, get_all_open_orders
+            
+            # Get main account data in parallel
+            logger.debug("📊 Fetching main account positions and orders...")
+            main_positions = await get_all_positions()
+            main_orders = await get_all_open_orders()
+            
+            # Cache main account data
+            self._monitoring_cache["main_ALL_positions"] = {
+                'data': main_positions,
+                'timestamp': current_time
+            }
+            self._monitoring_cache["main_ALL_orders"] = {
+                'data': main_orders,
+                'timestamp': current_time
+            }
+            
+            # Get mirror account data if enabled
+            import os
+            if os.getenv("ENABLE_MIRROR_TRADING", "false").lower() == "true":
+                logger.debug("📊 Fetching mirror account positions and orders...")
+                from execution.mirror_trader import bybit_client_2
+                mirror_positions = await get_all_positions(client=bybit_client_2)
+                mirror_orders = await get_all_open_orders(client=bybit_client_2)
+                
+                # Cache mirror account data
+                self._monitoring_cache["mirror_ALL_positions"] = {
+                    'data': mirror_positions,
+                    'timestamp': current_time
+                }
+                self._monitoring_cache["mirror_ALL_orders"] = {
+                    'data': mirror_orders,
+                    'timestamp': current_time
+                }
+                logger.info(f"✅ Cache refreshed: {len(main_positions)} main pos, {len(main_orders)} main orders, {len(mirror_positions)} mirror pos, {len(mirror_orders)} mirror orders")
+            else:
+                logger.info(f"✅ Cache refreshed: {len(main_positions)} main positions, {len(main_orders)} main orders (mirror disabled)")
+            
+            self._last_cache_refresh = current_time
+            refresh_time = time.time() - refresh_start
+            logger.info(f"⚡ Cache refresh completed in {refresh_time:.2f}s - Next refresh in 15s")
+            
+        except Exception as e:
+            logger.error(f"❌ CRITICAL ERROR refreshing monitoring cache: {e}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
 
     def _cleanup_monitoring_cache(self):
         """Clean up expired monitoring cache entries"""
@@ -3965,9 +4060,9 @@ All take profit targets have been achieved! 🎯"""
                 from execution.mirror_trader import bybit_client_2, cancel_mirror_order
 
                 if bybit_client_2:
-                    # Get all mirror account orders for this symbol
-                    mirror_orders = await get_all_open_orders(bybit_client_2)
-                    symbol_orders = [o for o in mirror_orders if o.get('symbol') == symbol]
+                    # CRITICAL FIX: Use monitoring cache for mirror orders
+                    mirror_orders = await self._get_cached_open_orders(symbol, "mirror")
+                    symbol_orders = mirror_orders
 
                     # Cancel all bot orders for this symbol (TP, SL, and limit)
                     cancelled_count = 0
@@ -7545,17 +7640,20 @@ All take profit targets have been achieved! 🎯"""
                     from clients.bybit_helpers import bybit_client
                     client = bybit_client
                 
-                # Get orders for this position
-                if account_type == "mirror":
-                    # For mirror account, use get_all_open_orders with client
-                    from clients.bybit_helpers import get_all_open_orders
-                    all_orders_response = await get_all_open_orders(client=client)
-                    # Filter for the specific symbol
-                    all_orders = [order for order in all_orders_response if order.get('symbol') == symbol]
-                else:
-                    # For main account, use regular get_open_orders
-                    from clients.bybit_helpers import get_open_orders
-                    all_orders = await get_open_orders(symbol=symbol)
+                # CRITICAL FIX: Use monitoring cache instead of direct API calls
+                try:
+                    all_orders = await self._get_cached_open_orders(symbol, account_type)
+                    logger.debug(f"🚀 Using cached orders for monitoring setup: {len(all_orders)} orders for {symbol} ({account_type})")
+                except Exception as e:
+                    logger.warning(f"Could not get cached orders for {symbol} ({account_type}): {e}")
+                    # Emergency fallback - this should rarely happen
+                    if account_type == "mirror":
+                        from clients.bybit_helpers import get_all_open_orders
+                        all_orders_response = await get_all_open_orders(client=client)
+                        all_orders = [order for order in all_orders_response if order.get('symbol') == symbol]
+                    else:
+                        from clients.bybit_helpers import get_open_orders
+                        all_orders = await get_open_orders(symbol=symbol)
                 
                 # Filter TP and SL orders
                 tp_orders = {}

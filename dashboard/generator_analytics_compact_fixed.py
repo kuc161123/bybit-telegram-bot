@@ -11,9 +11,14 @@ This file shows the corrected P&L calculation section
         potential_profit_all_tp = 0
         potential_loss_sl = 0
 
-        # Get actual orders to find TP/SL prices
-        from clients.bybit_helpers import get_all_open_orders
-        all_orders = await get_all_open_orders()
+        # CRITICAL FIX: Use monitoring cache instead of direct API call
+        try:
+            from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+            all_orders = await enhanced_tp_sl_manager._get_cached_open_orders("ALL", "main")
+        except Exception as e:
+            # Fallback to direct API call if cache unavailable
+            from clients.bybit_helpers import get_all_open_orders
+            all_orders = await get_all_open_orders()
 
         for pos in active_positions:
             symbol = pos.get('symbol', '')

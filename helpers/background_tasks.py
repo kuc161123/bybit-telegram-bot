@@ -114,11 +114,18 @@ async def enhanced_tp_sl_monitoring_loop():
                         
                         # Only sync with positions if NOT force loading (force load keeps all monitors)
                         if not os.path.exists(force_load_signal):
-                            # Sync with actual positions to remove orphaned monitors
-                            from clients.bybit_helpers import get_all_positions
-                            positions = await get_all_positions()
-                            # Note: sync_with_positions will remove orphaned monitors but not sync sizes
-                            await robust_persistence.sync_with_positions(positions)
+                            # CRITICAL FIX: Use monitoring cache for position sync
+                            try:
+                                from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+                                positions = await enhanced_tp_sl_manager._get_cached_position_info("ALL", "main")
+                                # Note: sync_with_positions will remove orphaned monitors but not sync sizes
+                                await robust_persistence.sync_with_positions(positions)
+                            except Exception as e:
+                                logger.warning(f"Could not get positions from cache for sync: {e}")
+                                # Fallback to direct API call
+                                from clients.bybit_helpers import get_all_positions
+                                positions = await get_all_positions()
+                                await robust_persistence.sync_with_positions(positions)
                         else:
                             logger.info("🔄 Force load mode - keeping ALL monitors without position sync")
                         
