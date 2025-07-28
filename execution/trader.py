@@ -395,8 +395,8 @@ class TradeExecutor:
                     self.logger.info(f"🔄 Replacing {existing_approach} orders with Conservative approach...")
                     await cleanup_approach_orders(symbol, existing_approach)
 
-                # Wait for cleanup to complete
-                await asyncio.sleep(2)
+                # PERFORMANCE: Reduced cleanup wait time
+                await asyncio.sleep(0.5)
 
             # Check if we should merge with existing position
             # Pass bot_data to check if position belongs to bot
@@ -2414,7 +2414,7 @@ class TradeExecutor:
 
                     # ENHANCED: More robust verification with multiple checks
                     self.logger.info("⏳ Waiting for order cancellation to complete...")
-                    await asyncio.sleep(2)  # Increased wait time for exchange processing
+                    await asyncio.sleep(0.5)  # PERFORMANCE: Reduced wait time for exchange processing
 
                     # Multiple verification attempts
                     for attempt in range(3):
@@ -2429,7 +2429,7 @@ class TradeExecutor:
                         else:
                             self.logger.warning(f"⚠️ Verification attempt {attempt + 1}: Still have {remaining_limits} limit orders")
                             if attempt < 2:
-                                await asyncio.sleep(1)  # Wait before next check
+                                await asyncio.sleep(0.3)  # PERFORMANCE: Reduced wait time between checks
 
                     # Final check
                     if remaining_limits > 0:
@@ -2557,7 +2557,7 @@ class TradeExecutor:
 
                 # ENHANCED POST-PLACEMENT VALIDATION
                 self.logger.info("📊 POST-PLACEMENT VALIDATION:")
-                await asyncio.sleep(2)  # Give more time for orders to register
+                await asyncio.sleep(0.5)  # PERFORMANCE: Reduced order registration wait time
 
                 # Get fresh order list
                 current_orders = await get_all_open_orders()

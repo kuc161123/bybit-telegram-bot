@@ -56,10 +56,10 @@ ENABLE_MIRROR_TRADING = os.getenv("ENABLE_MIRROR_TRADING", "false").lower() == "
 BYBIT_API_KEY_2 = os.getenv("BYBIT_API_KEY_2")
 BYBIT_API_SECRET_2 = os.getenv("BYBIT_API_SECRET_2")
 
-# ENHANCED: HTTP Client Configuration - FIXED CONNECTION POOL LIMITS
+# ENHANCED: HTTP Client Configuration - OPTIMIZED FOR HIGH PERFORMANCE
 BYBIT_TIMEOUT_SECONDS = int(os.getenv("BYBIT_TIMEOUT_SECONDS", "60"))  # Increased from 45
-HTTP_MAX_CONNECTIONS = int(os.getenv("HTTP_MAX_CONNECTIONS", "300"))  # Increased for high monitoring load
-HTTP_MAX_CONNECTIONS_PER_HOST = int(os.getenv("HTTP_MAX_CONNECTIONS_PER_HOST", "75"))  # Increased for high API usage
+HTTP_MAX_CONNECTIONS = int(os.getenv("HTTP_MAX_CONNECTIONS", "600"))  # DOUBLED for high monitoring load + trading
+HTTP_MAX_CONNECTIONS_PER_HOST = int(os.getenv("HTTP_MAX_CONNECTIONS_PER_HOST", "150"))  # DOUBLED for high API usage
 HTTP_KEEPALIVE_TIMEOUT = int(os.getenv("HTTP_KEEPALIVE_TIMEOUT", "60"))  # Increased from 30
 HTTP_DNS_CACHE_TTL = int(os.getenv("HTTP_DNS_CACHE_TTL", "300"))  # DNS cache TTL
 

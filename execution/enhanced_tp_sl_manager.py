@@ -13,6 +13,7 @@ from datetime import datetime
 import time
 
 from config.constants import *
+from config.constants import ENABLE_MIRROR_ALERTS  # Explicit import for mirror alerts
 from config.settings import (
     CANCEL_LIMITS_ON_TP1, DYNAMIC_FEE_CALCULATION, BREAKEVEN_SAFETY_MARGIN,
     ENHANCED_FILL_DETECTION, ADAPTIVE_MONITORING_INTERVALS,
@@ -57,10 +58,16 @@ class EnhancedTPSLManager:
 
     def __init__(self):
         logger.info("🚀 Initializing Enhanced TP/SL Manager")
+        logger.info(f"🔔 Mirror alerts configuration: ENABLE_MIRROR_ALERTS = {ENABLE_MIRROR_ALERTS}")
         self.position_monitors = {}  # symbol -> monitor data
         self.order_state = {}  # symbol -> order state tracking
         self.price_cache = {}  # symbol -> (price, timestamp)
+        self.monitor_tasks = {}  # monitor_key -> monitor_info (dashboard compatibility)
         self.price_cache_ttl = 5  # seconds
+        
+        # PERFORMANCE: Add async lock for cache refresh
+        self._cache_refresh_lock = asyncio.Lock()
+        self._cache_refresh_in_progress = False
         
         # Persistence timing control
         self.last_persistence_save = 0
@@ -80,22 +87,36 @@ class EnhancedTPSLManager:
         self.phase_index = {}  # phase -> set of monitor_keys
         self.urgency_cache = EnhancedCache(max_size=1000)  # Cache urgency calculations
         
-        # PERFORMANCE OPTIMIZATION: Execution-aware caching
+        # PERFORMANCE OPTIMIZATION: Execution-aware caching system (2025 best practices)
         self._execution_mode = False  # Set to True during trade execution
-        self._execution_cache = {}    # Cache API calls during execution
+        self._execution_cache = {}    # Cache API calls during execution (5s TTL)
         self._execution_cache_ttl = 5  # 5 second cache during execution
         self._last_execution_cache_clear = 0
         
-        # CRITICAL FIX: Monitoring mode cache for normal operations  
+        # MONITORING MODE: Normal operations cache (15s TTL)
         self._monitoring_cache = {}   # Cache for normal monitoring operations
         self._monitoring_cache_ttl = 15  # 15 second cache for monitoring
         self._last_monitoring_cache_clear = 0
+        
+        # CACHE-ON-DEMAND: Dynamic cache management based on operation mode
+        self._cache_mode = "monitoring"  # "monitoring", "execution", "maintenance"
+        self._cache_hit_rates = {"execution": 0.0, "monitoring": 0.0}
+        self._cache_requests = {"execution": 0, "monitoring": 0}
+        self._cache_hits = {"execution": 0, "monitoring": 0}
         
         # Initialize persistence task flag
         self._persistence_task_pending = False
         
         # Start periodic persistence flush task (if event loop is available)
         self._start_persistence_flush_task()
+        
+        # Start cache maintenance task
+        self._start_cache_maintenance_task()
+        
+        # Initialize execution-aware cache
+        from utils.execution_aware_cache import execution_aware_cache, CacheMode
+        self.execution_cache = execution_aware_cache
+        self.CacheMode = CacheMode
         
         # API call batching system for performance
         self.api_batch_queue = {}  # operation_type -> list of requests
@@ -347,12 +368,18 @@ class EnhancedTPSLManager:
                 error_msg = str(e)
                 logger.error(f"❌ TP{tp_num} {account_name} cancellation attempt {attempt} error: {error_msg}")
                 
-                # Check for common mirror account issues
-                if is_mirror_account:
-                    if "order not found" in error_msg.lower():
-                        logger.warning(f"🪞 Mirror TP order may already be cancelled or filled")
-                        # For mirror accounts, "order not found" could mean success
-                        return True, f"{account_name} order not found (likely already cancelled/filled)"
+                # ENHANCED: Handle common API errors that indicate order is already gone
+                if ("order not exists" in error_msg.lower() or 
+                    "order not found" in error_msg.lower() or
+                    "too late to cancel" in error_msg.lower() or
+                    "110001" in error_msg):  # Bybit error code for order not exists
+                    logger.warning(f"🔄 Order {order_id[:8]}... already cancelled or filled")
+                    return True, f"{account_name} order already cancelled/filled (ErrCode: 110001 handled)"
+                
+                # Check for duplicate OrderLinkID errors
+                if ("duplicate" in error_msg.lower() or "110072" in error_msg):
+                    logger.warning(f"⚠️ OrderLinkID conflict detected, but continuing")
+                    # This is handled by our unique ID generator, but log for monitoring
                 
                 if attempt < max_retries:
                     wait_time = attempt * 0.3  # Progressive delay
@@ -652,7 +679,103 @@ class EnhancedTPSLManager:
             # No event loop running yet, will start when event loop is available
             logger.debug("📊 No event loop available yet, will start persistence flush when loop starts")
             # Store a flag to start the task later
-            self._persistence_task_pending = True
+    
+    def _start_cache_maintenance_task(self):
+        """Start a background task for cache maintenance"""
+        try:
+            # Check if there's a running event loop
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._periodic_cache_maintenance())
+            logger.debug("🔧 Cache maintenance task started")
+        except RuntimeError:
+            logger.debug("🔧 No event loop available yet, will start cache maintenance when loop starts")
+    
+    async def _periodic_cache_maintenance(self):
+        """Periodically maintain cache and update performance metrics"""
+        from utils.execution_aware_cache import start_cache_maintenance
+        await start_cache_maintenance()
+        
+        while True:
+            try:
+                await asyncio.sleep(60)  # Run every minute
+                
+                # Get cache statistics
+                stats = await self.execution_cache.get_stats()
+                
+                # Log cache performance every 5 minutes
+                if int(time.time()) % 300 == 0:
+                    logger.info(f"📊 Cache Performance: {stats['stats']['hit_rates']}")
+                    logger.info(f"📊 Cache Sizes: {stats['stats']['cache_sizes']}")
+                    logger.info(f"📊 Total Cache Entries: {stats['total_entries']}")
+                
+            except Exception as e:
+                logger.error(f"❌ Cache maintenance error: {e}")
+                await asyncio.sleep(60)
+    
+    async def set_execution_mode(self, enable: bool = True):
+        """
+        Switch cache to execution mode for faster API responses during active trading
+        Based on 2025 best practices for execution-aware caching
+        """
+        if enable:
+            await self.execution_cache.set_mode(self.CacheMode.EXECUTION)
+            logger.info("🚀 Switched to EXECUTION cache mode (5s TTL for fast trading)")
+        else:
+            await self.execution_cache.set_mode(self.CacheMode.MONITORING)
+            logger.info("🔍 Switched to MONITORING cache mode (15s TTL for normal operations)")
+    
+    async def set_maintenance_mode(self, enable: bool = True):
+        """Switch cache to maintenance mode for cleanup operations"""
+        if enable:
+            await self.execution_cache.set_mode(self.CacheMode.MAINTENANCE)
+            logger.info("🔧 Switched to MAINTENANCE cache mode (30s TTL for cleanup)")
+        else:
+            await self.execution_cache.set_mode(self.CacheMode.MONITORING)
+            logger.info("🔍 Switched back to MONITORING cache mode")
+            
+    async def _get_cached_position_info(self, symbol: str, account_type: str = "main") -> Optional[Any]:
+        """
+        Get position info with execution-aware caching
+        Uses different TTL based on current operation mode
+        """
+        from clients.bybit_helpers import get_position_info_for_account, get_all_positions
+        
+        params = {"symbol": symbol, "account": account_type}
+        
+        if symbol == "ALL":
+            # Get all positions
+            return await self.execution_cache.get_cached_api_call(
+                "all_positions", params, get_all_positions
+            )
+        else:
+            # Get specific position
+            return await self.execution_cache.get_cached_api_call(
+                "position_info", params, get_position_info_for_account,
+                symbol, account_type
+            )
+    
+    async def _get_cached_order_info(self, symbol: str, account_type: str = "main") -> Optional[Any]:
+        """
+        Get order info with execution-aware caching
+        Uses different TTL based on current operation mode
+        """
+        from clients.bybit_helpers import get_all_open_orders
+        from execution.mirror_trader import bybit_client_2
+        
+        params = {"symbol": symbol, "account": account_type}
+        
+        if account_type == "mirror" and bybit_client_2:
+            # Mirror account orders
+            return await self.execution_cache.get_cached_api_call(
+                "mirror_orders", params, get_all_open_orders,
+                client=bybit_client_2, symbol=symbol
+            )
+        else:
+            # Main account orders
+            return await self.execution_cache.get_cached_api_call(
+                "main_orders", params, get_all_open_orders,
+                symbol=symbol
+            )
     
     async def _periodic_persistence_flush(self):
         """Periodically flush any pending persistence saves"""
@@ -1874,8 +1997,7 @@ class EnhancedTPSLManager:
         This replaces the conditional order logic with active management
         Now supports account-aware monitoring to prevent key collisions
         """
-        # PERFORMANCE OPTIMIZATION: Refresh monitoring cache first
-        await self._refresh_monitoring_cache()
+        # PERFORMANCE OPTIMIZATION: Cache refresh removed - handled by cache miss methods
         
         logger.debug(f"🔍 monitor_and_adjust_orders called for {symbol} {side} ({account_type})")
         logger.debug(f"📊 Current monitors: {len(self.position_monitors)} total - Keys: {list(self.position_monitors.keys())[:5]}...")
@@ -2202,7 +2324,40 @@ class EnhancedTPSLManager:
                         # Send alert if a limit order just filled
                         if filled_count > old_filled_count:
                             logger.info(f"🎯 Limit order fill detected! {filled_count}/{len(order_ids)} filled")
-                            # The position size change will trigger the rebalancing and alert
+                            
+                            # CRITICAL FIX: Directly trigger rebalancing for limit fills
+                            # Don't rely on position size comparison which can fail due to stale remaining_size
+                            try:
+                                # Get current position size to calculate the increase
+                                if account_type == 'mirror':
+                                    positions = await get_position_info_for_account(symbol, 'mirror')
+                                else:
+                                    positions = await get_position_info(symbol)
+                                
+                                if positions and positions[0]:
+                                    current_size = abs(float(positions[0].get('size', 0)))
+                                    if current_size > monitor_data["remaining_size"]:
+                                        size_diff = current_size - monitor_data["remaining_size"]
+                                        logger.info(f"📈 LIMIT FILL: Position size increased by {size_diff} - triggering rebalancing")
+                                        
+                                        # Update remaining_size immediately
+                                        monitor_data["remaining_size"] = current_size
+                                        
+                                        # Trigger TP rebalancing directly
+                                        await self._adjust_all_orders_for_partial_fill(monitor_data, current_size)
+                                        
+                                        # Save updated monitor data
+                                        monitor_key = f"{symbol}_{side}_{account_type}"
+                                        await self._save_monitor_state_to_persistence(monitor_key, monitor_data, force=True)
+                                        
+                                        logger.info(f"✅ LIMIT FILL: Rebalancing complete for {symbol} {account_type}")
+                                    else:
+                                        logger.debug(f"🔍 LIMIT FILL: No position size increase detected ({current_size} vs {monitor_data['remaining_size']})")
+                                else:
+                                    logger.warning(f"⚠️ LIMIT FILL: Could not get position info for {symbol} {account_type}")
+                            except Exception as e:
+                                logger.error(f"❌ LIMIT FILL: Error during direct rebalancing: {e}")
+                                # Continue with normal flow as fallback
                             
                 except Exception as e:
                     logger.error(f"Error updating limit order details: {e}")
@@ -2219,7 +2374,7 @@ class EnhancedTPSLManager:
 
         except Exception as e:
             # Use error recovery system for monitoring errors
-            await self._handle_monitor_error(symbol, side, e)
+            await self._handle_monitor_error(symbol, side, e, account_type)
 
     async def _handle_conservative_position_change(self, monitor_data: Dict, current_size: Decimal, fill_percentage: float):
         """
@@ -2369,68 +2524,66 @@ class EnhancedTPSLManager:
             self.save_monitors_to_persistence(force=True, reason="tp_hit")
         else:
             # Fallback: If order ID detection failed but position reduced, it's likely a TP fill
+            # CRITICAL PROTECTION: Only allow fallback TP detection if we're already in PROFIT_TAKING phase
+            # This prevents false TP1 hits during BUILDING phase when limit orders cause size fluctuations
+            current_phase = monitor_data.get("phase", "BUILDING")
+            
             if not position_increased and current_size < monitor_data.get("position_size", 0):
-                logger.warning(f"⚠️ TP order fill detected via position size (order ID detection failed)")
-                logger.info(f"🎯 Conservative approach: TP order filled ({fill_percentage:.2f}% of position)")
+                if current_phase in ["BUILDING", "MONITORING"]:
+                    # PROTECTIVE LOGIC: During BUILDING/MONITORING phase, position reductions should NOT trigger TP1
+                    logger.info(f"🛡️ BUILDING/MONITORING phase: Position reduction detected but protected from false TP1 trigger")
+                    logger.info(f"📊 Phase: {current_phase}, Position: {monitor_data.get('position_size', 0)} → {current_size}")
+                    logger.info(f"💡 Note: This reduction may be due to limit order rebalancing or market fluctuations")
+                    logger.info(f"🔒 TP1 detection protected until explicit TP order fill is detected")
+                    
+                    # Update last known size but don't trigger TP logic
+                    monitor_data["last_known_size"] = current_size
+                    monitor_data["remaining_size"] = current_size
+                    self.save_monitors_to_persistence(reason="position_change_protected")
+                    
+                    # Log this event for monitoring
+                    logger.info(f"✅ Position size updated without triggering false TP1: {symbol} {side} ({current_phase})")
+                    return
                 
-                # Try to determine which TP based on cumulative fill percentage
-                cumulative_fill = monitor_data.get("position_size", 0) - current_size
-                cumulative_percentage = (cumulative_fill / monitor_data.get("position_size", 1)) * 100
-                
-                # Estimate TP number based on percentage
-                if cumulative_percentage >= 85:
-                    tp_number = 1
-                    if not monitor_data.get("tp1_hit", False):
-                        monitor_data["tp1_hit"] = True
-                        monitor_data["phase"] = "PROFIT_TAKING"
-                        logger.info(f"✅ TP1 hit detected via position size - will trigger breakeven movement")
-                        self.save_monitors_to_persistence(force=True, reason="tp_hit")
+                # Only proceed with TP detection if we're already in PROFIT_TAKING phase
+                elif current_phase == "PROFIT_TAKING":
+                    logger.warning(f"⚠️ TP order fill detected via position size (order ID detection failed) - PROFIT_TAKING phase")
+                    logger.info(f"🎯 Conservative approach: TP order filled ({fill_percentage:.2f}% of position)")
+                    
+                    # Try to determine which TP based on cumulative fill percentage
+                    cumulative_fill = monitor_data.get("position_size", 0) - current_size
+                    cumulative_percentage = (cumulative_fill / monitor_data.get("position_size", 1)) * 100
+                    
+                    # Estimate TP number based on percentage (but TP1 should already be hit in PROFIT_TAKING phase)
+                    if cumulative_percentage >= 85:
+                        # This should not happen in PROFIT_TAKING phase unless TP1 was already hit
+                        if not monitor_data.get("tp1_hit", False):
+                            logger.warning(f"⚠️ Unexpected state: PROFIT_TAKING phase but TP1 not marked as hit")
+                            monitor_data["tp1_hit"] = True
+                        tp_number = 1
+                    elif cumulative_percentage >= 90:
+                        tp_number = 2
+                    elif cumulative_percentage >= 95:
+                        tp_number = 3
+                    else:
+                        tp_number = 4
                         
-                        # Trigger phase transition to PROFIT_TAKING
-                        await self._transition_to_profit_taking(monitor_data)
-                        
-                        # Trigger breakeven movement
-                        logger.info(f"🎯 Triggering breakeven movement after TP1 (fallback detection)...")
-                        # Get position data for breakeven
-                        positions = await get_position_info_for_account(monitor_data["symbol"], monitor_data.get("account_type", "main"))
-                        position = None
-                        if positions:
-                            for pos in positions:
-                                if pos.get("side") == monitor_data["side"]:
-                                    position = pos
-                                    break
-                        
-                        if position:
-                            success = await self._move_sl_to_breakeven_enhanced_v2(
-                                monitor_data=monitor_data,
-                                position=position,
-                                is_tp1_trigger=True
-                            )
-                            if success:
-                                logger.info(f"✅ SL moved to breakeven successfully after TP1 (fallback)")
-                                monitor_data["sl_moved_to_be"] = True
-                                # Send breakeven alert
-                                await self._send_enhanced_breakeven_alert(monitor_data, "TP1")
-                            else:
-                                logger.error(f"❌ Failed to move SL to breakeven after TP1 (fallback)")
-                elif cumulative_percentage >= 90:
-                    tp_number = 2
-                elif cumulative_percentage >= 95:
-                    tp_number = 3
+                    logger.info(f"🎯 Fallback TP detection in PROFIT_TAKING phase: TP{tp_number} estimated")
                 else:
-                    tp_number = 4
-
-                # Send TP fill alert with estimated TP number
-                await self._send_tp_fill_alert_enhanced(monitor_data, fill_percentage, tp_number)
-
-                # Only adjust SL quantity in PROFIT_TAKING phase (when TPs hit)
-                # During BUILDING/MONITORING phases, SL should maintain full position coverage
-                current_phase = monitor_data.get("phase", "BUILDING")
+                    logger.warning(f"⚠️ Unknown phase '{current_phase}' - applying protective logic")
+                    monitor_data["last_known_size"] = current_size
+                    monitor_data["remaining_size"] = current_size
+                    self.save_monitors_to_persistence(reason="position_change_unknown_phase")
+                    return
+                
+                # Handle fallback TP detection for PROFIT_TAKING phase
                 if current_phase == "PROFIT_TAKING":
+                    # Send TP fill alert with estimated TP number
+                    await self._send_tp_fill_alert_enhanced(monitor_data, fill_percentage, tp_number)
+
+                    # Adjust SL quantity in PROFIT_TAKING phase (when TPs hit)
                     logger.info(f"🔧 PROFIT_TAKING phase: Adjusting SL to match remaining position ({current_size})")
                     await self._adjust_sl_quantity_enhanced(monitor_data, current_size)
-                else:
-                    logger.info(f"🛡️ {current_phase} phase: SL maintains full position coverage (no adjustment needed)")
             else:
                 # This shouldn't happen - log for debugging
                 logger.error(f"❌ Unexpected condition in _handle_conservative_position_change")
@@ -2505,6 +2658,896 @@ class EnhancedTPSLManager:
 
 # Fast approach removed - conservative approach only
 
+    async def _validate_and_refresh_tp_orders(self, monitor_data: Dict) -> Dict:
+        """
+        Validate existing TP orders against exchange data and refresh stale information
+        This prevents API errors when trying to cancel non-existent orders
+        
+        Returns:
+            Dict: Validated and refreshed TP orders
+        """
+        try:
+            symbol = monitor_data.get("symbol")
+            account_type = monitor_data.get("account_type", "main")
+            is_mirror_account = account_type == "mirror"
+            
+            logger.info(f"🔍 Validating TP orders for {symbol} ({account_type.upper()})")
+            
+            # Get fresh order data from exchange
+            try:
+                fresh_orders = await self._get_cached_open_orders(symbol, account_type)
+                
+                # ENHANCED: Debug order ID collection
+                fresh_order_ids = set()
+                order_debug_info = []
+                for order in fresh_orders:
+                    order_id = order.get("orderId")
+                    if order_id:
+                        fresh_order_ids.add(order_id)
+                        order_debug_info.append({
+                            "orderId": str(order_id)[:8] + "...",
+                            "orderLinkId": order.get("orderLinkId", "N/A"),
+                            "orderType": order.get("orderType", "N/A"),
+                            "reduceOnly": order.get("reduceOnly", False)
+                        })
+                
+                logger.info(f"📊 Found {len(fresh_order_ids)} active orders on exchange for {symbol} ({account_type})")
+                logger.debug(f"   Order details: {order_debug_info[:3]}...")  # Show first 3 for debugging
+            except Exception as e:
+                logger.error(f"❌ Failed to fetch fresh orders for validation: {e}")
+                # Return original TP orders if we can't validate
+                return self._ensure_tp_orders_dict(monitor_data)
+            
+            # Get current TP orders from monitor data
+            tp_orders = self._ensure_tp_orders_dict(monitor_data)
+            validated_tp_orders = {}
+            stale_orders_removed = 0
+            
+            for order_id, tp_order in tp_orders.items():
+                if not isinstance(tp_order, dict):
+                    logger.warning(f"⚠️ Skipping invalid TP order: {order_id}")
+                    continue
+                
+                # ENHANCED: Debug order ID matching for troubleshooting
+                order_id_str = str(order_id)
+                logger.debug(f"🔍 Validating TP order: {order_id_str[:8]}... (type: {type(order_id).__name__})")
+                logger.debug(f"   Exchange has {len(fresh_order_ids)} order IDs")
+                
+                # Check if order still exists on exchange (with type conversion)
+                order_exists = (order_id in fresh_order_ids or 
+                               order_id_str in fresh_order_ids or
+                               str(order_id) in {str(oid) for oid in fresh_order_ids})
+                
+                if order_exists:
+                    # Order exists - keep it
+                    validated_tp_orders[order_id] = tp_order
+                    logger.debug(f"✅ TP order {order_id_str[:8]}... validated (exists on exchange)")
+                else:
+                    # Order doesn't exist - remove from monitor data
+                    stale_orders_removed += 1
+                    logger.warning(f"🗑️ Removing stale TP order {order_id_str[:8]}... (not found on exchange)")
+                    logger.debug(f"   Monitor order ID: '{order_id}' (type: {type(order_id).__name__})")
+                    logger.debug(f"   Exchange order IDs sample: {list(list(fresh_order_ids)[:3])}")
+            
+            if stale_orders_removed > 0:
+                logger.info(f"🧹 Removed {stale_orders_removed} stale TP orders from monitor data")
+                
+                # ENHANCED: Safety check - if ALL orders were removed, this might be an error
+                if len(validated_tp_orders) == 0 and len(tp_orders) > 0:
+                    logger.warning(f"⚠️ CRITICAL: All {len(tp_orders)} TP orders were marked as stale!")
+                    logger.warning(f"   This might indicate an order ID mismatch or API issue")
+                    logger.warning(f"   Original TP orders: {list(tp_orders.keys())[:3]}...")
+                    logger.warning(f"   Exchange order IDs: {list(fresh_order_ids)[:3]}...")
+                    
+                    # Don't update monitor data if all orders were removed - might be false positive
+                    logger.warning(f"🛡️ Preserving original TP orders to prevent data loss")
+                    return tp_orders
+                else:
+                    # Update monitor data with validated orders
+                    monitor_data["tp_orders"] = validated_tp_orders
+                    self.save_monitors_to_persistence(reason="tp_order_validation")
+            
+            logger.info(f"✅ TP order validation complete: {len(validated_tp_orders)} valid orders")
+            return validated_tp_orders
+            
+        except Exception as e:
+            logger.error(f"❌ Error during TP order validation: {e}")
+            # Return original orders if validation fails
+            return self._ensure_tp_orders_dict(monitor_data)
+    
+    async def _ensure_mirror_tp_order_integrity(self, monitor_data: Dict) -> Dict:
+        """
+        Comprehensive integrity check and recovery for mirror account TP orders
+        Ensures TP orders exist and are properly tracked across ALL phases (BUILDING, MONITORING, PROFIT_TAKING)
+        
+        Returns:
+            Dict: Validated/recovered TP orders
+        """
+        try:
+            import pickle
+            import time
+            
+            symbol = monitor_data.get("symbol")
+            side = monitor_data.get("side")
+            account_type = monitor_data.get("account_type", "main")
+            phase = monitor_data.get("phase", "UNKNOWN")
+            
+            if account_type != "mirror":
+                logger.debug(f"🔍 TP integrity check only applies to mirror accounts")
+                return self._ensure_tp_orders_dict(monitor_data)
+                
+            logger.info(f"🔧 COMPREHENSIVE Mirror TP Integrity Check: {symbol} {side} (Phase: {phase})")
+            
+            # Phase-specific validation
+            expected_tp_count = 4  # Conservative approach always has 4 TPs
+            current_tp_orders = self._ensure_tp_orders_dict(monitor_data)
+            
+            logger.info(f"📊 Current TP orders in monitor: {len(current_tp_orders)}")
+            logger.info(f"📊 Expected TP orders for phase {phase}: {expected_tp_count}")
+            
+            # STEP 1: Get fresh exchange data for mirror account
+            fresh_mirror_orders = await self._get_cached_open_orders(symbol, "mirror")
+            exchange_tp_orders = []
+            
+            for order in fresh_mirror_orders:
+                if (order.get("reduceOnly") and 
+                    order.get("symbol") == symbol and
+                    order.get("orderType") == "Limit" and
+                    order.get("side") == ("Buy" if side == "Sell" else "Sell")):
+                    exchange_tp_orders.append(order)
+            
+            logger.info(f"📊 TP orders found on exchange: {len(exchange_tp_orders)}")
+            
+            # STEP 2: Phase-specific recovery logic
+            if phase in ["BUILDING", "MONITORING"] and len(current_tp_orders) == 0 and len(exchange_tp_orders) > 0:
+                # SCENARIO: Phase transition happened but TP orders not tracked
+                logger.warning(f"⚠️ CRITICAL: {phase} phase but TP orders missing from monitor data")
+                return await self._reconstruct_tp_orders_from_exchange(monitor_data, exchange_tp_orders)
+                
+            elif phase == "PROFIT_TAKING" and len(current_tp_orders) < len(exchange_tp_orders):
+                # SCENARIO: Some TPs filled but orders still exist on exchange
+                logger.warning(f"⚠️ CRITICAL: PROFIT_TAKING phase but TP tracking inconsistent")
+                return await self._reconcile_tp_orders_profit_phase(monitor_data, exchange_tp_orders)
+                
+            elif len(current_tp_orders) == 0 and len(exchange_tp_orders) == 0:
+                # SCENARIO: No TP orders anywhere - need main account reference
+                logger.error(f"❌ CRITICAL: No TP orders in monitor data OR exchange")
+                return await self._recreate_tp_orders_from_main(monitor_data)
+                
+            elif len(current_tp_orders) > 0 and len(exchange_tp_orders) == 0:
+                # SCENARIO: Monitor has orders but exchange doesn't - stale data
+                logger.warning(f"⚠️ CRITICAL: Monitor has {len(current_tp_orders)} TP orders but exchange has 0")
+                # Clear stale data and attempt recovery
+                monitor_data["tp_orders"] = {}
+                return await self._recreate_tp_orders_from_main(monitor_data)
+                
+            else:
+                # SCENARIO: Data looks consistent, do validation
+                logger.info(f"✅ TP orders appear consistent, running validation")
+                return await self._validate_tp_order_consistency(monitor_data, exchange_tp_orders)
+                
+        except Exception as e:
+            logger.error(f"❌ Critical error in mirror TP integrity check: {e}")
+            # Fallback to basic recovery
+            return await self._attempt_tp_order_recovery(monitor_data)
+    
+    async def _reconstruct_tp_orders_from_exchange(self, monitor_data: Dict, exchange_orders: List[Dict]) -> Dict:
+        """Reconstruct TP order tracking from live exchange data"""
+        try:
+            symbol = monitor_data.get("symbol")
+            reconstructed_orders = {}
+            
+            logger.info(f"🔧 Reconstructing TP orders from {len(exchange_orders)} exchange orders")
+            
+            # Sort orders by price to determine TP hierarchy
+            side = monitor_data.get("side")
+            if side == "Buy":
+                # For long positions, higher TP prices = TP1, TP2, etc.
+                sorted_orders = sorted(exchange_orders, key=lambda x: float(x.get("price", 0)), reverse=True)
+            else:
+                # For short positions, lower TP prices = TP1, TP2, etc.
+                sorted_orders = sorted(exchange_orders, key=lambda x: float(x.get("price", 0)))
+            
+            for i, order in enumerate(sorted_orders[:4]):  # Max 4 TPs
+                order_id = order.get("orderId")
+                tp_num = i + 1
+                
+                reconstructed_orders[order_id] = {
+                    "order_id": order_id,
+                    "order_link_id": order.get("orderLinkId", f"RECOVERED_TP{tp_num}_{symbol}"),
+                    "tp_number": tp_num,
+                    "quantity": order.get("qty", "0"),
+                    "price": order.get("price", "0"),
+                    "status": "ACTIVE",
+                    "reconstructed": True,
+                    "reconstruction_timestamp": int(time.time()),
+                    "reconstruction_phase": monitor_data.get("phase", "UNKNOWN")
+                }
+                
+                logger.info(f"🔧 Reconstructed TP{tp_num}: {order_id[:8]}... @ {order.get('price')} (Qty: {order.get('qty')})")
+            
+            # Update monitor data
+            monitor_data["tp_orders"] = reconstructed_orders
+            self.save_monitors_to_persistence(reason="tp_order_reconstruction")
+            
+            logger.info(f"✅ Successfully reconstructed {len(reconstructed_orders)} TP orders from exchange")
+            return reconstructed_orders
+            
+        except Exception as e:
+            logger.error(f"❌ Error reconstructing TP orders from exchange: {e}")
+            return {}
+    
+    async def _reconcile_tp_orders_profit_phase(self, monitor_data: Dict, exchange_orders: List[Dict]) -> Dict:
+        """Reconcile TP orders during PROFIT_TAKING phase when some TPs may have filled"""
+        try:
+            current_tp_orders = self._ensure_tp_orders_dict(monitor_data)
+            exchange_order_ids = {order.get("orderId") for order in exchange_orders}
+            
+            logger.info(f"🔧 Reconciling PROFIT_TAKING phase: {len(current_tp_orders)} tracked vs {len(exchange_orders)} on exchange")
+            
+            reconciled_orders = {}
+            
+            # Keep orders that still exist on exchange (with enhanced order ID validation)
+            for order_id, tp_order in current_tp_orders.items():
+                # ENHANCED: Use type-agnostic order ID matching
+                order_id_str = str(order_id)
+                order_exists = (order_id in exchange_order_ids or 
+                               order_id_str in exchange_order_ids or
+                               str(order_id) in {str(oid) for oid in exchange_order_ids})
+                
+                if order_exists:
+                    reconciled_orders[order_id] = tp_order
+                    logger.info(f"✅ TP order {order_id[:8]}... still active on exchange")
+                else:
+                    logger.info(f"🎯 TP order {order_id[:8]}... filled/cancelled (removed from tracking)")
+            
+            # Add any exchange orders not in our tracking
+            for order in exchange_orders:
+                order_id = order.get("orderId")
+                if order_id not in reconciled_orders:
+                    # Try to determine TP number
+                    tp_num = len(reconciled_orders) + 1
+                    order_link_id = order.get("orderLinkId", "")
+                    for i in range(1, 5):
+                        if f"TP{i}" in order_link_id.upper():
+                            tp_num = i
+                            break
+                    
+                    reconciled_orders[order_id] = {
+                        "order_id": order_id,
+                        "order_link_id": order_link_id,
+                        "tp_number": tp_num,
+                        "quantity": order.get("qty", "0"),
+                        "price": order.get("price", "0"),
+                        "status": "ACTIVE",
+                        "reconciled_profit_phase": True,
+                        "reconciliation_timestamp": int(time.time())
+                    }
+                    logger.info(f"🔧 Added missing TP{tp_num}: {order_id[:8]}... from exchange")
+            
+            # Update monitor data
+            monitor_data["tp_orders"] = reconciled_orders
+            self.save_monitors_to_persistence(reason="tp_order_reconciliation_profit_phase")
+            
+            logger.info(f"✅ Reconciled PROFIT_TAKING phase: {len(reconciled_orders)} TP orders")
+            return reconciled_orders
+            
+        except Exception as e:
+            logger.error(f"❌ Error reconciling TP orders in PROFIT_TAKING phase: {e}")
+            return current_tp_orders
+    
+    async def _recreate_tp_orders_from_main(self, monitor_data: Dict) -> Dict:
+        """Recreate mirror TP orders by referencing main account and current position"""
+        try:
+            import pickle
+            
+            symbol = monitor_data.get("symbol")
+            side = monitor_data.get("side")
+            
+            logger.info(f"🔧 Attempting to recreate mirror TP orders from main account reference")
+            
+            # Get main account monitor
+            main_monitor_key = f"{symbol}_{side}_main"
+            with open('bybit_bot_dashboard_v4.1_enhanced.pkl', 'rb') as f:
+                data = pickle.load(f)
+            
+            main_monitor = data.get('enhanced_monitors', {}).get(main_monitor_key)
+            if not main_monitor:
+                logger.error(f"❌ No main account monitor found: {main_monitor_key}")
+                return {}
+            
+            main_tp_orders = self._ensure_tp_orders_dict(main_monitor)
+            if not main_tp_orders:
+                logger.error(f"❌ Main account also has no TP orders")
+                return {}
+            
+            # Get current mirror position to calculate proper quantities
+            fresh_position = await self._get_cached_position_info(symbol, "mirror")
+            if not fresh_position or float(fresh_position.get("size", 0)) == 0:
+                logger.error(f"❌ No mirror position found for TP order recreation")
+                return {}
+            
+            mirror_position_size = Decimal(fresh_position.get("size", "0"))
+            logger.info(f"🔧 Mirror position size for TP recreation: {mirror_position_size}")
+            
+            # Create TP orders based on main account structure but mirror position size
+            tp_percentages = [Decimal("85"), Decimal("5"), Decimal("5"), Decimal("5")]
+            recreated_orders = {}
+            
+            # Sort main TP orders by TP number
+            sorted_main_tps = sorted(main_tp_orders.values(), key=lambda x: x.get("tp_number", 0))
+            
+            for i, main_tp in enumerate(sorted_main_tps[:4]):
+                tp_num = i + 1
+                tp_percentage = tp_percentages[i]
+                
+                # Calculate mirror quantity
+                mirror_qty = (mirror_position_size * tp_percentage) / Decimal("100")
+                
+                # Use main TP price (should be same for both accounts)
+                tp_price = main_tp.get("price", "0")
+                
+                # Create unique order ID (temporary, will be replaced when actually placed)
+                temp_order_id = f"RECREATED_{symbol}_{tp_num}_{int(time.time())}"
+                
+                recreated_orders[temp_order_id] = {
+                    "order_id": temp_order_id,
+                    "order_link_id": f"RECREATED_TP{tp_num}_{symbol}_{int(time.time())}",
+                    "tp_number": tp_num,
+                    "quantity": str(mirror_qty),
+                    "price": tp_price,
+                    "status": "PENDING_PLACEMENT",
+                    "recreated_from_main": True,
+                    "recreation_timestamp": int(time.time()),
+                    "main_reference_order": main_tp.get("order_id", "unknown")
+                }
+                
+                logger.info(f"🔧 Recreated TP{tp_num}: {mirror_qty} @ {tp_price} (from main reference)")
+            
+            # Save to monitor data - these will be placed during next rebalancing
+            monitor_data["tp_orders"] = recreated_orders
+            monitor_data["tp_orders_need_placement"] = True  # Flag for actual placement
+            self.save_monitors_to_persistence(reason="tp_order_recreation")
+            
+            logger.info(f"✅ Recreated {len(recreated_orders)} TP orders from main account reference")
+            return recreated_orders
+            
+        except Exception as e:
+            logger.error(f"❌ Error recreating TP orders from main account: {e}")
+            return {}
+    
+    async def _attempt_fallback_tp_recovery(self, monitor_data: Dict) -> Dict:
+        """
+        Fallback TP recovery when main account monitor is missing
+        Uses only exchange data and position information
+        """
+        try:
+            symbol = monitor_data.get("symbol")
+            side = monitor_data.get("side")
+            account_type = monitor_data.get("account_type", "mirror")
+            
+            logger.info(f"🔄 FALLBACK TP RECOVERY: {symbol} {side} ({account_type})")
+            
+            # CRITICAL FIX: Check mirror client availability
+            if not self._mirror_client:
+                logger.error(f"❌ Mirror client not available for fallback recovery")
+                return {}
+            
+            # Get current position info to determine TP levels
+            try:
+                from clients.bybit_helpers import get_position_info_for_account
+                positions = await get_position_info_for_account(symbol, account_type)
+                
+                if not positions:
+                    logger.warning(f"⚠️ No position found for fallback recovery: {symbol} {account_type}")
+                    return {}
+                
+                position = None
+                for pos in positions:
+                    if pos.get("side") == side:
+                        position = pos
+                        break
+                
+                if not position:
+                    logger.warning(f"⚠️ No matching position found: {symbol} {side} {account_type}")
+                    return {}
+                
+                position_size = Decimal(str(position.get("size", "0")))
+                current_price = Decimal(str(position.get("markPrice", position.get("avgPrice", "0"))))
+                
+                if position_size <= 0 or current_price <= 0:
+                    logger.warning(f"⚠️ Invalid position data: size={position_size}, price={current_price}")
+                    return {}
+                
+                logger.info(f"📊 Fallback recovery position: {position_size} @ {current_price}")
+                
+                # Calculate TP levels based on conservative approach
+                tp_percentages = [Decimal("85"), Decimal("5"), Decimal("5"), Decimal("5")]
+                
+                # Determine price direction for TP calculation
+                if side == "Buy":
+                    # Long position - TPs are above entry price
+                    tp_multipliers = [Decimal("1.02"), Decimal("1.04"), Decimal("1.06"), Decimal("1.08")]
+                else:
+                    # Short position - TPs are below entry price  
+                    tp_multipliers = [Decimal("0.98"), Decimal("0.96"), Decimal("0.94"), Decimal("0.92")]
+                
+                recovered_tp_orders = {}
+                
+                for i, (percentage, multiplier) in enumerate(zip(tp_percentages, tp_multipliers)):
+                    tp_num = i + 1
+                    tp_price = current_price * multiplier
+                    tp_quantity = (position_size * percentage) / Decimal("100")
+                    
+                    # Generate a temporary order structure
+                    tp_order = {
+                        "tp_number": tp_num,
+                        "percentage": float(percentage),
+                        "quantity": str(tp_quantity),
+                        "price": str(tp_price),
+                        "status": "RECONSTRUCTED",
+                        "order_id": f"FALLBACK_TP{tp_num}_{symbol}_{int(time.time())}",
+                        "order_link_id": f"BOT_FALLBACK_TP{tp_num}_{symbol}_{int(time.time())}",
+                        "recovery_method": "fallback_exchange_data"
+                    }
+                    
+                    recovered_tp_orders[f"tp{tp_num}_order"] = tp_order
+                    logger.info(f"🔧 Reconstructed TP{tp_num}: {tp_quantity} @ {tp_price} ({percentage}%)")
+                
+                logger.info(f"✅ FALLBACK RECOVERY: Reconstructed {len(recovered_tp_orders)} TP orders")
+                return recovered_tp_orders
+                
+            except Exception as pos_err:
+                logger.error(f"❌ Failed to get position info for fallback recovery: {pos_err}")
+                return {}
+            
+        except Exception as e:
+            logger.error(f"❌ Fallback TP recovery failed: {e}")
+            return {}
+    
+    async def _validate_tp_order_consistency(self, monitor_data: Dict, exchange_orders: List[Dict]) -> Dict:
+        """Validate that tracked TP orders are consistent with exchange"""
+        try:
+            current_tp_orders = self._ensure_tp_orders_dict(monitor_data)
+            exchange_order_ids = {order.get("orderId") for order in exchange_orders}
+            
+            validated_orders = {}
+            inconsistencies_found = 0
+            
+            for order_id, tp_order in current_tp_orders.items():
+                # ENHANCED: Use type-agnostic order ID matching
+                order_id_str = str(order_id)
+                order_exists = (order_id in exchange_order_ids or 
+                               order_id_str in exchange_order_ids or
+                               str(order_id) in {str(oid) for oid in exchange_order_ids})
+                
+                if order_exists:
+                    # Order exists on exchange - validate details (with type-safe lookup)
+                    exchange_order = None
+                    for o in exchange_orders:
+                        exchange_order_id = o.get("orderId")
+                        if (exchange_order_id == order_id or 
+                            str(exchange_order_id) == order_id_str or
+                            str(exchange_order_id) == str(order_id)):
+                            exchange_order = o
+                            break
+                    if exchange_order:
+                        # Update with current exchange data
+                        tp_order["quantity"] = exchange_order.get("qty", tp_order.get("quantity", "0"))
+                        tp_order["price"] = exchange_order.get("price", tp_order.get("price", "0"))
+                        tp_order["last_validated"] = int(time.time())
+                        validated_orders[order_id] = tp_order
+                        logger.debug(f"✅ Validated TP order {order_id[:8]}...")
+                    else:
+                        logger.warning(f"⚠️ TP order {order_id[:8]}... missing exchange details")
+                        inconsistencies_found += 1
+                else:
+                    logger.warning(f"⚠️ TP order {order_id[:8]}... not found on exchange (stale)")
+                    inconsistencies_found += 1
+            
+            if inconsistencies_found > 0:
+                logger.warning(f"⚠️ Found {inconsistencies_found} TP order inconsistencies - updating monitor data")
+                monitor_data["tp_orders"] = validated_orders
+                self.save_monitors_to_persistence(reason="tp_order_consistency_fix")
+            
+            logger.info(f"✅ TP order consistency check complete: {len(validated_orders)} valid orders")
+            return validated_orders
+            
+        except Exception as e:
+            logger.error(f"❌ Error validating TP order consistency: {e}")
+            return current_tp_orders
+
+    async def _attempt_tp_order_recovery(self, monitor_data: Dict) -> Dict:
+        """
+        Attempt to recover missing TP orders for mirror accounts by checking main account
+        and reconstructing mirror TP order data
+        
+        Returns:
+            Dict: Recovered or empty TP orders dict
+        """
+        try:
+            import pickle
+            import time
+            
+            symbol = monitor_data.get("symbol")
+            side = monitor_data.get("side")
+            account_type = monitor_data.get("account_type", "main")
+            
+            if account_type != "mirror":
+                logger.debug(f"🔍 TP recovery only applies to mirror accounts")
+                return {}
+                
+            logger.info(f"🔄 Attempting TP order recovery for mirror account: {symbol} {side}")
+            
+            # Try to find corresponding main account monitor
+            main_monitor_key = f"{symbol}_{side}_main"
+            
+            # Load monitor data to find main account TP orders
+            try:
+                with open('bybit_bot_dashboard_v4.1_enhanced.pkl', 'rb') as f:
+                    data = pickle.load(f)
+                    
+                main_monitor = data.get('enhanced_monitors', {}).get(main_monitor_key)
+                if not main_monitor:
+                    logger.warning(f"⚠️ No main account monitor found for recovery: {main_monitor_key}")
+                    
+                    # ENHANCED FALLBACK: Try to reconstruct from exchange data only
+                    logger.info(f"🔄 Attempting fallback recovery without main account reference...")
+                    return await self._attempt_fallback_tp_recovery(monitor_data)
+                    
+                main_tp_orders = self._ensure_tp_orders_dict(main_monitor)
+                if not main_tp_orders:
+                    logger.warning(f"⚠️ No TP orders in main account monitor for recovery")
+                    return {}
+                    
+                logger.info(f"🔍 Found {len(main_tp_orders)} TP orders in main account for reference")
+                
+                # CRITICAL FIX: Check mirror client availability first
+                if not self._mirror_client:
+                    logger.error(f"❌ Mirror client not available for TP recovery")
+                    return {}
+                
+                # Enhanced recovery with retry logic and multiple strategies
+                mirror_tp_orders = {}
+                
+                # Strategy 1: Get fresh mirror orders from exchange with retry logic
+                for attempt in range(3):
+                    try:
+                        logger.info(f"🔍 Attempt {attempt + 1}/3: Fetching fresh mirror orders from exchange...")
+                        
+                        # Force cache refresh for mirror orders to get latest data
+                        self._monitoring_cache.pop(f"orders_{symbol}_mirror", None)
+                        self._monitoring_cache.pop("mirror_ALL_orders", None)
+                        
+                        fresh_mirror_orders = await self._get_cached_open_orders(symbol, "mirror")
+                        
+                        if fresh_mirror_orders:
+                            logger.info(f"✅ Found {len(fresh_mirror_orders)} orders on mirror exchange")
+                            break
+                        else:
+                            logger.warning(f"⚠️ No orders found on attempt {attempt + 1}")
+                            if attempt < 2:
+                                await asyncio.sleep(2)  # Wait before retry
+                                
+                    except Exception as e:
+                        logger.error(f"❌ Mirror orders fetch failed on attempt {attempt + 1}: {e}")
+                        if attempt < 2:
+                            await asyncio.sleep(2)  # Wait before retry
+                        else:
+                            logger.error(f"❌ All attempts failed to fetch mirror orders")
+                            return {}
+                
+                # Strategy 2: Enhanced TP order detection using helper methods
+                tp_order_count = 0
+                for order in fresh_mirror_orders:
+                    if self._is_tp_order_candidate(order, symbol, side):
+                        order_id = order.get("orderId")
+                        order_link_id = order.get("orderLinkId", "")
+                        
+                        # Enhanced TP number detection
+                        tp_num = self._extract_tp_number_from_order(order_link_id, tp_order_count)
+                        
+                        mirror_tp_orders[order_id] = {
+                            "order_id": order_id,
+                            "order_link_id": order_link_id,
+                            "tp_number": tp_num,
+                            "quantity": order.get("qty", "0"),
+                            "price": order.get("price", "0"),
+                            "status": "ACTIVE",
+                            "recovered": True,
+                            "recovery_timestamp": int(time.time()),
+                            "recovery_strategy": "exchange_scan"
+                        }
+                        tp_order_count += 1
+                            
+                logger.info(f"🔄 Strategy 1 recovered {len(mirror_tp_orders)} TP orders from exchange data")
+                
+                # Strategy 3: If no TP orders found but main account has them, attempt reconstruction
+                if not mirror_tp_orders and main_monitor:
+                    logger.info(f"🔄 Strategy 2: Attempting TP order reconstruction from main account...")
+                    reconstructed_orders = await self._reconstruct_mirror_tp_orders_from_main(main_monitor, monitor_data)
+                    if reconstructed_orders:
+                        mirror_tp_orders.update(reconstructed_orders)
+                        logger.info(f"✅ Reconstructed {len(reconstructed_orders)} TP orders for mirror account")
+                
+                # Final validation and cleanup
+                if mirror_tp_orders:
+                    # Sort by TP number and validate consistency
+                    validated_orders = self._validate_and_sort_recovered_tp_orders(mirror_tp_orders)
+                    logger.info(f"✅ TP recovery successful: {len(validated_orders)} valid TP orders recovered")
+                    mirror_tp_orders = validated_orders
+                
+                if mirror_tp_orders:
+                    # Update monitor data with recovered orders
+                    monitor_data["tp_orders"] = mirror_tp_orders
+                    self.save_monitors_to_persistence(reason="tp_order_recovery")
+                    logger.info(f"✅ Successfully recovered and saved {len(mirror_tp_orders)} TP orders")
+                
+                return mirror_tp_orders
+                
+            except Exception as e:
+                logger.error(f"❌ Error during TP order recovery: {e}")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"❌ Critical error in TP order recovery: {e}")
+            return {}
+
+    def _is_tp_order_candidate(self, order: Dict, symbol: str, side: str) -> bool:
+        """Check if an order is a TP order candidate"""
+        try:
+            return (
+                order.get("reduceOnly") and 
+                order.get("symbol") == symbol and
+                order.get("orderType") == "Limit" and
+                order.get("side") != side  # TP orders are opposite side to position
+            )
+        except Exception as e:
+            logger.debug(f"Error checking TP candidate: {e}")
+            return False
+    
+    def _extract_tp_number_from_order(self, order_link_id: str, fallback_count: int) -> int:
+        """Extract TP number from order link ID with fallback"""
+        try:
+            # Try to find TP number in order link ID
+            for i in range(1, 5):
+                if f"TP{i}" in order_link_id.upper():
+                    return i
+            # Fallback to sequential assignment
+            return min(fallback_count + 1, 4)
+        except Exception:
+            return min(fallback_count + 1, 4)
+    
+    def _validate_and_sort_recovered_tp_orders(self, tp_orders: Dict) -> Dict:
+        """Validate and sort recovered TP orders by TP number"""
+        try:
+            # Convert to list, sort by TP number, convert back to dict
+            sorted_orders = {}
+            order_list = list(tp_orders.values())
+            order_list.sort(key=lambda x: x.get("tp_number", 99))
+            
+            for order in order_list:
+                order_id = order.get("order_id")
+                if order_id:
+                    sorted_orders[order_id] = order
+            
+            return sorted_orders
+        except Exception as e:
+            logger.error(f"Error validating recovered TP orders: {e}")
+            return tp_orders
+    
+    async def _reconstruct_mirror_tp_orders_from_main(self, main_monitor: Dict, mirror_monitor_data: Dict) -> Dict:
+        """Reconstruct mirror TP orders based on main account structure"""
+        try:
+            symbol = mirror_monitor_data.get("symbol")
+            side = mirror_monitor_data.get("side")
+            
+            main_tp_orders = self._ensure_tp_orders_dict(main_monitor)
+            if not main_tp_orders:
+                return {}
+            
+            logger.info(f"🔧 Reconstructing mirror TP orders from {len(main_tp_orders)} main orders...")
+            
+            # Note: This is a last resort - we can't create actual orders here
+            # We can only identify if orders should exist and alert about missing ones
+            reconstructed = {}
+            
+            for i, (order_id, main_tp) in enumerate(main_tp_orders.items()):
+                tp_num = main_tp.get("tp_number", i + 1)
+                
+                # Create a placeholder entry indicating this TP should exist
+                reconstructed[f"missing_tp_{tp_num}"] = {
+                    "order_id": f"missing_tp_{tp_num}",
+                    "order_link_id": f"MISSING_TP{tp_num}_{symbol}",
+                    "tp_number": tp_num,
+                    "quantity": main_tp.get("quantity", "0"),
+                    "price": main_tp.get("price", "0"),
+                    "status": "MISSING",
+                    "reconstructed": True,
+                    "needs_creation": True,
+                    "based_on_main": order_id
+                }
+            
+            logger.warning(f"⚠️ Identified {len(reconstructed)} missing TP orders that need creation")
+            return {}  # Return empty since we can't create orders here
+            
+        except Exception as e:
+            logger.error(f"Error reconstructing mirror TP orders: {e}")
+            return {}
+
+    async def _attempt_tp_order_recovery_main(self, monitor_data: Dict) -> Dict:
+        """
+        Attempt to recover missing TP orders for main account by reconstructing from exchange data
+        Similar to mirror account recovery but for main account scenarios
+        
+        Returns:
+            Dict: Recovered TP orders in dict format
+        """
+        try:
+            import time
+            
+            symbol = monitor_data.get("symbol")
+            side = monitor_data.get("side")
+            account_type = monitor_data.get("account_type", "main")
+            
+            if account_type != "main":
+                logger.debug(f"🔍 Main account TP recovery only applies to main accounts")
+                return {}
+            
+            logger.info(f"🔧 MAIN ACCOUNT TP Recovery: {symbol} {side}")
+            
+            # Get fresh TP orders from exchange for main account
+            try:
+                fresh_orders = await self._get_cached_open_orders(symbol, "main")
+                if not fresh_orders:
+                    logger.warning(f"⚠️ No orders found on exchange for main account")
+                    return {}
+                
+                logger.info(f"📊 Found {len(fresh_orders)} total orders on exchange for {symbol} (main)")
+                
+                # Filter for TP orders (reduceOnly limit orders with BOT_ prefix)
+                tp_orders_on_exchange = []
+                for order in fresh_orders:
+                    order_link_id = order.get("orderLinkId", "")
+                    is_reduce_only = order.get("reduceOnly")
+                    order_type = order.get("orderType")
+                    
+                    logger.debug(f"🔍 Checking order {order.get('orderId', 'N/A')[:8]}...: "
+                               f"reduceOnly={is_reduce_only}, orderType={order_type}, "
+                               f"orderLinkId={order_link_id}")
+                    
+                    # More flexible TP order detection
+                    is_tp_order = (
+                        is_reduce_only and 
+                        order_type == "Limit" and
+                        (order_link_id.startswith("BOT_") or 
+                         "TP" in order_link_id or
+                         order_link_id.startswith("MIR_"))  # Include mirror orders for debugging
+                    )
+                    
+                    if is_tp_order:
+                        tp_orders_on_exchange.append(order)
+                        logger.info(f"✅ Found TP order: {order.get('orderId', 'N/A')[:8]}... "
+                                  f"({order_link_id}) @ {order.get('price', 'N/A')}")
+                
+                logger.info(f"📊 Found {len(tp_orders_on_exchange)} TP orders on exchange for {symbol} (main)")
+                
+                if len(tp_orders_on_exchange) == 0:
+                    logger.warning(f"⚠️ No TP orders found on exchange for main account recovery")
+                    return {}
+                
+                # Reconstruct TP order data structure
+                recovered_tp_orders = {}
+                for i, order in enumerate(tp_orders_on_exchange):
+                    order_id = order.get("orderId")
+                    if not order_id:
+                        continue
+                    
+                    # Extract TP number from OrderLinkID or use sequence
+                    order_link_id = order.get("orderLinkId", "")
+                    tp_number = self._extract_tp_number_from_order_link_id(order_link_id) or (i + 1)
+                    
+                    recovered_order = {
+                        "order_id": order_id,
+                        "order_link_id": order_link_id,
+                        "price": Decimal(str(order.get("price", "0"))),
+                        "quantity": Decimal(str(order.get("qty", "0"))),
+                        "tp_level": tp_number,
+                        "status": order.get("orderStatus", "Unknown"),
+                        "recovered": True,
+                        "recovery_timestamp": time.time(),
+                        "account": "main"
+                    }
+                    
+                    recovered_tp_orders[order_id] = recovered_order
+                    logger.info(f"🔧 Recovered main TP{tp_number}: {order_id[:8]}... @ {recovered_order['price']} (Qty: {recovered_order['quantity']})")
+                
+                if recovered_tp_orders:
+                    # Update monitor data with recovered orders
+                    monitor_data["tp_orders"] = recovered_tp_orders
+                    self.save_monitors_to_persistence(reason="main_tp_order_recovery")
+                    logger.info(f"✅ Successfully recovered and saved {len(recovered_tp_orders)} main account TP orders")
+                    
+                return recovered_tp_orders
+                
+            except Exception as e:
+                logger.error(f"❌ Error fetching fresh orders for main account recovery: {e}")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"❌ Critical error in main account TP order recovery: {e}")
+            return {}
+
+    def _extract_tp_number_from_order_link_id(self, order_link_id: str) -> Optional[int]:
+        """
+        Extract TP number from OrderLinkID
+        
+        Examples:
+        - "BOT_TP1_BTCUSDT_123456" -> 1
+        - "MIR_TP2_ETHUSDT_789012" -> 2
+        
+        Returns:
+            Optional[int]: TP number if found, None otherwise
+        """
+        try:
+            import re
+            
+            # Pattern to match TP followed by a number
+            pattern = r'TP(\d+)'
+            match = re.search(pattern, order_link_id)
+            
+            if match:
+                tp_number = int(match.group(1))
+                # Validate TP number is in expected range (1-4)
+                if 1 <= tp_number <= 4:
+                    return tp_number
+            
+            return None
+            
+        except Exception as e:
+            logger.debug(f"Error extracting TP number from OrderLinkID '{order_link_id}': {e}")
+            return None
+
+    def _generate_unique_order_link_id(self, symbol: str, tp_num: int, account_type: str) -> str:
+        """
+        Generate unique OrderLinkID to prevent duplicates
+        
+        Args:
+            symbol: Trading symbol
+            tp_num: TP order number (1-4)
+            account_type: "main" or "mirror"
+            
+        Returns:
+            str: Unique OrderLinkID
+        """
+        import time
+        import random
+        
+        timestamp = int(time.time() * 1000)  # milliseconds
+        random_suffix = random.randint(1000, 9999)
+        
+        if account_type == "mirror":
+            prefix = "MIR"
+        else:
+            prefix = "BOT"
+            
+        # Format: PREFIX_TP_SYMBOL_TP_NUM_TIMESTAMP_RANDOM
+        order_link_id = f"{prefix}_TP{tp_num}_{symbol}_{timestamp}_{random_suffix}"
+        
+        # Ensure it's not too long (Bybit limit is 36 characters)
+        if len(order_link_id) > 36:
+            # Truncate symbol if needed
+            max_symbol_len = 36 - len(f"{prefix}_TP{tp_num}_{timestamp}_{random_suffix}")
+            if max_symbol_len > 0:
+                symbol_truncated = symbol[:max_symbol_len]
+                order_link_id = f"{prefix}_TP{tp_num}_{symbol_truncated}_{timestamp}_{random_suffix}"
+            else:
+                # Fallback to simpler format
+                order_link_id = f"{prefix}_TP{tp_num}_{timestamp}_{random_suffix}"
+        
+        logger.debug(f"🔗 Generated OrderLinkID: {order_link_id}")
+        return order_link_id
+
     async def _adjust_all_orders_for_partial_fill(self, monitor_data: Dict, current_size: Decimal):
         """
         Adjust all TP and SL orders when position is partially filled
@@ -2512,9 +3555,18 @@ class EnhancedTPSLManager:
         FIXED: Enhanced error handling and validation
         ENHANCED: Added atomic operation protection
         ENHANCED: Added comprehensive logging and diagnostics for TP rebalancing
+        ENHANCED: Added fresh order validation and unique OrderLinkID generation
         """
         try:
             # Enhanced validation with mirror account support
+            # Convert current_size to Decimal for consistency
+            if isinstance(current_size, str):
+                current_size = Decimal(current_size)
+            elif isinstance(current_size, float):
+                current_size = Decimal(str(current_size))
+            elif not isinstance(current_size, Decimal):
+                current_size = Decimal(str(current_size))
+            
             if not monitor_data or current_size <= 0:
                 logger.error(f"❌ TP REBALANCING FAILED: Invalid parameters - monitor_data={bool(monitor_data)}, current_size={current_size}")
                 return
@@ -2562,15 +3614,43 @@ class EnhancedTPSLManager:
             # Save to persistence after update
             self.save_monitors_to_persistence(reason="tp_rebalancing")
 
-            # Adjust each TP order using absolute calculation
-            # Ensure tp_orders is in dict format for backward compatibility
-            tp_orders = self._ensure_tp_orders_dict(monitor_data)
+            # ENHANCED: Comprehensive TP order integrity check for mirror accounts
+            # This prevents API errors and ensures orders exist across all phases
+            if account_type == "mirror":
+                logger.info(f"🔧 Performing comprehensive mirror TP integrity check...")
+                tp_orders = await self._ensure_mirror_tp_order_integrity(monitor_data)
+            else:
+                logger.info(f"🔍 Validating TP orders before rebalancing...")
+                tp_orders = await self._validate_and_refresh_tp_orders(monitor_data)
             
-            logger.info(f"📋 Found {len(tp_orders)} TP orders to rebalance")
+            logger.info(f"📋 Found {len(tp_orders)} validated TP orders to rebalance")
             if not tp_orders:
-                logger.warning(f"⚠️ No TP orders found for {symbol} {side} - skipping TP rebalancing")
-                # Still return success to avoid false error reporting
-                return
+                logger.warning(f"⚠️ No valid TP orders found for {symbol} {side} after validation")
+                
+                # ENHANCED: Attempt recovery for mirror accounts
+                if account_type == "mirror":
+                    logger.info(f"🔄 Attempting TP order recovery for mirror account...")
+                    recovered_tp_orders = await self._attempt_tp_order_recovery(monitor_data)
+                    
+                    if recovered_tp_orders:
+                        logger.info(f"✅ Recovered {len(recovered_tp_orders)} TP orders, proceeding with rebalancing")
+                        tp_orders = recovered_tp_orders
+                    else:
+                        logger.error(f"❌ TP order recovery failed for mirror account")
+                        await self._send_tp_rebalancing_alert(monitor_data, 0, 0, ["Mirror TP orders missing and recovery failed"], "FAILED")
+                        return
+                else:
+                    # ENHANCED: Attempt recovery for main accounts too
+                    logger.info(f"🔄 Attempting TP order recovery for main account...")
+                    recovered_tp_orders = await self._attempt_tp_order_recovery_main(monitor_data)
+                    
+                    if recovered_tp_orders:
+                        logger.info(f"✅ Recovered {len(recovered_tp_orders)} TP orders for main account, proceeding with rebalancing")
+                        tp_orders = recovered_tp_orders
+                    else:
+                        logger.error(f"❌ TP order recovery failed for main account")
+                        await self._send_tp_rebalancing_alert(monitor_data, 0, 0, ["Main account TP orders missing and recovery failed"], "FAILED")
+                        return
                 
             # Convert dict to list for iteration
             tp_orders_list = list(tp_orders.values()) if isinstance(tp_orders, dict) else []
@@ -2679,15 +3759,15 @@ class EnhancedTPSLManager:
                     # Get position index for hedge mode
                     position_idx = await get_correct_position_idx(monitor_data["symbol"], monitor_data["side"])
 
-                    # Track adjustment count for this order
-                    adjustment_count = tp_order.get("adjustment_count", 0) + 1
-                    adjusted_order_link_id = generate_adjusted_order_link_id(
-                        tp_order.get("order_link_id", f"TP_{i+1}"),
-                        adjustment_count
+                    # ENHANCED: Generate unique OrderLinkID to prevent duplicates
+                    unique_order_link_id = self._generate_unique_order_link_id(
+                        monitor_data["symbol"], 
+                        tp_num, 
+                        account_type
                     )
 
                     logger.info(f"📤 Placing new TP{tp_num} order: {order_side} {new_qty} @ {tp_order.get('price', '0')}")
-                    logger.info(f"🔗 New OrderLinkID: {adjusted_order_link_id}")
+                    logger.info(f"🔗 New OrderLinkID: {unique_order_link_id}")
 
                     # Prepare order parameters
                     order_params = {
@@ -2697,7 +3777,7 @@ class EnhancedTPSLManager:
                         "qty": str(new_qty),
                         "price": str(tp_order.get("price", "0")),
                         "reduce_only": True,
-                        "order_link_id": adjusted_order_link_id,
+                        "order_link_id": unique_order_link_id,
                         "time_in_force": "GTC",
                         "position_idx": position_idx  # Add position index for hedge mode
                     }
@@ -2712,8 +3792,9 @@ class EnhancedTPSLManager:
                         tp_order["order_id"] = new_order_id
                         tp_order["original_quantity"] = tp_order.get("original_quantity", tp_order.get("quantity", new_qty))  # Keep track of original
                         tp_order["quantity"] = new_qty
-                        tp_order["order_link_id"] = adjusted_order_link_id
-                        tp_order["adjustment_count"] = adjustment_count
+                        tp_order["order_link_id"] = unique_order_link_id
+                        import time
+                        tp_order["rebalance_timestamp"] = int(time.time())  # Track when rebalanced
                         tp_order["tp_percentage"] = tp_percentage  # Track the percentage for this TP
                         
                         logger.info(f"✅ TP{tp_num} REBALANCED SUCCESSFULLY: {current_qty} → {new_qty} ({tp_percentage}% of {current_size})")
@@ -2721,7 +3802,16 @@ class EnhancedTPSLManager:
                         tp_rebalance_results.append(f"TP{tp_num}: {current_qty}→{new_qty} ✅")
                     else:
                         logger.error(f"❌ TP{tp_num} PLACEMENT FAILED: {placement_message}")
-                        tp_rebalance_results.append(f"TP{tp_num}: FAILED ({placement_message[:30]}...)")
+                        
+                        # ENHANCED: Better error categorization for failed placements
+                        if "No orderId in result" in placement_message:
+                            tp_rebalance_results.append(f"TP{tp_num}: FAILED (No orderId in result: None...)")
+                        elif "Missing some parameters" in placement_message:
+                            tp_rebalance_results.append(f"TP{tp_num}: FAILED (API parameter error)")
+                        elif "Mirror client" in placement_message:
+                            tp_rebalance_results.append(f"TP{tp_num}: FAILED (Mirror client unavailable)")
+                        else:
+                            tp_rebalance_results.append(f"TP{tp_num}: FAILED ({placement_message[:30]}...)")
                 
                 else:
                     logger.error(f"❌ TP{tp_num} SKIPPED: Cancellation failed")
@@ -2764,121 +3854,310 @@ class EnhancedTPSLManager:
         """
         Adjust SL order quantity to match remaining position size
         Enhanced: Now adjusts SL after any TP hit, not just TP1
+        ENHANCED V2: Includes comprehensive validation and unique OrderLinkID generation
         """
         if not monitor_data.get("sl_order"):
             return
 
         try:
-            sl_order = monitor_data["sl_order"]
+            symbol = monitor_data["symbol"]
             account_type = monitor_data.get("account_type", "main")
             is_mirror_account = account_type == "mirror"
-
-            # Cancel existing SL - use account-aware cancellation
-            cancel_success = False
-            if is_mirror_account:
-                cancel_success = await self._cancel_order_mirror(
-                    monitor_data["symbol"],
-                    sl_order["order_id"]
-                )
-            else:
-                cancel_success = await self._cancel_order_main(
-                    monitor_data["symbol"],
-                    sl_order["order_id"]
-                )
             
-            if cancel_success:
-                # Validate and adjust quantity to step size
-                try:
-                    instrument_info = await get_instrument_info(monitor_data["symbol"])
-                    if instrument_info:
-                        lot_size_filter = instrument_info.get("lotSizeFilter", {})
-                        qty_step = Decimal(lot_size_filter.get("qtyStep", "1"))
-                        min_order_qty = Decimal(lot_size_filter.get("minOrderQty", "0.001"))
+            logger.info(f"🔧 SL Quantity Adjustment for {symbol} ({account_type} account)")
+            logger.info(f"   Target quantity: {new_quantity}")
+            
+            # ENHANCED: Validate existing SL order against exchange before processing
+            sl_order = await self._validate_and_refresh_sl_order(monitor_data)
+            if not sl_order:
+                logger.warning(f"⚠️ No valid SL order found after validation for {symbol}")
+                return
+            
+            logger.info(f"🔍 Validated SL order: {sl_order['order_id'][:8]}...")
 
-                        # Adjust quantity to step size
-                        adjusted_quantity = value_adjusted_to_step(new_quantity, qty_step)
+            # ENHANCED: Cancel existing SL with smart error handling
+            cancel_success, cancel_message = await self._cancel_sl_order_with_retry(
+                symbol, sl_order["order_id"], account_type
+            )
+            
+            if not cancel_success:
+                logger.error(f"❌ Failed to cancel SL order: {cancel_message}")
+                return
+                
+            logger.info(f"✅ {cancel_message}")
+            
+            # Validate and adjust quantity to step size
+            try:
+                instrument_info = await get_instrument_info(symbol)
+                if instrument_info:
+                    lot_size_filter = instrument_info.get("lotSizeFilter", {})
+                    qty_step = Decimal(lot_size_filter.get("qtyStep", "1"))
+                    min_order_qty = Decimal(lot_size_filter.get("minOrderQty", "0.001"))
 
-                        # Ensure minimum quantity
-                        if adjusted_quantity < min_order_qty:
-                            adjusted_quantity = min_order_qty
+                    # Adjust quantity to step size
+                    adjusted_quantity = value_adjusted_to_step(new_quantity, qty_step)
 
-                        logger.info(f"🔄 Adjusting SL quantity from {sl_order['quantity']} to {adjusted_quantity} (raw: {new_quantity})")
-                    else:
-                        # Fallback: round to reasonable precision
-                        adjusted_quantity = new_quantity.quantize(Decimal("0.1"))
-                        logger.info(f"🔄 Adjusting SL quantity from {sl_order['quantity']} to {adjusted_quantity} (fallback rounding)")
-                except Exception as e:
-                    logger.error(f"Error getting instrument info for SL adjustment: {e}")
+                    # Ensure minimum quantity
+                    if adjusted_quantity < min_order_qty:
+                        adjusted_quantity = min_order_qty
+
+                    logger.info(f"🔄 Adjusting SL quantity from {sl_order['quantity']} to {adjusted_quantity} (raw: {new_quantity})")
+                else:
                     # Fallback: round to reasonable precision
                     adjusted_quantity = new_quantity.quantize(Decimal("0.1"))
-                    logger.info(f"🔄 Adjusting SL quantity from {sl_order['quantity']} to {adjusted_quantity} (fallback)")
+                    logger.info(f"🔄 Adjusting SL quantity from {sl_order['quantity']} to {adjusted_quantity} (fallback rounding)")
+            except Exception as e:
+                logger.error(f"Error getting instrument info for SL adjustment: {e}")
+                # Fallback: round to reasonable precision
+                adjusted_quantity = new_quantity.quantize(Decimal("0.1"))
+                logger.info(f"🔄 Adjusting SL quantity from {sl_order['quantity']} to {adjusted_quantity} (fallback)")
 
-                # Place new SL with updated quantity
-                side = monitor_data["side"]
-                sl_side = "Sell" if side == "Buy" else "Buy"
+            # Place new SL with updated quantity
+            side = monitor_data["side"]
+            sl_side = "Sell" if side == "Buy" else "Buy"
 
-                # Get position index for hedge mode
-                position_idx = await get_correct_position_idx(monitor_data["symbol"], side)
+            # Get position index for hedge mode
+            position_idx = await get_correct_position_idx(symbol, side)
 
-                # Track adjustment count for SL order
-                adjustment_count = sl_order.get("adjustment_count", 0) + 1
-                adjusted_order_link_id = generate_adjusted_order_link_id(
-                    sl_order["order_link_id"],
-                    adjustment_count
-                )
+            # ENHANCED: Generate unique OrderLinkID to prevent duplicates
+            unique_order_link_id = self._generate_unique_order_link_id(symbol, "SL", account_type)
+            logger.info(f"🔗 Generated unique SL OrderLinkID: {unique_order_link_id}")
 
-                # Prepare SL order parameters
-                # Calculate trigger direction for mirror account SL orders
-                trigger_direction = None
-                if is_mirror_account:
-                    current_price = await get_current_price(monitor_data["symbol"])
-                    if current_price:
-                        trigger_price_float = float(sl_order["price"])
-                        if sl_side == "Buy":  # Closing short position
-                            trigger_direction = 2 if trigger_price_float < current_price else 1
-                        else:  # Closing long position  
-                            trigger_direction = 1 if trigger_price_float > current_price else 2
-                    else:
-                        # Fallback trigger direction
-                        trigger_direction = 1 if sl_side == "Buy" else 2
-
-                sl_order_params = {
-                    "symbol": monitor_data["symbol"],
-                    "side": sl_side,
-                    "order_type": "Market",
-                    "qty": str(adjusted_quantity),
-                    "trigger_price": str(sl_order["price"]),
-                    "reduce_only": True,
-                    "order_link_id": adjusted_order_link_id,
-                    "position_idx": position_idx,  # Add position index for hedge mode
-                    "stop_order_type": "StopLoss"
-                }
-                
-                # Add trigger direction and trigger by for mirror accounts
-                if is_mirror_account and trigger_direction is not None:
-                    sl_order_params["trigger_direction"] = trigger_direction
-                    sl_order_params["trigger_by"] = "LastPrice"
-                
-                # Place SL order using account-specific method
-                if is_mirror_account:
-                    sl_result = await self._place_order_mirror(**sl_order_params)
+            # Prepare SL order parameters
+            # Calculate trigger direction for mirror account SL orders
+            trigger_direction = None
+            if is_mirror_account:
+                current_price = await get_current_price(symbol)
+                if current_price:
+                    trigger_price_float = float(sl_order["price"])
+                    if sl_side == "Buy":  # Closing short position
+                        trigger_direction = 2 if trigger_price_float < current_price else 1
+                    else:  # Closing long position  
+                        trigger_direction = 1 if trigger_price_float > current_price else 2
                 else:
-                    sl_result = await place_order_with_retry(**sl_order_params)
+                    # Fallback trigger direction
+                    trigger_direction = 1 if sl_side == "Buy" else 2
 
-                if sl_result and sl_result.get("orderId"):
-                    symbol = monitor_data['symbol']
-                    side = monitor_data['side']
-                    price = sl_order['price']
-                    logger.info(f"✅ SL adjusted: {symbol} {side} - New qty: {adjusted_quantity}, Price: {price}")
-                    # Update SL order info
-                    monitor_data["sl_order"]["order_id"] = sl_result["orderId"]
-                    monitor_data["sl_order"]["quantity"] = new_quantity
-                    monitor_data["sl_order"]["order_link_id"] = adjusted_order_link_id
-                    monitor_data["sl_order"]["adjustment_count"] = adjustment_count
-                    logger.info("✅ SL quantity adjusted successfully")
+            sl_order_params = {
+                "symbol": symbol,
+                "side": sl_side,
+                "order_type": "Market",
+                "qty": str(adjusted_quantity),
+                "trigger_price": str(sl_order["price"]),
+                "reduce_only": True,
+                "order_link_id": unique_order_link_id,
+                "position_idx": position_idx,
+                "stop_order_type": "StopLoss"
+            }
+            
+            # Add trigger direction and trigger by for mirror accounts
+            if is_mirror_account and trigger_direction is not None:
+                sl_order_params["trigger_direction"] = trigger_direction
+                sl_order_params["trigger_by"] = "LastPrice"
+            
+            logger.info(f"📤 Placing adjusted SL order: {sl_side} {adjusted_quantity} @ {sl_order['price']}")
+            
+            # Place SL order using account-specific method
+            if is_mirror_account:
+                sl_result = await self._place_order_mirror(**sl_order_params)
+            else:
+                sl_result = await place_order_with_retry(**sl_order_params)
+
+            if sl_result and sl_result.get("orderId"):
+                new_sl_id = sl_result["orderId"]
+                logger.info(f"✅ SL adjusted successfully: {symbol} {side} - New qty: {adjusted_quantity}, Price: {sl_order['price']}")
+                
+                # Update SL order info in monitor data
+                monitor_data["sl_order"]["order_id"] = new_sl_id
+                monitor_data["sl_order"]["quantity"] = adjusted_quantity
+                monitor_data["sl_order"]["order_link_id"] = unique_order_link_id
+                monitor_data["sl_order"]["adjusted_for_position"] = True
+                monitor_data["sl_order"]["adjustment_timestamp"] = time.time()
+                
+                logger.info("✅ SL quantity adjustment completed successfully")
+            else:
+                logger.error(f"❌ Failed to place adjusted SL order for {symbol} {side}")
+                # Try to restore old SL order as fallback
+                await self._restore_sl_order_fallback(monitor_data, sl_order)
 
         except Exception as e:
             logger.error(f"Error adjusting SL quantity: {e}")
+
+    async def _validate_and_refresh_sl_order(self, monitor_data: Dict) -> Optional[Dict]:
+        """
+        Validate existing SL order against exchange data and refresh if stale
+        Prevents API errors when trying to cancel non-existent orders
+        """
+        try:
+            sl_order = monitor_data.get("sl_order")
+            if not sl_order or not sl_order.get("order_id"):
+                return None
+                
+            symbol = monitor_data["symbol"]
+            account_type = monitor_data.get("account_type", "main")
+            is_mirror_account = account_type == "mirror"
+            
+            logger.info(f"🔍 Validating SL order for {symbol} ({account_type.upper()})")
+            
+            # Get fresh SL orders from exchange
+            if is_mirror_account:
+                exchange_orders = await self._get_cached_open_orders(symbol, "mirror")
+            else:
+                exchange_orders = await self._get_cached_open_orders(symbol, "main")
+            
+            if not exchange_orders:
+                logger.warning(f"⚠️ Could not fetch exchange orders for validation")
+                return sl_order  # Return original if validation fails
+            
+            # Filter for SL orders 
+            sl_orders_on_exchange = []
+            for order in exchange_orders:
+                if (order.get("stopOrderType") == "StopLoss" or 
+                    order.get("orderType") == "StopLoss" or
+                    "SL" in order.get("orderLinkId", "")):
+                    sl_orders_on_exchange.append(order)
+            
+            logger.info(f"📊 Found {len(sl_orders_on_exchange)} SL orders on exchange for {symbol} ({account_type})")
+            
+            # Check if our SL order still exists
+            current_sl_id = sl_order["order_id"]
+            found_on_exchange = False
+            
+            for exchange_order in sl_orders_on_exchange:
+                # ENHANCED: Use type-agnostic order ID matching for SL orders
+                exchange_order_id = exchange_order.get("orderId")
+                current_sl_id_str = str(current_sl_id)
+                order_match = (exchange_order_id == current_sl_id or 
+                              str(exchange_order_id) == current_sl_id_str or
+                              str(exchange_order_id) == str(current_sl_id))
+                
+                if order_match:
+                    found_on_exchange = True
+                    logger.info(f"✅ SL order {current_sl_id[:8]}... validated (found on exchange)")
+                    
+                    # Update with fresh data from exchange
+                    sl_order.update({
+                        "price": Decimal(str(exchange_order.get("triggerPrice", sl_order.get("price", "0")))),
+                        "quantity": Decimal(str(exchange_order.get("qty", sl_order.get("quantity", "0")))),
+                        "status": exchange_order.get("orderStatus", "Unknown"),
+                        "validated_at": time.time()
+                    })
+                    break
+            
+            if not found_on_exchange:
+                logger.warning(f"🗑️ SL order {current_sl_id[:8]}... not found on exchange (stale)")
+                # Remove stale SL order from monitor data
+                monitor_data["sl_order"] = None
+                return None
+            
+            return sl_order
+            
+        except Exception as e:
+            logger.error(f"Error validating SL order: {e}")
+            # Return original order if validation fails
+            return monitor_data.get("sl_order")
+
+    async def _cancel_sl_order_with_retry(self, symbol: str, order_id: str, account_type: str) -> Tuple[bool, str]:
+        """
+        Cancel SL order with enhanced error handling for stale orders
+        Returns (success, message) tuple
+        """
+        try:
+            is_mirror_account = account_type == "mirror"
+            account_name = "MIRROR" if is_mirror_account else "MAIN"
+            
+            logger.info(f"🗑️ Cancelling {account_name} SL order: {order_id[:8]}...")
+            
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    if is_mirror_account:
+                        cancel_success = await self._cancel_order_mirror(symbol, order_id)
+                    else:
+                        cancel_success = await self._cancel_order_main(symbol, order_id)
+                    
+                    if cancel_success:
+                        return True, f"{account_name} SL order cancelled successfully"
+                    else:
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(1 * (attempt + 1))  # Progressive delay
+                        continue
+                        
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    
+                    # ENHANCED: Handle common API errors that indicate order is already gone
+                    if ("order not exists" in error_msg or 
+                        "order not found" in error_msg or
+                        "too late to cancel" in error_msg or
+                        "110001" in error_msg):
+                        logger.warning(f"🔄 SL order {order_id[:8]}... already cancelled or filled")
+                        return True, f"{account_name} SL order already cancelled/filled (ErrCode: 110001 handled)"
+                    
+                    if attempt < max_retries - 1:
+                        logger.warning(f"⚠️ Cancel attempt {attempt + 1} failed: {e}")
+                        await asyncio.sleep(2 * (attempt + 1))
+                    else:
+                        logger.error(f"❌ Final cancel attempt failed: {e}")
+                        return False, f"Failed to cancel {account_name} SL order after {max_retries} attempts: {e}"
+            
+            return False, f"Failed to cancel {account_name} SL order after {max_retries} attempts"
+            
+        except Exception as e:
+            logger.error(f"Error in SL order cancellation: {e}")
+            return False, f"Exception during SL cancellation: {e}"
+
+    async def _restore_sl_order_fallback(self, monitor_data: Dict, original_sl_order: Dict):
+        """
+        Attempt to restore the original SL order if new placement fails
+        """
+        try:
+            logger.warning(f"🔄 Attempting to restore original SL order as fallback")
+            
+            symbol = monitor_data["symbol"]
+            side = monitor_data["side"]
+            account_type = monitor_data.get("account_type", "main")
+            is_mirror_account = account_type == "mirror"
+            
+            sl_side = "Sell" if side == "Buy" else "Buy"
+            position_idx = await get_correct_position_idx(symbol, side)
+            
+            # Generate new OrderLinkID for restoration
+            restore_order_link_id = self._generate_unique_order_link_id(symbol, "SL_RESTORE", account_type)
+            
+            sl_order_params = {
+                "symbol": symbol,
+                "side": sl_side,
+                "order_type": "Market",
+                "qty": str(original_sl_order["quantity"]),
+                "trigger_price": str(original_sl_order["price"]),
+                "reduce_only": True,
+                "order_link_id": restore_order_link_id,
+                "position_idx": position_idx,
+                "stop_order_type": "StopLoss"
+            }
+            
+            # Place restoration order
+            if is_mirror_account:
+                sl_result = await self._place_order_mirror(**sl_order_params)
+            else:
+                sl_result = await place_order_with_retry(**sl_order_params)
+            
+            if sl_result and sl_result.get("orderId"):
+                logger.info(f"✅ Successfully restored SL order: {sl_result['orderId'][:8]}...")
+                # Update monitor data with restored order
+                monitor_data["sl_order"] = {
+                    **original_sl_order,
+                    "order_id": sl_result["orderId"],
+                    "order_link_id": restore_order_link_id,
+                    "restored": True,
+                    "restoration_timestamp": time.time()
+                }
+            else:
+                logger.error(f"❌ Failed to restore SL order")
+                
+        except Exception as e:
+            logger.error(f"Error in SL order restoration: {e}")
 
     async def _calculate_total_exposure(self, monitor_data: Dict, current_position_size: Decimal) -> Decimal:
         """
@@ -3278,8 +4557,14 @@ class EnhancedTPSLManager:
             for order_id, tp_order in tp_orders.items():
                 # order_id = tp_order["order_id"]  # Now comes from iteration
 
-                # Check if order is no longer in open orders (potentially filled)
-                order_found = any(order.get("orderId") == order_id for order in open_orders)
+                # Check if order is no longer in open orders (potentially filled) - ENHANCED validation
+                order_id_str = str(order_id)
+                order_found = any(
+                    order.get("orderId") == order_id or 
+                    str(order.get("orderId")) == order_id_str or
+                    str(order.get("orderId")) == str(order_id)
+                    for order in open_orders
+                )
 
                 if not order_found and tp_order.get("status") != "FILLED":
                     # Order not found in open orders but not marked as filled
@@ -3306,8 +4591,14 @@ class EnhancedTPSLManager:
             if sl_order and sl_order.get("status") != "FILLED":
                 sl_order_id = sl_order.get("order_id")
                 if sl_order_id:
-                    # Check if SL order is still in open orders
-                    sl_found = any(order.get("orderId") == sl_order_id for order in open_orders)
+                    # Check if SL order is still in open orders - ENHANCED validation
+                    sl_order_id_str = str(sl_order_id)
+                    sl_found = any(
+                        order.get("orderId") == sl_order_id or 
+                        str(order.get("orderId")) == sl_order_id_str or
+                        str(order.get("orderId")) == str(sl_order_id)
+                        for order in open_orders
+                    )
                     
                     if not sl_found:
                         # SL order not found - verify if it was filled
@@ -3321,6 +4612,9 @@ class EnhancedTPSLManager:
                             sl_order["status"] = "FILLED"
                             sl_order["filled_qty"] = filled_qty
                             sl_order["fill_time"] = time.time()
+                            
+                            # CRITICAL: Send immediate SL hit alert for both main and mirror accounts
+                            await self._send_sl_hit_alert(monitor_data)
                             
                             # Pre-emptively cancel all remaining orders
                             await self._emergency_cancel_all_orders(symbol, side, monitor_data)
@@ -3741,14 +5035,30 @@ All take profit targets have been achieved! 🎯"""
                     logger.debug(f"🚀 Cache hit: Returning {len(all_positions)} positions for ALL symbols ({account_type})")
                     return all_positions
                 else:
-                    # Filter by symbol
+                    # Filter by symbol and cache the individual result to prevent future cache misses
                     filtered_positions = [p for p in all_positions if p.get("symbol") == symbol]
-                    logger.debug(f"🚀 Cache hit: Returning {len(filtered_positions)} positions for {symbol} ({account_type})")
+                    
+                    # CRITICAL FIX: Cache the individual symbol result to prevent constant refreshes
+                    self._monitoring_cache[cache_key] = {
+                        'data': filtered_positions,
+                        'timestamp': cache_entry['timestamp']  # Use same timestamp as ALL data
+                    }
+                    
+                    logger.debug(f"🚀 Cache hit: Returning {len(filtered_positions)} positions for {symbol} ({account_type}) + cached individual result")
                     return filtered_positions
         
-        # CRITICAL FIX: If cache is empty, refresh it immediately
-        logger.info(f"⚡ Position cache miss for {symbol} ({account_type}) - triggering immediate refresh")
-        await self._refresh_monitoring_cache()
+        # CRITICAL FIX: If cache is empty, refresh it immediately but avoid duplicate refreshes
+        # Check if a refresh is already in progress or recent
+        if hasattr(self, '_cache_refresh_in_progress') and self._cache_refresh_in_progress:
+            logger.debug(f"⏳ Position cache refresh already in progress for {symbol} ({account_type}) - waiting...")
+            # Wait for refresh to complete by attempting to acquire and release the lock
+            async with self._cache_refresh_lock:
+                pass  # Just wait for the lock to be available
+        elif hasattr(self, '_last_cache_refresh') and time.time() - self._last_cache_refresh < 5:
+            logger.debug(f"⏭️ Recent position cache refresh for {symbol} ({account_type}) - using stale data if available")
+        else:
+            logger.info(f"⚡ Position cache miss for {symbol} ({account_type}) - triggering immediate refresh")
+            await self._refresh_monitoring_cache()
         
         # Try again after refresh
         if all_positions_key in self._monitoring_cache:
@@ -3759,9 +5069,16 @@ All take profit targets have been achieved! 🎯"""
                 logger.info(f"✅ Position cache populated: Returning {len(all_positions)} positions for ALL symbols ({account_type})")
                 return all_positions
             else:
-                # Filter by symbol
+                # Filter by symbol and cache the individual result to prevent future cache misses
                 filtered_positions = [p for p in all_positions if p.get("symbol") == symbol]
-                logger.info(f"✅ Position cache populated: Returning {len(filtered_positions)} positions for {symbol} ({account_type})")
+                
+                # CRITICAL FIX: Cache the individual symbol result to prevent constant refreshes
+                self._monitoring_cache[cache_key] = {
+                    'data': filtered_positions,
+                    'timestamp': cache_entry['timestamp']  # Use same timestamp as ALL data
+                }
+                
+                logger.info(f"✅ Position cache populated: Returning {len(filtered_positions)} positions for {symbol} ({account_type}) + cached individual result")
                 return filtered_positions
         
         # If still no data after refresh, return empty list
@@ -3794,14 +5111,30 @@ All take profit targets have been achieved! 🎯"""
                     logger.debug(f"🚀 Cache hit: Returning {len(all_orders)} orders for ALL symbols ({account_type})")
                     return all_orders
                 else:
-                    # Filter by symbol
+                    # Filter by symbol and cache the individual result to prevent future cache misses
                     filtered_orders = [o for o in all_orders if o.get("symbol") == symbol]
-                    logger.debug(f"🚀 Cache hit: Returning {len(filtered_orders)} orders for {symbol} ({account_type})")
+                    
+                    # CRITICAL FIX: Cache the individual symbol result to prevent constant refreshes
+                    self._monitoring_cache[cache_key] = {
+                        'data': filtered_orders,
+                        'timestamp': cache_entry['timestamp']  # Use same timestamp as ALL data
+                    }
+                    
+                    logger.debug(f"🚀 Cache hit: Returning {len(filtered_orders)} orders for {symbol} ({account_type}) + cached individual result")
                     return filtered_orders
         
-        # CRITICAL FIX: If cache is empty, refresh it immediately
-        logger.info(f"⚡ Cache miss for {symbol} ({account_type}) - triggering immediate refresh")
-        await self._refresh_monitoring_cache()
+        # CRITICAL FIX: If cache is empty, refresh it immediately but avoid duplicate refreshes
+        # Check if a refresh is already in progress or recent
+        if hasattr(self, '_cache_refresh_in_progress') and self._cache_refresh_in_progress:
+            logger.debug(f"⏳ Cache refresh already in progress for {symbol} ({account_type}) - waiting...")
+            # Wait for refresh to complete by attempting to acquire and release the lock
+            async with self._cache_refresh_lock:
+                pass  # Just wait for the lock to be available
+        elif hasattr(self, '_last_cache_refresh') and time.time() - self._last_cache_refresh < 5:
+            logger.debug(f"⏭️ Recent cache refresh for {symbol} ({account_type}) - using stale data if available")
+        else:
+            logger.info(f"⚡ Cache miss for {symbol} ({account_type}) - triggering immediate refresh")
+            await self._refresh_monitoring_cache()
         
         # Try again after refresh
         if all_orders_key in self._monitoring_cache:
@@ -3812,9 +5145,16 @@ All take profit targets have been achieved! 🎯"""
                 logger.info(f"✅ Cache populated: Returning {len(all_orders)} orders for ALL symbols ({account_type})")
                 return all_orders
             else:
-                # Filter by symbol
+                # Filter by symbol and cache the individual result to prevent future cache misses
                 filtered_orders = [o for o in all_orders if o.get("symbol") == symbol]
-                logger.info(f"✅ Cache populated: Returning {len(filtered_orders)} orders for {symbol} ({account_type})")
+                
+                # CRITICAL FIX: Cache the individual symbol result to prevent constant refreshes
+                self._monitoring_cache[cache_key] = {
+                    'data': filtered_orders,
+                    'timestamp': cache_entry['timestamp']  # Use same timestamp as ALL data
+                }
+                
+                logger.info(f"✅ Cache populated: Returning {len(filtered_orders)} orders for {symbol} ({account_type}) + cached individual result")
                 return filtered_orders
         
         # If still no data after refresh, return empty list
@@ -3825,42 +5165,79 @@ All take profit targets have been achieved! 🎯"""
         """Refresh monitoring cache with fresh data from exchange - PERFORMANCE CRITICAL"""
         current_time = time.time()
         
+        # PERFORMANCE: Check if refresh is already in progress
+        if self._cache_refresh_in_progress:
+            logger.debug("⏳ Cache refresh already in progress - waiting for completion...")
+            # Wait for the lock to be released (meaning refresh is done)
+            async with self._cache_refresh_lock:
+                logger.debug("✅ Cache refresh completed by another task")
+                return
+        
         # Don't refresh too frequently - minimum 15 seconds between refreshes
-        if hasattr(self, '_last_cache_refresh') and current_time - self._last_cache_refresh < 15:
-            logger.debug(f"⏭️ Cache refresh skipped - last refresh {current_time - self._last_cache_refresh:.1f}s ago")
+        # PERFORMANCE: Use 20 seconds during heavy monitoring to reduce API load
+        min_refresh_interval = 20 if len(self.monitor_tasks) > 50 else 15
+        if hasattr(self, '_last_cache_refresh') and current_time - self._last_cache_refresh < min_refresh_interval:
+            logger.debug(f"⏭️ Cache refresh skipped - last refresh {current_time - self._last_cache_refresh:.1f}s ago (min: {min_refresh_interval}s)")
             return
         
+        # Acquire lock to prevent concurrent refreshes
+        async with self._cache_refresh_lock:
+            # Double-check the refresh time inside the lock
+            if hasattr(self, '_last_cache_refresh') and time.time() - self._last_cache_refresh < 15:
+                logger.debug("⏭️ Cache refresh skipped (double-check) - another task just refreshed")
+                return
+            
+            self._cache_refresh_in_progress = True
+        
         try:
-            logger.info("🔄 CRITICAL: Refreshing monitoring cache to reduce API calls...")
+            logger.info("🔄 PERFORMANCE CRITICAL: Refreshing monitoring cache with parallel API calls...")
             refresh_start = time.time()
             
             # Import at call time to avoid circular imports
             from clients.bybit_helpers import get_all_positions, get_all_open_orders
             
-            # Get main account data in parallel
-            logger.debug("📊 Fetching main account positions and orders...")
-            main_positions = await get_all_positions()
-            main_orders = await get_all_open_orders()
-            
-            # Cache main account data
-            self._monitoring_cache["main_ALL_positions"] = {
-                'data': main_positions,
-                'timestamp': current_time
-            }
-            self._monitoring_cache["main_ALL_orders"] = {
-                'data': main_orders,
-                'timestamp': current_time
-            }
-            
-            # Get mirror account data if enabled
+            # Check if mirror trading is enabled
             import os
-            if os.getenv("ENABLE_MIRROR_TRADING", "false").lower() == "true":
-                logger.debug("📊 Fetching mirror account positions and orders...")
-                from execution.mirror_trader import bybit_client_2
-                mirror_positions = await get_all_positions(client=bybit_client_2)
-                mirror_orders = await get_all_open_orders(client=bybit_client_2)
+            mirror_enabled = os.getenv("ENABLE_MIRROR_TRADING", "false").lower() == "true"
+            
+            if mirror_enabled and self._mirror_client:
+                logger.debug("📊 Fetching ALL account data in parallel (main + mirror)...")
                 
-                # Cache mirror account data
+                # CRITICAL FIX: Use self._mirror_client instead of importing bybit_client_2
+                # This ensures we use the same client instance that's available in the manager
+                
+                # PERFORMANCE FIX: Execute all 4 API calls in parallel
+                main_positions, main_orders, mirror_positions, mirror_orders = await asyncio.gather(
+                    get_all_positions(),
+                    get_all_open_orders(),
+                    get_all_positions(client=self._mirror_client),
+                    get_all_open_orders(client=self._mirror_client),
+                    return_exceptions=True
+                )
+                
+                # Handle potential exceptions
+                if isinstance(main_positions, Exception):
+                    logger.error(f"Main positions fetch failed: {main_positions}")
+                    main_positions = []
+                if isinstance(main_orders, Exception):
+                    logger.error(f"Main orders fetch failed: {main_orders}")
+                    main_orders = []
+                if isinstance(mirror_positions, Exception):
+                    logger.error(f"Mirror positions fetch failed: {mirror_positions}")
+                    mirror_positions = []
+                if isinstance(mirror_orders, Exception):
+                    logger.error(f"Mirror orders fetch failed: {mirror_orders}")
+                    mirror_orders = []
+                
+                # Cache all data
+                self._monitoring_cache["main_ALL_positions"] = {
+                    'data': main_positions,
+                    'timestamp': current_time
+                }
+                self._monitoring_cache["main_ALL_orders"] = {
+                    'data': main_orders,
+                    'timestamp': current_time
+                }
                 self._monitoring_cache["mirror_ALL_positions"] = {
                     'data': mirror_positions,
                     'timestamp': current_time
@@ -3869,9 +5246,37 @@ All take profit targets have been achieved! 🎯"""
                     'data': mirror_orders,
                     'timestamp': current_time
                 }
-                logger.info(f"✅ Cache refreshed: {len(main_positions)} main pos, {len(main_orders)} main orders, {len(mirror_positions)} mirror pos, {len(mirror_orders)} mirror orders")
+                
+                logger.info(f"✅ Parallel cache refresh: {len(main_positions)} main pos, {len(main_orders)} main orders, {len(mirror_positions)} mirror pos, {len(mirror_orders)} mirror orders")
             else:
-                logger.info(f"✅ Cache refreshed: {len(main_positions)} main positions, {len(main_orders)} main orders (mirror disabled)")
+                logger.debug("📊 Fetching main account data in parallel (mirror disabled)...")
+                
+                # PERFORMANCE FIX: Execute main account API calls in parallel
+                main_positions, main_orders = await asyncio.gather(
+                    get_all_positions(),
+                    get_all_open_orders(),
+                    return_exceptions=True
+                )
+                
+                # Handle potential exceptions
+                if isinstance(main_positions, Exception):
+                    logger.error(f"Main positions fetch failed: {main_positions}")
+                    main_positions = []
+                if isinstance(main_orders, Exception):
+                    logger.error(f"Main orders fetch failed: {main_orders}")
+                    main_orders = []
+                
+                # Cache main account data
+                self._monitoring_cache["main_ALL_positions"] = {
+                    'data': main_positions,
+                    'timestamp': current_time
+                }
+                self._monitoring_cache["main_ALL_orders"] = {
+                    'data': main_orders,
+                    'timestamp': current_time
+                }
+                
+                logger.info(f"✅ Parallel cache refresh: {len(main_positions)} main positions, {len(main_orders)} main orders (mirror disabled)")
             
             self._last_cache_refresh = current_time
             refresh_time = time.time() - refresh_start
@@ -3881,6 +5286,9 @@ All take profit targets have been achieved! 🎯"""
             logger.error(f"❌ CRITICAL ERROR refreshing monitoring cache: {e}")
             import traceback
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
+        finally:
+            # PERFORMANCE: Always reset the flag
+            self._cache_refresh_in_progress = False
 
     def _cleanup_monitoring_cache(self):
         """Clean up expired monitoring cache entries"""
@@ -4011,6 +5419,9 @@ All take profit targets have been achieved! 🎯"""
             # CRITICAL FIX: Clean up mirror account orders
             await self._cleanup_mirror_position_orders(symbol, side)
 
+            # CRITICAL: Reset all stale data to prevent contamination of next trade
+            await self._reset_stale_monitor_data(monitor_data, symbol, side, account_type)
+            
             # Mark cleanup as completed
             monitor_data["cleanup_completed"] = True
             monitor_data["phase"] = "CLOSED"
@@ -4088,6 +5499,140 @@ All take profit targets have been achieved! 🎯"""
 
         except Exception as e:
             logger.error(f"Error cleaning up mirror account orders: {e}")
+
+    async def _reset_stale_monitor_data(self, monitor_data: Dict, symbol: str, side: str, account_type: str = "main"):
+        """
+        CRITICAL: Reset all stale data to prevent contamination of next trade
+        Based on web search insights about trading bot state management and cleanup
+        """
+        try:
+            logger.info(f"🧹 STALE DATA CLEANUP: Resetting monitor state for {symbol} {side} ({account_type})")
+            
+            # Reset position-specific state data that could contaminate next trade
+            stale_fields_to_reset = [
+                # Position size tracking (CRITICAL - prevents remaining_size bug)
+                "remaining_size",
+                "position_size", 
+                "last_known_size",
+                "initial_position_size",
+                
+                # Fill tracking (prevents false fill detection)
+                "limit_orders_filled",
+                "filled_count",
+                "old_filled_count", 
+                "total_filled_quantity",
+                
+                # TP/SL state (prevents order confusion)
+                "tp1_hit",
+                "tp2_hit", 
+                "tp3_hit",
+                "tp4_hit",
+                "all_tps_filled",
+                "sl_moved_to_be",
+                "sl_hit",
+                
+                # Order tracking (prevents stale order references)
+                "tp_orders",
+                "sl_order",
+                "limit_orders",
+                "active_order_ids",
+                "cancelled_orders",
+                
+                # Phase and timing (prevents phase confusion)
+                "phase_transition_time",
+                "last_tp_check",
+                "last_sl_check", 
+                "last_position_check",
+                "last_order_update",
+                
+                # P&L tracking (prevents calculation errors)
+                "unrealized_pnl",
+                "realized_pnl",
+                "entry_price",
+                "current_price",
+                
+                # Alert tracking (prevents duplicate alerts)
+                "last_alert_time",
+                "alerts_sent",
+                "rebalance_count",
+                
+                # Cache data (prevents stale cache hits)
+                "cached_position_data",
+                "cached_order_data",
+                "last_cache_refresh"
+            ]
+            
+            # Reset each field to appropriate default value
+            reset_count = 0
+            for field in stale_fields_to_reset:
+                if field in monitor_data:
+                    old_value = monitor_data[field]
+                    
+                    # Set appropriate default based on field type
+                    if field in ["remaining_size", "position_size", "last_known_size", "initial_position_size", 
+                                "total_filled_quantity", "unrealized_pnl", "realized_pnl", "entry_price", "current_price"]:
+                        monitor_data[field] = Decimal("0")
+                    elif field in ["filled_count", "old_filled_count", "rebalance_count", "last_alert_time",
+                                  "last_tp_check", "last_sl_check", "last_position_check", "last_order_update",
+                                  "phase_transition_time", "last_cache_refresh"]:
+                        monitor_data[field] = 0
+                    elif field in ["limit_orders_filled", "tp1_hit", "tp2_hit", "tp3_hit", "tp4_hit", 
+                                  "all_tps_filled", "sl_moved_to_be", "sl_hit"]:
+                        monitor_data[field] = False
+                    elif field in ["tp_orders", "limit_orders", "active_order_ids", "cancelled_orders",
+                                  "alerts_sent", "cached_position_data", "cached_order_data"]:
+                        monitor_data[field] = {} if field in ["tp_orders", "cached_position_data", "cached_order_data"] else []
+                    elif field == "sl_order":
+                        monitor_data[field] = None
+                    
+                    reset_count += 1
+                    logger.debug(f"  ↪️ Reset {field}: {old_value} → {monitor_data[field]}")
+            
+            # CRITICAL: Also reset mirror account data if this is main account
+            if account_type == "main":
+                await self._reset_mirror_stale_data(symbol, side)
+            
+            # Clear any position-specific locks to prevent deadlocks
+            lock_key = f"{symbol}_{side}"
+            for lock_dict_name in ["breakeven_locks", "monitor_locks", "phase_transition_locks", "mirror_sync_locks"]:
+                lock_dict = getattr(self, lock_dict_name, {})
+                if lock_key in lock_dict:
+                    del lock_dict[lock_key]
+                    logger.debug(f"  ↪️ Cleared {lock_dict_name} for {lock_key}")
+            
+            # Force persistence save to ensure stale data cleanup is saved
+            monitor_key = f"{symbol}_{side}_{account_type}"
+            await self._save_monitor_state_to_persistence(monitor_key, monitor_data, force=True)
+            
+            logger.info(f"✅ STALE DATA CLEANUP COMPLETE: Reset {reset_count} fields for {symbol} {side} ({account_type})")
+            logger.info(f"🛡️ Position state sanitized - next trade will start with clean state")
+            
+        except Exception as e:
+            logger.error(f"❌ CRITICAL ERROR in stale data reset for {symbol} {side} ({account_type}): {e}")
+            # This is critical - log the error but don't raise to avoid blocking position closure
+
+    async def _reset_mirror_stale_data(self, symbol: str, side: str):
+        """Reset stale data for mirror account when main position closes"""
+        try:
+            logger.info(f"🪞 MIRROR STALE CLEANUP: Resetting mirror monitor state for {symbol} {side}")
+            
+            # Check if mirror trading is enabled
+            from execution.mirror_trader import is_mirror_trading_enabled
+            if not is_mirror_trading_enabled():
+                logger.debug("Mirror trading not enabled - skipping mirror stale data cleanup")
+                return
+            
+            # Find and reset mirror monitor
+            mirror_monitor_key = f"{symbol}_{side}_mirror"
+            if mirror_monitor_key in self.position_monitors:
+                mirror_monitor_data = self.position_monitors[mirror_monitor_key]
+                await self._reset_stale_monitor_data(mirror_monitor_data, symbol, side, "mirror")
+                logger.info(f"✅ Mirror monitor state reset for {symbol} {side}")
+            else:
+                logger.debug(f"No mirror monitor found for {symbol} {side} - cleanup not needed")
+                
+        except Exception as e:
+            logger.error(f"❌ Error resetting mirror stale data for {symbol} {side}: {e}")
 
     async def _sync_breakeven_with_mirror(self, monitor_data: Dict):
         """Synchronize breakeven SL movement with mirror account AND mirror monitor state"""
@@ -5100,7 +6645,7 @@ All take profit targets have been achieved! 🎯"""
             logger.error(f"Error in order placement recovery: {e}")
             return False
 
-    async def _handle_monitor_error(self, symbol: str, side: str, error: Exception):
+    async def _handle_monitor_error(self, symbol: str, side: str, error: Exception, account_type: str = "main"):
         """
         Handle errors in position monitoring with recovery attempts
         """
@@ -5143,12 +6688,23 @@ All take profit targets have been achieved! 🎯"""
         Attempt to recover monitor state by re-syncing with exchange
         """
         try:
-            account_type = monitor_data.get("account_type", "main")
-            monitor_key = f"{symbol}_{side}_{account_type}"
-            if monitor_key not in self.position_monitors:
-                raise Exception(f"Monitor {monitor_key} not found")
-
-            monitor_data = self.position_monitors[monitor_key]
+            # Try to find the monitor by checking both main and mirror account variants
+            monitor_data = None
+            account_type = "main"  # Default
+            
+            # Try main account first, then mirror
+            monitor_key = f"{symbol}_{side}_main"
+            if monitor_key in self.position_monitors:
+                monitor_data = self.position_monitors[monitor_key]
+                account_type = "main"
+            else:
+                monitor_key = f"{symbol}_{side}_mirror"
+                if monitor_key in self.position_monitors:
+                    monitor_data = self.position_monitors[monitor_key]
+                    account_type = "mirror"
+            
+            if monitor_data is None:
+                raise Exception(f"Monitor not found for {symbol} {side} in any account")
 
             # Get current position state
             positions = await get_position_info(symbol)
@@ -5800,7 +7356,8 @@ All take profit targets have been achieved! 🎯"""
             symbol = monitor_data["symbol"]
             side = monitor_data["side"]
             account_type = monitor_data.get("account_type", "main")
-            current_size = monitor_data.get("current_size", "Unknown")
+            # ENHANCED: Use remaining_size for consistency with limit fill alerts
+            current_size = monitor_data.get("remaining_size", monitor_data.get("position_size", "Unknown"))
             
             # Determine status emoji and message
             if status == "SUCCESS":
@@ -5809,6 +7366,9 @@ All take profit targets have been achieved! 🎯"""
             elif status == "PARTIAL":
                 status_emoji = "⚠️"
                 status_text = "PARTIALLY COMPLETED"
+            elif status == "SKIPPED":
+                status_emoji = "⏭️"
+                status_text = "SKIPPED"
             else:  # FAILED
                 status_emoji = "❌"
                 status_text = "FAILED"
@@ -5832,10 +7392,10 @@ All take profit targets have been achieved! 🎯"""
 • TP Orders Processed: {successful}/{total}
 • Results: {', '.join(displayed_results)}
 
-{status_emoji} <b>TP orders have been {'rebalanced' if status == 'SUCCESS' else 'processed'} after limit fill</b>"""
+{status_emoji} <b>TP orders have been {'rebalanced' if status == 'SUCCESS' else 'skipped due to validation issues' if status == 'SKIPPED' else 'processed'} after limit fill</b>"""
 
             # Find appropriate chat ID
-            chat_id = self._find_chat_id_for_position(monitor_data)
+            chat_id = await self._find_chat_id_for_position(symbol, side, account_type)
             if not chat_id:
                 logger.warning(f"No chat ID found for TP rebalancing alert - {symbol} {side}")
                 return
@@ -5866,6 +7426,15 @@ All take profit targets have been achieved! 🎯"""
                 if not chat_id:
                     logger.warning(f"Could not find chat_id for {symbol} {side} {account_type} - skipping limit fill alert")
                     return
+            
+            # CRITICAL FIX: Ensure consistent limit count in alert formatting
+            # Get the current limit fill count from monitor data
+            current_limit_fills = monitor_data.get('limit_orders_filled', 0)
+            if current_limit_fills > 0:
+                # Use synchronization to ensure consistency across accounts
+                synchronized_fill_count = await self._synchronize_limit_fill_count(symbol, side, current_limit_fills, account_type)
+                # Update monitor data with synchronized count for alert formatting
+                monitor_data['limit_orders_filled'] = synchronized_fill_count
                     
             approach = "CONSERVATIVE"  # Conservative approach only
 
@@ -5876,6 +7445,8 @@ All take profit targets have been achieved! 🎯"""
             entry_price = monitor_data["entry_price"]
 
             # Calculate filled size and remaining position
+            # ENHANCED: Use current remaining_size for accuracy instead of original position_size
+            current_remaining_size = monitor_data.get("remaining_size", monitor_data["position_size"])
             total_position_size = monitor_data["position_size"]
             filled_size = total_position_size * Decimal(str(fill_percentage)) / Decimal("100")
             remaining_size = total_position_size - filled_size
@@ -5906,7 +7477,7 @@ All take profit targets have been achieved! 🎯"""
             
             # Get the actual filled order details and count
             limit_orders = monitor_data.get("limit_orders", [])
-            filled_count = filled_limits
+            filled_count = 0  # Start fresh count to avoid double counting
             total_limit_count = total_limits
             avg_entry = monitor_data.get("avg_price", entry_price)
             
@@ -5936,7 +7507,17 @@ All take profit targets have been achieved! 🎯"""
             
             # Ensure we have a proper filled count (at least 1 if fill_percentage > 0)
             final_filled_count = max(filled_count, 1) if fill_percentage > 0 else filled_count
-            final_total_limits = total_limit_count if total_limit_count > 0 else 3
+            
+            # ENHANCED: Standardize limit count for Conservative approach across main and mirror accounts
+            if approach.upper() == "CONSERVATIVE":
+                # Conservative approach uses 3 total orders: 1 market + 2 limit orders
+                # Only the 2 limit orders are tracked for fill alerts
+                final_total_limits = 2
+                # If stored count differs, log for debugging but use standard count
+                if total_limit_count > 0 and total_limit_count != 2:
+                    logger.debug(f"🔧 {account_type.upper()} account limit count ({total_limit_count}) differs from Conservative standard (2 limits)")
+            else:
+                final_total_limits = total_limit_count if total_limit_count > 0 else 2
             
             # Prepare additional info for the formatter
             additional_info = {
@@ -5946,7 +7527,7 @@ All take profit targets have been achieved! 🎯"""
                 "total_limits": final_total_limits,
                 "filled_count": final_filled_count,
                 "avg_entry": avg_entry,
-                "position_size": total_position_size,
+                "position_size": current_remaining_size,
                 "account_type": account_type,
                 "detection_method": "enhanced_monitoring",
                 "fill_confidence": "High",
@@ -5977,6 +7558,119 @@ All take profit targets have been achieved! 🎯"""
         except Exception as e:
             logger.error(f"Error sending limit fill alert: {e}")
 
+    async def _synchronize_limit_fill_count(self, symbol: str, side: str, filled_count: int, account_type: str) -> int:
+        """
+        Synchronize limit fill count across main and mirror accounts for consistent alerts
+        
+        Args:
+            symbol: Trading symbol
+            side: Position side  
+            filled_count: Detected fill count for this account
+            account_type: 'main' or 'mirror'
+            
+        Returns:
+            Synchronized fill count that should be used in alerts
+        """
+        try:
+            import pickle
+            import time
+            
+            # Get the opposite account type
+            opposite_account = "mirror" if account_type == "main" else "main"
+            
+            # Create monitor keys for both accounts
+            main_key = f"{symbol}_{side}_main"
+            mirror_key = f"{symbol}_{side}_mirror"
+            
+            # Load current monitor data
+            try:
+                with open('bybit_bot_dashboard_v4.1_enhanced.pkl', 'rb') as f:
+                    data = pickle.load(f)
+                
+                monitors = data.get('enhanced_monitors', {})
+                main_monitor = monitors.get(main_key, {})
+                mirror_monitor = monitors.get(mirror_key, {})
+                
+                # Get fill counts from both monitors
+                main_fills = main_monitor.get('limit_orders_filled', 0)
+                mirror_fills = mirror_monitor.get('limit_orders_filled', 0)
+                
+                # STRATEGY 1: Use the maximum fill count between all accounts and detected count
+                # This handles cases where one account detects fills before the other
+                max_fills = max(main_fills, mirror_fills, filled_count)
+                
+                # STRATEGY 2: For main account limit fills, ensure both accounts are synchronized
+                if account_type == "main":
+                    # Main account detected new fills - sync to mirror
+                    synchronized_count = max_fills
+                    
+                    # Update both accounts to match the maximum count
+                    needs_save = False
+                    
+                    if main_fills < synchronized_count:
+                        main_monitor['limit_orders_filled'] = synchronized_count
+                        main_monitor['last_fill_sync_timestamp'] = int(time.time())
+                        monitors[main_key] = main_monitor
+                        needs_save = True
+                    
+                    if mirror_key in monitors and mirror_fills < synchronized_count:
+                        mirror_monitor['limit_orders_filled'] = synchronized_count
+                        mirror_monitor['last_fill_sync_timestamp'] = int(time.time())
+                        monitors[mirror_key] = mirror_monitor
+                        needs_save = True
+                    
+                    if needs_save:
+                        # Save updated data
+                        data['enhanced_monitors'] = monitors
+                        with open('bybit_bot_dashboard_v4.1_enhanced.pkl', 'wb') as f:
+                            pickle.dump(data, f)
+                        
+                        logger.info(f"🔄 Synchronized limit fills: main={synchronized_count}, mirror={synchronized_count}")
+                        
+                    return synchronized_count
+                
+                # STRATEGY 3: For mirror account, use the maximum count strategy
+                elif account_type == "mirror":
+                    # Mirror account should match the maximum count
+                    synchronized_count = max_fills
+                    
+                    # Update both accounts to match the maximum count
+                    needs_save = False
+                    
+                    if main_key in monitors and main_fills < synchronized_count:
+                        main_monitor['limit_orders_filled'] = synchronized_count
+                        main_monitor['last_fill_sync_timestamp'] = int(time.time())
+                        monitors[main_key] = main_monitor
+                        needs_save = True
+                    
+                    if mirror_key in monitors and mirror_fills < synchronized_count:
+                        mirror_monitor['limit_orders_filled'] = synchronized_count
+                        mirror_monitor['last_fill_sync_timestamp'] = int(time.time())
+                        monitors[mirror_key] = mirror_monitor
+                        needs_save = True
+                    
+                    if needs_save:
+                        # Save updated data
+                        data['enhanced_monitors'] = monitors
+                        with open('bybit_bot_dashboard_v4.1_enhanced.pkl', 'wb') as f:
+                            pickle.dump(data, f)
+                        
+                        logger.info(f"🪞 Synchronized mirror account to match maximum: {synchronized_count} (main: {main_fills}, mirror: {mirror_fills}, detected: {filled_count})")
+                    
+                    return synchronized_count
+                
+                # Fallback: return the maximum detected
+                return max_fills
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Could not load monitors for synchronization: {e}")
+                return filled_count
+                
+        except Exception as e:
+            logger.error(f"❌ Error in limit fill synchronization: {e}")
+            # Fallback to original count if synchronization fails
+            return filled_count
+
     async def _send_enhanced_limit_fill_alert(self, monitor_data: Dict, filled_count: int, active_count: int):
         """Send enhanced limit order fill alert with detailed information"""
         try:
@@ -5995,13 +7689,17 @@ All take profit targets have been achieved! 🎯"""
                 logger.warning(f"⚠️ No chat_id for {symbol} {side} {account_type} - skipping enhanced limit fill alert")
                 return
 
+            # CRITICAL FIX: Synchronize limit fill counts across accounts for consistency
+            # This ensures main and mirror accounts show the same limit fill count
+            synchronized_fill_count = await self._synchronize_limit_fill_count(symbol, side, filled_count, account_type)
+            
             # Import the limit order tracker for summary
             limit_summary = limit_order_tracker.get_limit_order_summary(monitor_data)
 
             # Create enhanced alert message
             alert_msg = f"📊 *LIMIT ORDER UPDATE*\n\n"
             alert_msg += f"📈 *{symbol}* {side} ({account_type.upper()})\n"
-            alert_msg += f"✅ *{filled_count}* orders filled\n"
+            alert_msg += f"✅ *{synchronized_fill_count}* orders filled\n"
             alert_msg += f"🔄 *{active_count}* orders active\n\n"
             alert_msg += f"📊 *Order Summary:*\n{limit_summary}\n\n"
             alert_msg += f"🎯 *Enhanced Tracking* (2s intervals)\n"
@@ -6017,7 +7715,7 @@ All take profit targets have been achieved! 🎯"""
             )
 
             if success:
-                logger.info(f"✅ Sent enhanced limit fill alert for {symbol} {side} ({account_type}) - {filled_count} filled, {active_count} active")
+                logger.info(f"✅ Sent enhanced limit fill alert for {symbol} {side} ({account_type}) - {synchronized_fill_count} filled, {active_count} active")
             else:
                 logger.error(f"❌ Failed to send enhanced limit fill alert for {symbol} {side}")
 
@@ -6340,7 +8038,14 @@ All take profit targets have been achieved! 🎯"""
                 sl_still_active = False
                 if monitor_data.get("sl_order"):
                     sl_order_id = monitor_data["sl_order"]["order_id"]
-                    sl_still_active = any(o.get("orderId") == sl_order_id for o in active_orders)
+                    # ENHANCED: Use type-agnostic order ID matching for SL check
+                    sl_order_id_str = str(sl_order_id)
+                    sl_still_active = any(
+                        o.get("orderId") == sl_order_id or 
+                        str(o.get("orderId")) == sl_order_id_str or
+                        str(o.get("orderId")) == str(sl_order_id)
+                        for o in active_orders
+                    )
 
                 # If SL is missing and position closed, SL was likely hit
                 if not sl_still_active and monitor_data.get("sl_order"):
@@ -6350,7 +8055,14 @@ All take profit targets have been achieved! 🎯"""
                     tp_orders = self._ensure_tp_orders_dict(monitor_data)
                     tp_still_active = False
                     for order_id, tp_order in tp_orders.items():
-                        if any(o.get("orderId") == order_id for o in active_orders):
+                        # ENHANCED: Use type-agnostic order ID matching for TP check
+                        order_id_str = str(order_id)
+                        if any(
+                            o.get("orderId") == order_id or 
+                            str(o.get("orderId")) == order_id_str or
+                            str(o.get("orderId")) == str(order_id)
+                            for o in active_orders
+                        ):
                             tp_still_active = True
                             break
                     

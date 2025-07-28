@@ -22,6 +22,7 @@ from pathlib import Path
 import shutil
 from decimal import Decimal
 from utils.pickle_lock import PickleFileLock
+from utils.optimized_pickle_persistence import get_optimized_persistence, mark_data_dirty
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,10 @@ class RobustPersistenceManager:
 
         # Use PickleFileLock for safe operations
         self._pickle_lock = PickleFileLock(filepath)
+        
+        # Initialize optimized persistence system
+        self._optimized_persistence = get_optimized_persistence(filepath)
+        self._use_optimized = True  # Enable optimized persistence by default
 
         # Locks for thread-safety
         self._write_lock = asyncio.Lock()
@@ -348,6 +353,92 @@ class RobustPersistenceManager:
                 if not transaction_id:
                     self._recover_from_backup()
                 raise
+    
+    async def write_data_optimized(self, data: Dict, force: bool = False, mark_dirty_keys: List[str] = None):
+        """
+        Write data using optimized persistence with dirty flags and batch writes
+        Based on 2025 best practices for high-performance pickle operations
+        
+        Args:
+            data: Data to save
+            force: Force immediate save (bypass batching)
+            mark_dirty_keys: Keys to mark as dirty for priority batching
+        """
+        async with self._write_lock:
+            try:
+                # Use optimized persistence system
+                success = await self._optimized_persistence.save_data(data, force=force)
+                
+                # Mark specified keys as dirty for priority batching
+                if mark_dirty_keys:
+                    mark_data_dirty(*mark_dirty_keys)
+                
+                # Auto-mark critical trading data as dirty
+                if 'bot_data' in data:
+                    bot_data = data['bot_data']
+                    critical_keys = []
+                    
+                    if 'enhanced_tp_sl_monitors' in bot_data:
+                        critical_keys.append('enhanced_tp_sl_monitors')
+                    if 'monitor_tasks' in bot_data:
+                        critical_keys.append('monitor_tasks')
+                    if 'positions' in bot_data:
+                        critical_keys.append('positions')
+                    
+                    if critical_keys:
+                        mark_data_dirty(*critical_keys)
+                
+                if not success:
+                    raise Exception("Failed to save data with optimized persistence")
+                
+                # Update checksum for integrity verification
+                self._update_checksum()
+                
+                self._log_operation("write_data_optimized", {
+                    "force": force, 
+                    "dirty_keys": mark_dirty_keys or [],
+                    "optimized": True
+                })
+                
+                return success
+                
+            except Exception as e:
+                logger.error(f"Error writing data with optimized persistence: {e}")
+                # Fallback to traditional method
+                try:
+                    logger.info("🔄 Falling back to traditional persistence method")
+                    success = self._pickle_lock.safe_save(data)
+                    if success:
+                        self._update_checksum()
+                        return True
+                except Exception as fallback_error:
+                    logger.error(f"❌ Fallback persistence also failed: {fallback_error}")
+                
+                self._recover_from_backup()
+                raise
+    
+    async def start_optimized_persistence(self):
+        """Start the optimized persistence system"""
+        try:
+            await self._optimized_persistence.start()
+            logger.info("🚀 Optimized persistence system started")
+        except Exception as e:
+            logger.error(f"❌ Failed to start optimized persistence: {e}")
+            self._use_optimized = False
+    
+    async def stop_optimized_persistence(self):
+        """Stop the optimized persistence system gracefully"""
+        try:
+            await self._optimized_persistence.stop()
+            logger.info("⏹️ Optimized persistence system stopped")
+        except Exception as e:
+            logger.error(f"❌ Error stopping optimized persistence: {e}")
+    
+    def get_optimized_stats(self) -> Dict[str, Any]:
+        """Get statistics from optimized persistence system"""
+        if self._use_optimized:
+            return self._optimized_persistence.get_stats()
+        return {"optimized_persistence": "disabled"}
 
     async def add_monitor(self, monitor_key: str, monitor_data: Dict, position_data: Dict):
         """Add a new monitor with automatic lifecycle management"""

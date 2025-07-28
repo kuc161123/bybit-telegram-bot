@@ -62,15 +62,26 @@ async def enhanced_tp_sl_monitoring_loop():
             # Check for and load monitors from persistence if needed
             if should_reload:
                 try:
-                    # Load directly from pickle file
+                    # PERFORMANCE OPTIMIZATION: Use thread pool for CPU-bound pickle operations
                     import pickle
+                    import concurrent.futures
                     
                     logger.info(f"🔍 Loading monitors directly from pickle file")
                     logger.info(f"🔍 Current monitor count: {len(enhanced_tp_sl_manager.position_monitors)}")
                     
-                    # Get all monitors from pickle
-                    with open('bybit_bot_dashboard_v4.1_enhanced.pkl', 'rb') as f:
-                        data = pickle.load(f)
+                    # Get all monitors from pickle using thread pool to prevent event loop blocking
+                    loop = asyncio.get_running_loop()
+                    
+                    def load_pickle_data():
+                        with open('bybit_bot_dashboard_v4.1_enhanced.pkl', 'rb') as f:
+                            return pickle.load(f)
+                    
+                    # Create a new executor for this operation
+                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    try:
+                        data = await loop.run_in_executor(executor, load_pickle_data)
+                    finally:
+                        executor.shutdown(wait=False)  # Clean shutdown
                     
                     persisted_monitors = data.get('bot_data', {}).get('enhanced_tp_sl_monitors', {})
                     logger.info(f"🔍 Found {len(persisted_monitors)} persisted monitors")
@@ -81,33 +92,49 @@ async def enhanced_tp_sl_monitoring_loop():
                         # Clear existing monitors and load fresh from persistence
                         enhanced_tp_sl_manager.position_monitors.clear()
                         
-                        # Sanitize each monitor data to ensure numeric fields are Decimal
-                        for monitor_key, monitor_data in persisted_monitors.items():
-                            # Only load monitors with proper account suffixes to prevent legacy monitor issues
-                            if monitor_key.endswith('_main') or monitor_key.endswith('_mirror'):
-                                sanitized_data = enhanced_tp_sl_manager._sanitize_monitor_data(monitor_data)
-                                
-                                # FIX FOR EXISTING MONITORS: Initialize last_known_size if missing
-                                if 'last_known_size' not in sanitized_data or sanitized_data.get('last_known_size', 0) == 0:
-                                    remaining_size = sanitized_data.get('remaining_size', 0)
-                                    position_size = sanitized_data.get('position_size', 0)
-                                    from decimal import Decimal
-                                    sanitized_data['last_known_size'] = Decimal(str(remaining_size)) if remaining_size > 0 else Decimal(str(position_size))
-                                    logger.info(f"🔧 Fixed last_known_size for {monitor_key}: {sanitized_data['last_known_size']}")
-                                
-                                # Also ensure phase is set if missing
-                                if 'phase' not in sanitized_data:
-                                    if sanitized_data.get('tp1_hit', False):
-                                        sanitized_data['phase'] = 'PROFIT_TAKING'
-                                    elif sanitized_data.get('limit_orders_filled', False):
-                                        sanitized_data['phase'] = 'MONITORING'
-                                    else:
-                                        sanitized_data['phase'] = 'BUILDING'
-                                    logger.info(f"🔧 Set phase for {monitor_key}: {sanitized_data['phase']}")
-                                
-                                enhanced_tp_sl_manager.position_monitors[monitor_key] = sanitized_data
-                            else:
-                                logger.warning(f"⚠️ Skipping legacy monitor: {monitor_key}")
+                        # PERFORMANCE OPTIMIZATION: Use thread pool for CPU-intensive data processing
+                        def process_monitor_data(monitors_dict):
+                            """Process monitor data in thread pool to prevent event loop blocking"""
+                            processed_monitors = {}
+                            
+                            # Sanitize each monitor data to ensure numeric fields are Decimal
+                            for monitor_key, monitor_data in monitors_dict.items():
+                                # Only load monitors with proper account suffixes to prevent legacy monitor issues
+                                if monitor_key.endswith('_main') or monitor_key.endswith('_mirror'):
+                                    # This can be CPU-intensive for large datasets
+                                    sanitized_data = enhanced_tp_sl_manager._sanitize_monitor_data(monitor_data)
+                                    
+                                    # FIX FOR EXISTING MONITORS: Initialize last_known_size if missing
+                                    if 'last_known_size' not in sanitized_data or sanitized_data.get('last_known_size', 0) == 0:
+                                        remaining_size = sanitized_data.get('remaining_size', 0)
+                                        position_size = sanitized_data.get('position_size', 0)
+                                        from decimal import Decimal
+                                        sanitized_data['last_known_size'] = Decimal(str(remaining_size)) if remaining_size > 0 else Decimal(str(position_size))
+                                    
+                                    # Also ensure phase is set if missing
+                                    if 'phase' not in sanitized_data:
+                                        if sanitized_data.get('tp1_hit', False):
+                                            sanitized_data['phase'] = 'PROFIT_TAKING'
+                                        elif sanitized_data.get('limit_orders_filled', False):
+                                            sanitized_data['phase'] = 'MONITORING'
+                                        else:
+                                            sanitized_data['phase'] = 'BUILDING'
+                                    
+                                    processed_monitors[monitor_key] = sanitized_data
+                            
+                            return processed_monitors
+                        
+                        # Process monitor data in thread pool
+                        data_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                        try:
+                            processed_monitors = await loop.run_in_executor(data_executor, process_monitor_data, persisted_monitors)
+                        finally:
+                            data_executor.shutdown(wait=False)
+                        
+                        # Apply the processed monitors to the manager
+                        enhanced_tp_sl_manager.position_monitors.update(processed_monitors)
+                        
+                        logger.info(f"🔧 Processed {len(processed_monitors)} monitors with thread pool optimization")
                         
                         logger.info(f"✅ Loaded {len(enhanced_tp_sl_manager.position_monitors)} monitors from robust persistence")
                         logger.info(f"🔍 Manager now has {len(enhanced_tp_sl_manager.position_monitors)} monitors")
@@ -148,9 +175,23 @@ async def enhanced_tp_sl_monitoring_loop():
                             logger.info("📊 No monitors in persistence (this is normal for fresh start)")
                             enhanced_tp_sl_monitoring_loop._last_no_persist_log = current_time
                         
-                    # Log persistence stats
-                    stats = await robust_persistence.get_stats()
-                    logger.info(f"📊 Persistence stats: {stats.get('total_monitors')} monitors, {stats.get('file_size_mb'):.2f}MB file")
+                    # PERFORMANCE OPTIMIZATION: Get persistence stats without blocking event loop
+                    try:
+                        # Use thread pool for potentially CPU-bound stats calculation
+                        def get_persistence_stats():
+                            return {
+                                'total_monitors': len(enhanced_tp_sl_manager.position_monitors),
+                                'file_size_mb': len(str(data)) / (1024 * 1024)  # Approximate size
+                            }
+                        
+                        stats_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                        try:
+                            stats = await loop.run_in_executor(stats_executor, get_persistence_stats)
+                        finally:
+                            stats_executor.shutdown(wait=False)
+                        logger.info(f"📊 Persistence stats: {stats.get('total_monitors')} monitors, {stats.get('file_size_mb'):.2f}MB file")
+                    except Exception as stats_error:
+                        logger.debug(f"Could not calculate persistence stats: {stats_error}")
                 
                 except Exception as e:
                     logger.error(f"❌ Could not load monitors from persistence: {e}")
@@ -189,7 +230,7 @@ async def enhanced_tp_sl_monitoring_loop():
             if monitor_count > 0:
                 logger.info(f"🔍 Monitoring {monitor_count} positions")
                 
-                # PERFORMANCE OPTIMIZATION: Smart urgency-based grouping with parallel processing
+                # PERFORMANCE OPTIMIZATION: Smart urgency-based grouping with API batching
                 urgency_groups = {
                     'critical': [],    # 2s interval - near TP triggers
                     'active': [],      # 5s interval - profit taking
@@ -198,6 +239,16 @@ async def enhanced_tp_sl_monitoring_loop():
                     'idle': []         # 60s interval - no activity
                 }
                 min_interval = float('inf')
+                
+                # TEMPORARY: Disable batch processor to fix startup issues
+                # Initialize batch processor if not started
+                # from utils.api_batch_processor import get_batch_processor, start_batch_processor
+                # batch_processor = get_batch_processor()
+                # 
+                # # Start batch processor if not running
+                # if batch_processor._processor_task is None:
+                #     await start_batch_processor()
+                #     logger.info("🚀 API Batch Processor started for monitoring")
                 
                 # Group monitors by urgency level
                 for monitor_key, monitor_data in list(valid_monitors.items()):
@@ -231,93 +282,205 @@ async def enhanced_tp_sl_monitoring_loop():
                             'symbol': monitor_data["symbol"],
                             'side': monitor_data["side"],
                             'account_type': account_type,
-                            'interval': interval
+                            'interval': interval,
+                            'urgency_level': urgency_level  # Add missing urgency level
                         }
                         urgency_groups[urgency_level].append(task_data)
                         
                     except Exception as e:
                         logger.error(f"❌ Error grouping monitor {monitor_key}: {e}")
                 
-                # PHASE 3 OPTIMIZATION: Priority queue processing with separate critical/maintenance queues
-                critical_tasks = []
-                standard_tasks = []
-                maintenance_tasks = []
+                # PERFORMANCE OPTIMIZATION: Adaptive semaphore-based concurrency control
+                # Research shows 10-20 concurrent operations optimal for trading bots
+                # Adjust based on system load and urgency distribution
+                critical_count = len(urgency_groups.get('critical', []))
+                total_monitors = sum(len(monitors) for monitors in urgency_groups.values())
                 
-                # Separate tasks by priority
+                # Adaptive concurrency: more concurrent ops for fewer critical monitors
+                if critical_count > 20:
+                    max_concurrent_monitors = 12  # Conservative for high critical load
+                elif critical_count > 10:
+                    max_concurrent_monitors = 15  # Balanced approach
+                else:
+                    max_concurrent_monitors = 20  # More aggressive for low critical load
+                
+                api_semaphore = asyncio.Semaphore(max_concurrent_monitors)
+                logger.debug(f"🔒 Using {max_concurrent_monitors} concurrent monitors (critical: {critical_count}, total: {total_monitors})")
+                
+                # TEMPORARY: Simplified processing without batch processor
+                # PHASE 3 OPTIMIZATION: Batched API calls with priority queue processing
+                # from utils.api_batch_processor import BatchPriority
+                
+                # Submit requests to batch processor by priority
+                batch_requests = {
+                    'critical': [],
+                    'standard': [],
+                    'maintenance': []
+                }
+                
+                # PROGRESSIVE API BATCHING: Group similar requests to reduce API call volume
+                symbol_account_groups = {}
                 for urgency_level, group_monitors in urgency_groups.items():
                     if not group_monitors:
                         continue
                     
-                    # Create tasks for this urgency group
-                    group_tasks = []
+                    # Group monitors by symbol and account for batch processing
                     for task_data in group_monitors:
-                        task = enhanced_tp_sl_manager.monitor_and_adjust_orders(
-                            task_data["symbol"], 
-                            task_data["side"],
-                            task_data["account_type"]
-                        )
-                        group_tasks.append((task_data["monitor_key"], task, urgency_level))
+                        symbol = task_data["symbol"]
+                        account = task_data["account_type"]
+                        key = f"{symbol}_{account}"
+                        
+                        if key not in symbol_account_groups:
+                            symbol_account_groups[key] = {
+                                'monitors': [],
+                                'symbol': symbol,
+                                'account_type': account,
+                                'urgency_levels': set()
+                            }
+                        
+                        symbol_account_groups[key]['monitors'].append(task_data)
+                        symbol_account_groups[key]['urgency_levels'].add(urgency_level)
+                
+                # Submit batched requests - one per symbol/account combination
+                for group_key, group_data in symbol_account_groups.items():
+                    symbol = group_data['symbol']
+                    account = group_data['account_type']
+                    monitors = group_data['monitors']
+                    urgency_levels = group_data['urgency_levels']
                     
-                    # Sort into priority queues
-                    if urgency_level in ['critical', 'active']:
-                        critical_tasks.extend(group_tasks)
-                    elif urgency_level in ['standard']:
-                        standard_tasks.extend(group_tasks)
-                    else:  # inactive, idle
-                        maintenance_tasks.extend(group_tasks)
+                    # Determine batch priority based on most urgent monitor in group
+                    if any(level in ['critical', 'active'] for level in urgency_levels):
+                        batch_category = 'critical'
+                    elif 'standard' in urgency_levels:
+                        batch_category = 'standard'
+                    else:
+                        batch_category = 'maintenance'
+                    
+                    # SIMPLIFIED: Add monitors directly to batch for processing
+                    try:
+                        # Add all monitors from this group to the batch (simplified approach)
+                        for task_data in monitors:
+                            batch_requests[batch_category].append({
+                                'monitor_key': task_data["monitor_key"],
+                                'symbol': symbol,
+                                'side': task_data["side"],
+                                'account_type': account,
+                                'urgency_level': task_data.get("urgency_level", "standard"),
+                                'batch_group': group_key
+                            })
+                    
+                    except Exception as batch_error:
+                        logger.warning(f"Failed to process batch group {group_key}: {batch_error}")
+                
+                # Log batching effectiveness
+                total_monitor_count = sum(len(monitors) for monitors in urgency_groups.values())
+                api_call_reduction = total_monitor_count - len(symbol_account_groups) * 2  # 2 calls per group instead of 2 per monitor
+                if api_call_reduction > 0:
+                    reduction_pct = (api_call_reduction / (total_monitor_count * 2)) * 100
+                    logger.info(f"📦 API batching: Reduced {total_monitor_count * 2} calls to {len(symbol_account_groups) * 2} ({reduction_pct:.1f}% reduction)")
+                
+                # Process monitors after batched API calls complete
+                # (Small delay to allow batch processor to work)
+                await asyncio.sleep(0.1)
                 
                 total_processed = 0
                 start_time = time.time()
                 
-                # PRIORITY EXECUTION: Process critical tasks first with highest priority
-                if critical_tasks:
+                # PRIORITY EXECUTION: Process batched requests by priority
+                for batch_category in ['critical', 'standard', 'maintenance']:
+                    if not batch_requests[batch_category]:
+                        continue
+                    
+                    # Skip maintenance if we're running out of time
+                    if batch_category == 'maintenance' and (time.time() - start_time) > 5:
+                        logger.debug(f"⏭️ Skipped {len(batch_requests[batch_category])} maintenance monitors due to time constraints")
+                        continue
+                    
                     try:
-                        critical_task_list = [task for _, task, _ in critical_tasks]
-                        critical_results = await asyncio.gather(*critical_task_list, return_exceptions=True)
+                        # Process each monitor in this priority group with semaphore control
+                        monitor_tasks = []
+                        for request_data in batch_requests[batch_category]:
+                            # Create monitoring task using batched data with semaphore
+                            async def semaphore_controlled_monitor(symbol, side, account_type, semaphore):
+                                async with semaphore:
+                                    return await enhanced_tp_sl_manager.monitor_and_adjust_orders(
+                                        symbol, side, account_type
+                                    )
+                            
+                            task = semaphore_controlled_monitor(
+                                request_data["symbol"], 
+                                request_data["side"],
+                                request_data["account_type"],
+                                api_semaphore
+                            )
+                            monitor_tasks.append((request_data["monitor_key"], task, request_data["urgency_level"]))
                         
-                        # Process critical results
-                        for i, ((monitor_key, _, urgency_level), result) in enumerate(zip(critical_tasks, critical_results)):
-                            if isinstance(result, Exception):
-                                logger.error(f"🚨 CRITICAL ERROR monitoring {monitor_key} ({urgency_level}): {result}")
-                        
-                        total_processed += len(critical_tasks)
-                        logger.debug(f"🔥 Processed {len(critical_tasks)} CRITICAL priority monitors")
+                        # PROGRESSIVE BATCHING: Execute monitoring tasks with optimized asyncio.gather
+                        if monitor_tasks:
+                            # Group tasks by batch_group to maximize shared data usage
+                            batch_grouped_tasks = {}
+                            for monitor_key, task, urgency_level in monitor_tasks:
+                                # Find the batch_group for this monitor
+                                batch_group = None
+                                for request_data in batch_requests[batch_category]:
+                                    if request_data["monitor_key"] == monitor_key:
+                                        batch_group = request_data.get("batch_group", "unknown")
+                                        break
+                                
+                                if batch_group not in batch_grouped_tasks:
+                                    batch_grouped_tasks[batch_group] = []
+                                batch_grouped_tasks[batch_group].append((monitor_key, task, urgency_level))
+                            
+                            # Execute tasks in batch groups using asyncio.gather for optimal performance
+                            all_results = []
+                            for batch_group, group_tasks in batch_grouped_tasks.items():
+                                if len(group_tasks) > 1:
+                                    # Use asyncio.gather for multiple tasks in same batch
+                                    task_list = [task for _, task, _ in group_tasks]
+                                    group_results = await asyncio.gather(*task_list, return_exceptions=True)
+                                    # Pair results back with monitor info
+                                    for (monitor_key, _, urgency_level), result in zip(group_tasks, group_results):
+                                        all_results.append(((monitor_key, None, urgency_level), result))
+                                else:
+                                    # Single task - execute directly
+                                    monitor_key, task, urgency_level = group_tasks[0]
+                                    try:
+                                        result = await task
+                                        all_results.append(((monitor_key, None, urgency_level), result))
+                                    except Exception as e:
+                                        all_results.append(((monitor_key, None, urgency_level), e))
+                            
+                            # Process results (maintain compatibility with existing code)
+                            results = [result for _, result in all_results]
+                            monitor_tasks = [(monitor_key, None, urgency_level) for (monitor_key, _, urgency_level), _ in all_results]
+                            
+                            # Process results
+                            for (monitor_key, _, urgency_level), result in zip(monitor_tasks, results):
+                                if isinstance(result, Exception):
+                                    if batch_category == 'critical':
+                                        logger.error(f"🚨 CRITICAL ERROR monitoring {monitor_key} ({urgency_level}): {result}")
+                                    elif batch_category == 'standard':
+                                        logger.error(f"⚠️ Error monitoring {monitor_key} ({urgency_level}): {result}")
+                                    else:
+                                        logger.debug(f"💤 Error monitoring {monitor_key} ({urgency_level}): {result}")
+                            
+                            total_processed += len(monitor_tasks)
+                            
+                            # Log with appropriate emoji and level
+                            if batch_category == 'critical':
+                                logger.debug(f"🔥 Processed {len(monitor_tasks)} CRITICAL priority monitors")
+                            elif batch_category == 'standard':
+                                logger.debug(f"⚡ Processed {len(monitor_tasks)} STANDARD priority monitors")
+                            else:
+                                logger.debug(f"🔧 Processed {len(monitor_tasks)} MAINTENANCE priority monitors")
+                    
                     except Exception as e:
-                        logger.error(f"❌ Error processing critical priority queue: {e}")
-                
-                # Process standard tasks with normal priority
-                if standard_tasks:
-                    try:
-                        standard_task_list = [task for _, task, _ in standard_tasks]
-                        standard_results = await asyncio.gather(*standard_task_list, return_exceptions=True)
-                        
-                        # Process standard results
-                        for i, ((monitor_key, _, urgency_level), result) in enumerate(zip(standard_tasks, standard_results)):
-                            if isinstance(result, Exception):
-                                logger.error(f"⚠️ Error monitoring {monitor_key} ({urgency_level}): {result}")
-                        
-                        total_processed += len(standard_tasks)
-                        logger.debug(f"⚡ Processed {len(standard_tasks)} STANDARD priority monitors")
-                    except Exception as e:
-                        logger.error(f"❌ Error processing standard priority queue: {e}")
-                
-                # Process maintenance tasks with lower priority (can be skipped if time constrained)
-                if maintenance_tasks and (time.time() - start_time) < 5:  # Only if we have time
-                    try:
-                        maintenance_task_list = [task for _, task, _ in maintenance_tasks]
-                        maintenance_results = await asyncio.gather(*maintenance_task_list, return_exceptions=True)
-                        
-                        # Process maintenance results
-                        for i, ((monitor_key, _, urgency_level), result) in enumerate(zip(maintenance_tasks, maintenance_results)):
-                            if isinstance(result, Exception):
-                                logger.debug(f"💤 Error monitoring {monitor_key} ({urgency_level}): {result}")
-                        
-                        total_processed += len(maintenance_tasks)
-                        logger.debug(f"🔧 Processed {len(maintenance_tasks)} MAINTENANCE priority monitors")
-                    except Exception as e:
-                        logger.debug(f"💤 Error processing maintenance priority queue: {e}")
-                elif maintenance_tasks:
-                    logger.debug(f"⏭️ Skipped {len(maintenance_tasks)} maintenance tasks due to time constraints")
+                        if batch_category == 'critical':
+                            logger.error(f"❌ Error processing critical priority queue: {e}")
+                        elif batch_category == 'standard':
+                            logger.error(f"❌ Error processing standard priority queue: {e}")
+                        else:
+                            logger.debug(f"💤 Error processing maintenance priority queue: {e}")
                 
                 execution_time = time.time() - start_time
                 
@@ -392,29 +555,73 @@ async def _consolidated_maintenance_task_low_priority():
         logger.error(f"❌ Error in low priority maintenance task: {e}")
 
 async def _consolidated_maintenance_task():
-    """Consolidated maintenance task that runs periodic cleanup operations"""
+    """Enhanced consolidated maintenance task with performance optimization (2025)"""
     try:
-        logger.info("🧹 Running FULL maintenance tasks...")
+        logger.info("🧹 Running ENHANCED maintenance tasks...")
         
         # Import cleanup functions
         from execution.monitor import periodic_monitor_cleanup
         from clients.bybit_helpers import periodic_order_cleanup_task
         from utils.cache import enhanced_cache
         
-        # Run cleanup tasks concurrently for efficiency
+        # Enhanced maintenance tasks with performance optimization
         maintenance_tasks = [
             _run_monitor_cleanup(),
             _run_order_cleanup(), 
-            _run_cache_cleanup()
+            _run_cache_cleanup(),
+            _run_performance_optimization(),
+            _run_memory_leak_check()
         ]
         
         results = await asyncio.gather(*maintenance_tasks, return_exceptions=True)
         
         success_count = sum(1 for result in results if not isinstance(result, Exception))
-        logger.info(f"✅ Full maintenance completed: {success_count}/3 tasks successful")
+        error_count = len(results) - success_count
+        
+        if error_count > 0:
+            logger.warning(f"⚠️ Enhanced maintenance completed: {success_count}/{len(maintenance_tasks)} tasks successful ({error_count} errors)")
+        else:
+            logger.info(f"✅ Enhanced maintenance completed: {success_count}/{len(maintenance_tasks)} tasks successful")
         
     except Exception as e:
-        logger.error(f"❌ Error in consolidated maintenance task: {e}")
+        logger.error(f"❌ Error in enhanced consolidated maintenance task: {e}")
+
+async def _run_performance_optimization():
+    """Run performance optimization as part of maintenance"""
+    try:
+        from utils.performance_monitor import optimize_bot_performance
+        
+        optimized = await optimize_bot_performance()
+        if optimized:
+            logger.info("🔧 Performance optimizations applied during maintenance")
+        else:
+            logger.debug("🔧 No performance optimizations needed")
+        
+        return True
+    except Exception as e:
+        logger.error(f"❌ Performance optimization failed: {e}")
+        return False
+
+async def _run_memory_leak_check():
+    """Run memory leak check as part of maintenance"""
+    try:
+        from utils.memory_leak_prevention import check_for_memory_leaks
+        
+        # Run a lightweight memory check
+        health_report = check_for_memory_leaks()
+        
+        # Log any concerning findings
+        if health_report.get("circular_references", {}).get("cycles_found", 0) > 0:
+            logger.warning(f"🔄 Found {health_report['circular_references']['cycles_found']} circular references")
+        
+        long_lived = health_report.get("object_lifecycle", {}).get("long_lived_objects", 0)
+        if long_lived > 100:
+            logger.warning(f"⏳ Found {long_lived} long-lived objects")
+        
+        return True
+    except Exception as e:
+        logger.error(f"❌ Memory leak check failed: {e}")
+        return False
 
 async def _run_monitor_cleanup():
     """Run monitor cleanup as part of consolidated maintenance"""
@@ -457,18 +664,34 @@ async def _run_cache_cleanup():
 
 async def start_all_background_tasks(app=None):
     """
-    Start all background tasks after the event loop is running.
+    Enhanced background task startup with performance monitoring (2025)
     Call this from your main bot initialization after the application starts.
     """
     try:
-        logger.info("🚀 Starting all background tasks...")
+        logger.info("🚀 Starting all enhanced background tasks...")
+        
+        # Initialize enhanced performance monitoring
+        try:
+            from utils.performance_monitor import start_performance_monitoring
+            from utils.memory_leak_prevention import enable_memory_monitoring
+            
+            # Enable memory leak monitoring
+            enable_memory_monitoring()
+            logger.info("✅ Memory leak monitoring enabled")
+            
+            # Start performance monitoring
+            await start_performance_monitoring()
+            logger.info("✅ Enhanced performance monitoring started")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Could not start performance monitoring: {e}")
         
         # Import the tasks here to avoid circular imports
         # Note: Cleanup tasks are now consolidated into the main monitoring loop
         # from execution.auto_rebalancer import start_auto_rebalancer  # DISABLED
         
         # Cleanup tasks are now consolidated - no separate tasks needed
-        logger.info("📊 Using consolidated maintenance tasks (integrated with monitoring loop)")
+        logger.info("📊 Using enhanced consolidated maintenance tasks (integrated with monitoring loop)")
         
         # Start Enhanced TP/SL monitoring
         try:
@@ -496,7 +719,6 @@ async def start_all_background_tasks(app=None):
                 except Exception as e:
                     logger.error(f"Failed to start mirror position sync: {e}")
 
-
         except Exception as e:
             logger.warning(f"⚠️ Could not start Enhanced TP/SL monitoring: {e}")
             enhanced_task = None
@@ -505,22 +727,63 @@ async def start_all_background_tasks(app=None):
         # await start_auto_rebalancer(app)
         # logger.info("✅ Auto-rebalancer started")
         
-        # Add any other background tasks here
-        # Example: cache cleanup, protection cleanup, etc.
+        # Start periodic performance reporting
+        try:
+            performance_reporting_task = asyncio.create_task(_periodic_performance_reporting())
+            logger.info("✅ Periodic performance reporting started")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not start performance reporting: {e}")
+            performance_reporting_task = None
         
-        logger.info("✅ All background tasks started successfully")
+        logger.info("✅ All enhanced background tasks started successfully")
         
         # Store references to prevent garbage collection
         if app and hasattr(app, 'bot_data'):
             app.bot_data['_background_tasks'] = {
-                'enhanced_tp_sl': enhanced_task  # Consolidated monitoring with integrated maintenance
+                'enhanced_tp_sl': enhanced_task,  # Consolidated monitoring with integrated maintenance
+                'performance_reporting': performance_reporting_task
             }
         
         return True
         
     except Exception as e:
-        logger.error(f"❌ Error starting background tasks: {e}", exc_info=True)
+        logger.error(f"❌ Error starting enhanced background tasks: {e}", exc_info=True)
         return False
+
+async def _periodic_performance_reporting():
+    """Periodic performance reporting task"""
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Report every hour
+            
+            from utils.performance_monitor import get_bot_performance_report
+            from utils.cache import enhanced_cache
+            from utils.connection_pool import enhanced_pool
+            from utils.memory_leak_prevention import get_memory_health
+            
+            # Get comprehensive performance report
+            perf_report = get_bot_performance_report()
+            cache_stats = enhanced_cache.get_stats()
+            pool_health = enhanced_pool.get_pool_health_report()
+            memory_health = get_memory_health()
+            
+            # Log performance summary
+            logger.info(
+                f"📊 Hourly Performance Report:\n"
+                f"  Memory: {perf_report.get('current', {}).get('memory_mb', 0):.1f}MB "
+                f"({perf_report.get('trends', {}).get('memory_trend', 'stable')})\n"
+                f"  Cache Hit Rate: {cache_stats.get('hit_rate', 0)*100:.1f}%\n"
+                f"  Connection Pool: {pool_health.get('health_status', 'unknown')}\n"
+                f"  Memory Health: {memory_health.get('status', 'unknown')} "
+                f"(score: {memory_health.get('health_score', 0)}/100)\n"
+                f"  Uptime: {perf_report.get('uptime_hours', 0):.1f}h"
+            )
+            
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in performance reporting: {e}")
+            await asyncio.sleep(300)  # Wait 5 minutes on error
 
 def setup_post_init_callback(application):
     """

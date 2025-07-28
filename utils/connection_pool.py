@@ -76,6 +76,17 @@ class EnhancedConnectionPool:
             "last_reset": time.time()
         }
         
+        # Enhanced monitoring for 2025 best practices
+        self._base_limit = 150
+        self._base_limit_per_host = 40
+        self._current_limit = self._base_limit
+        self._current_limit_per_host = self._base_limit_per_host
+        self._request_rate_history = deque(maxlen=300)  # 5 minutes of history
+        self._last_scale_time = 0
+        self._scale_cooldown = 300  # 5 minutes between scaling operations
+        self._health_failures = 0
+        self._max_health_failures = 3
+        
     async def get_session(self) -> aiohttp.ClientSession:
         """Get or create optimized aiohttp session with connection pooling"""
         if self._session is None or self._session.closed:
@@ -85,11 +96,11 @@ class EnhancedConnectionPool:
     async def _create_optimized_session(self):
         """Create aiohttp session with optimized connection pool settings"""
         try:
-            # Enhanced connector settings for trading API performance
+            # Enhanced connector settings for trading API performance (dynamic limits)
             connector_settings = {
                 # Connection pool settings (optimized for trading bot load)
-                "limit": 150,  # Total connection pool size (balanced for performance)
-                "limit_per_host": 40,  # Max connections per host
+                "limit": self._current_limit,  # Dynamic total connection pool size
+                "limit_per_host": self._current_limit_per_host,  # Dynamic max connections per host
                 "ttl_dns_cache": 600,  # DNS cache TTL - 10 minutes
                 "use_dns_cache": True,
                 
@@ -235,23 +246,110 @@ class EnhancedConnectionPool:
             logger.error(f"Error recreating session with new limits: {e}")
 
     async def health_check(self) -> bool:
-        """Perform health check on the connection pool"""
+        """Perform enhanced health check on the connection pool (2025 version)"""
         try:
             if self._session is None or self._session.closed:
+                self._health_failures += 1
+                logger.warning(f"Health check failed: session closed (failures: {self._health_failures})")
                 return False
                 
             # Check connector health
             if self._connector and self._connector.closed:
+                self._health_failures += 1
+                logger.warning(f"Health check failed: connector closed (failures: {self._health_failures})")
                 return False
             
+            # Additional health checks for 2025 standards
+            if self._connector:
+                # Check for connection leaks
+                total_connections = getattr(self._connector, '_connections', {})
+                if hasattr(total_connections, '__len__'):
+                    connection_count = len(total_connections)
+                    if connection_count > self._current_limit * 1.2:  # 20% over limit indicates leak
+                        logger.warning(f"Potential connection leak detected: {connection_count} connections (limit: {self._current_limit})")
+                        self._health_failures += 1
+                        return False
+                
+                # Check if we have too many health failures
+                if self._health_failures >= self._max_health_failures:
+                    logger.error(f"Connection pool unhealthy: {self._health_failures} consecutive failures")
+                    return False
+            
+            # Reset failure count on successful health check
+            self._health_failures = 0
             return True
             
         except Exception as e:
-            logger.error(f"Connection pool health check failed: {e}")
+            self._health_failures += 1
+            logger.error(f"Connection pool health check failed: {e} (failures: {self._health_failures})")
             return False
+    
+    def get_pool_health_report(self) -> Dict[str, Any]:
+        """Generate comprehensive connection pool health report"""
+        try:
+            total_requests = self.pool_stats["requests_made"]
+            reuses = self.pool_stats["connection_reuses"]
+            new_connections = self.pool_stats["new_connections"]
+            reuse_rate = (reuses / total_requests * 100) if total_requests > 0 else 0
+            
+            # Calculate request rate
+            current_time = time.time()
+            recent_requests = [t for t in self._request_rate_history if current_time - t <= 60]
+            request_rate = len(recent_requests) / 60  # requests per second
+            
+            # Determine health status
+            health_status = "healthy"
+            issues = []
+            
+            if self._health_failures > 0:
+                health_status = "degraded"
+                issues.append(f"{self._health_failures} recent health check failures")
+            
+            if reuse_rate < 50 and total_requests > 100:
+                health_status = "degraded"
+                issues.append(f"Low connection reuse rate: {reuse_rate:.1f}%")
+            
+            if request_rate > 10:
+                issues.append("High request rate detected")
+                
+            if not issues:
+                issues.append("All connection pool metrics normal")
+            
+            return {
+                "health_status": health_status,
+                "issues": issues,
+                "current_limits": {
+                    "total": self._current_limit,
+                    "per_host": self._current_limit_per_host
+                },
+                "base_limits": {
+                    "total": self._base_limit,
+                    "per_host": self._base_limit_per_host
+                },
+                "performance_metrics": {
+                    "total_requests": total_requests,
+                    "reuse_rate_percent": reuse_rate,
+                    "current_request_rate": request_rate,
+                    "health_failures": self._health_failures
+                },
+                "scaling_info": {
+                    "last_scale_time": self._last_scale_time,
+                    "cooldown_remaining": max(0, self._scale_cooldown - (current_time - self._last_scale_time))
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating pool health report: {e}")
+            return {"health_status": "error", "error": str(e)}
 
-# Global enhanced connection pool instance
+# PERFORMANCE OPTIMIZATION: Import lock-free connection pool
+from .lockfree_connection_pool import LockFreeConnectionPool, get_global_pool, cleanup_global_pool
+
+# Global enhanced connection pool instance (legacy)
 enhanced_pool = EnhancedConnectionPool()
+
+# NEW: Lock-free connection pool for high-performance scenarios
+_lockfree_pool = None
 
 # Legacy compatibility
 api_connection_pool = ConnectionPool(max_connections=50)
@@ -260,25 +358,64 @@ async def get_enhanced_session() -> aiohttp.ClientSession:
     """Get the global enhanced session instance"""
     return await enhanced_pool.get_session()
 
+async def get_lockfree_session() -> aiohttp.ClientSession:
+    """Get a session from the lock-free connection pool (high performance)"""
+    global _lockfree_pool
+    
+    if _lockfree_pool is None:
+        _lockfree_pool = await get_global_pool()
+    
+    connection = _lockfree_pool.get_connection()
+    if connection is None:
+        # Fallback to enhanced pool if lock-free pool is exhausted
+        logger.warning("🔄 Lock-free pool exhausted, falling back to enhanced pool")
+        return await enhanced_pool.get_session()
+    
+    return connection
+
 async def close_enhanced_pool():
     """Close the global enhanced connection pool"""
     await enhanced_pool.close()
+    
+    # Also cleanup lock-free pool
+    await cleanup_global_pool()
 
 # Periodic health check and statistics logging
 async def connection_pool_maintenance():
-    """Periodic maintenance task for the connection pool"""
+    """Periodic maintenance task for the connection pool (enhanced with lock-free monitoring)"""
     while True:
         try:
-            await asyncio.sleep(1800)  # Every 30 minutes
+            await asyncio.sleep(900)  # Every 15 minutes (more frequent monitoring)
             
-            # Health check
+            # Enhanced pool health check
             is_healthy = await enhanced_pool.health_check()
             if not is_healthy:
-                logger.warning("⚠️ Connection pool health check failed - recreating session")
+                logger.warning("⚠️ Enhanced connection pool health check failed - recreating session")
                 await enhanced_pool._create_optimized_session()
             
-            # Log statistics
+            # Lock-free pool health check
+            try:
+                if _lockfree_pool is not None:
+                    lockfree_stats = _lockfree_pool.get_health_report()
+                    logger.info(f"🏊 Lock-free pool: {lockfree_stats['health_status']} "
+                              f"({lockfree_stats['active_connections']}/{lockfree_stats['max_size']} active, "
+                              f"{lockfree_stats['timeout_rate_percent']:.1f}% timeout rate)")
+                    
+                    # Alert if lock-free pool is degraded
+                    if lockfree_stats['health_status'] in ['degraded', 'critical']:
+                        logger.warning(f"⚠️ Lock-free pool health: {lockfree_stats['health_status']} - "
+                                     f"Issues: {', '.join(lockfree_stats.get('issues', []))}")
+            except Exception as lf_error:
+                logger.debug(f"Lock-free pool monitoring error: {lf_error}")
+            
+            # Log enhanced pool statistics
             enhanced_pool.log_pool_statistics()
+            
+            # Log combined performance metrics
+            enhanced_health = enhanced_pool.get_pool_health_report()
+            logger.info(f"📊 Connection Pool Summary: Enhanced={enhanced_health['health_status']}, "
+                       f"Requests={enhanced_health['performance_metrics']['total_requests']}, "
+                       f"Rate={enhanced_health['performance_metrics']['current_request_rate']:.1f}/s")
             
         except Exception as e:
             logger.error(f"Error in connection pool maintenance: {e}")

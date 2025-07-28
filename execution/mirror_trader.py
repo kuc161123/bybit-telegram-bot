@@ -26,6 +26,8 @@ USE_TESTNET = os.getenv("USE_TESTNET", "false").lower() == "true"
 bybit_client_2 = None
 if ENABLE_MIRROR_TRADING and BYBIT_API_KEY_2 and BYBIT_API_SECRET_2:
     try:
+        # Initialize mirror client with standard configuration
+        # Note: HTTP session optimization will be handled during async operations
         bybit_client_2 = HTTP(
             testnet=USE_TESTNET,
             api_key=BYBIT_API_KEY_2,

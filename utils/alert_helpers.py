@@ -220,7 +220,7 @@ def format_tp_hit_alert(symbol: str, side: str, approach: str,
                        entry_price: Decimal, exit_price: Decimal,
                        position_size: Decimal, cancelled_orders: List[str],
                        additional_info: Dict[str, Any]) -> str:
-    """Format take profit hit alert message with enhanced information"""
+    """Format take profit hit alert message with enhanced information and 2025 best practices"""
     
     # Determine which TP was hit for conservative/ggshot
     tp_number = additional_info.get("tp_number", 1) if approach in ["conservative", "ggshot"] else ""
@@ -233,26 +233,32 @@ def format_tp_hit_alert(symbol: str, side: str, approach: str,
     detection_method = additional_info.get("detection_method", "position_size")
     fill_confidence = additional_info.get("fill_confidence", "High")
     
-    message = f"""<b>{tp_text} HIT - PROFIT TAKEN!</b>
+    # Enhanced 2025 emojis and formatting
+    account_emoji = "🏦" if account_type == "MAIN" else "🪞"
+    side_emoji = "📈" if side == "Buy" else "📉"
+    approach_emoji = {"conservative": "🛡️", "ggshot": "📸", "fast": "⚡"}.get(approach.lower(), "🎯")
+    profit_emoji = "💰" if pnl >= 0 else "📉"
+    
+    message = f"""{profit_emoji} <b>{tp_text} HIT - PROFIT TAKEN!</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-<b>Trade Details:</b>
-• Symbol: {symbol} {side}
-• Approach: {approach.capitalize()}
-• Account: {account_type}
+<b>📊 Trade Details:</b>
+• Symbol: {symbol} {side_emoji} {side}
+• Approach: {approach_emoji} {approach.capitalize()}
+• Account: {account_emoji} {account_type}
 
-<b>Profit: ${pnl:,.2f} ({pnl_percent:+.2f}%)</b>
+<b>{profit_emoji} Profit: ${pnl:,.2f} ({pnl_percent:+.2f}%)</b>
 • Entry: ${format_price(entry_price)}
 • Exit: ${format_price(exit_price)}
 • Filled: {format_decimal_or_na(filled_qty)}
 • Remaining: {format_decimal_or_na(remaining_size)}
 
-<b>Detection Details:</b>
+<b>🔍 Detection Details:</b>
 • Method: {detection_method.replace('_', ' ').title()}
-• Confidence: {fill_confidence}
-• Check Interval: 2s (Enhanced)"""
+• Confidence: {fill_confidence} ✅
+• Check Interval: 2s (Enhanced) ⚡"""
 
     if cancelled_orders:
-        message += f"\n\n<b>Cancelled Orders:</b>\n"
+        message += f"\n\n<b>❌ Cancelled Orders:</b>\n"
         for order in cancelled_orders[:5]:  # Limit to 5 orders
             message += f"   • {order}\n"
         if len(cancelled_orders) > 5:
@@ -261,7 +267,7 @@ def format_tp_hit_alert(symbol: str, side: str, approach: str,
     if approach in ["conservative", "ggshot"] and additional_info:
         remaining_tps = additional_info.get("remaining_tps", [])
         if remaining_tps:
-            message += f"\n\n<b>Active TPs:</b> {', '.join(remaining_tps)}"
+            message += f"\n\n<b>🎯 Active TPs:</b> {', '.join(remaining_tps)}"
 
         # Enhanced breakeven information for TP1
         if tp_number == 1:
@@ -269,35 +275,35 @@ def format_tp_hit_alert(symbol: str, side: str, approach: str,
             breakeven_price = additional_info.get("breakeven_price")
             
             if sl_moved and breakeven_price:
-                message += f"\n\n<b>STOP LOSS MOVED TO BREAKEVEN</b>"
-                message += f"\n• Breakeven Price: ${format_price(breakeven_price)}"
-                message += f"\n• Protection: 100% of remaining position"
-                message += f"\n• Includes: 0.06% fees + 0.02% safety margin"
-                message += f"\n• Status: Position now risk-free!"
+                message += f"\n\n<b>🛡️ STOP LOSS MOVED TO BREAKEVEN</b>"
+                message += f"\n• Breakeven Price: ${format_price(breakeven_price)} 🎯"
+                message += f"\n• Protection: 100% of remaining position 🔒"
+                message += f"\n• Includes: 0.06% fees + 0.02% safety margin 📊"
+                message += f"\n• Status: Position now risk-free! ✅"
                 
                 # Add limit order cancellation info if applicable
                 limits_cancelled = additional_info.get("limits_cancelled", False)
                 if limits_cancelled:
-                    message += f"\n• Limit Orders: Cancelled (TP1 hit)"
+                    message += f"\n• Limit Orders: Cancelled (TP1 hit) ❌"
             else:
                 # Enhanced pending breakeven info
-                message += f"\n\n<b>PENDING ACTIONS:</b>"
-                message += f"\n• SL will move to breakeven"
-                message += f"\n• Target: Entry + 0.08% (fees + margin)"
-                message += f"\n• Coverage: Will protect remaining position"
+                message += f"\n\n<b>⏳ PENDING ACTIONS:</b>"
+                message += f"\n• SL will move to breakeven 🛡️"
+                message += f"\n• Target: Entry + 0.08% (fees + margin) 🎯"
+                message += f"\n• Coverage: Will protect remaining position 🔒"
                 if approach == "conservative":
-                    message += f"\n• Limit orders will be cancelled"
+                    message += f"\n• Limit orders will be cancelled ❌"
 
     # Add system status
-    message += f"\n\n<b>System Status:</b>"
-    message += f"\n• Enhanced TP/SL: Active"
-    message += f"\n• Direct Order Checks: Enabled"
-    message += f"\n• SL Auto-Adjustment: Active"
+    message += f"\n\n<b>⚙️ System Status:</b>"
+    message += f"\n• Enhanced TP/SL: Active ✅"
+    message += f"\n• Direct Order Checks: Enabled 🔍"
+    message += f"\n• SL Auto-Adjustment: Active 🔄"
     
     # Add mirror sync status if applicable
     if account_type == "MIRROR" or additional_info.get("has_mirror"):
         mirror_synced = additional_info.get("mirror_synced", True)
-        message += f"\n• Mirror Sync: {'Completed' if mirror_synced else 'Pending'}"
+        message += f"\n• Mirror Sync: {'Completed ✅' if mirror_synced else 'Pending ⏳'}"
 
     return message.strip()
 
@@ -306,18 +312,14 @@ def format_sl_hit_alert(symbol: str, side: str, approach: str,
                        entry_price: Decimal, exit_price: Decimal,
                        position_size: Decimal, cancelled_orders: List[str],
                        additional_info: Dict[str, Any]) -> str:
-    """Format stop loss hit alert message with enhanced information"""
-    side_emoji = "📈" if side == "Buy" else "📉"
-    # Set emoji based on approach
-    if approach == "fast":
-        approach_emoji = "⚡"
-    elif approach == "conservative":
-        approach_emoji = "🛡️"
-    else:  # ggshot
-        approach_emoji = "📸"
-
-    # Get additional context
+    """Format stop loss hit alert message with enhanced information and 2025 best practices"""
+    
+    # Enhanced 2025 emojis and formatting
     account_type = additional_info.get("account_type", "main").upper()
+    account_emoji = "🏦" if account_type == "MAIN" else "🪞"
+    side_emoji = "📈" if side == "Buy" else "📉"
+    approach_emoji = {"conservative": "🛡️", "ggshot": "📸", "fast": "⚡"}.get(approach.lower(), "🎯")
+    
     detection_method = additional_info.get("detection_method", "position_size")
     fill_confidence = additional_info.get("fill_confidence", "High")
     position_duration = additional_info.get("position_duration_minutes")
@@ -325,34 +327,34 @@ def format_sl_hit_alert(symbol: str, side: str, approach: str,
     
     message = f"""🛡️ <b>STOP LOSS HIT - POSITION CLOSED</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-<b>Trade Details:</b>
-• Symbol: {symbol} {side}
-• Approach: {approach.capitalize()}
-• Account: {account_type}
+<b>📊 Trade Details:</b>
+• Symbol: {symbol} {side_emoji} {side}
+• Approach: {approach_emoji} {approach.capitalize()}
+• Account: {account_emoji} {account_type}
 
-<b>Loss: ${pnl:,.2f} ({pnl_percent:.2f}%)</b>
+<b>📉 Loss: ${pnl:,.2f} ({pnl_percent:.2f}%)</b>
 • Entry: ${format_price(entry_price)}
 • Exit: ${format_price(exit_price)}
 • Size: {format_decimal_or_na(position_size)}"""
 
     if position_duration:
         if position_duration < 60:
-            duration_text = f"{position_duration} minutes"
+            duration_text = f"{position_duration} minutes ⏱️"
         else:
             hours = position_duration // 60
             mins = position_duration % 60
-            duration_text = f"{hours}h {mins}m"
+            duration_text = f"{hours}h {mins}m ⏱️"
         message += f"\n• Duration: {duration_text}"
 
     message += f"""
 
-<b>Detection Details:</b>
+<b>🔍 Detection Details:</b>
 • Method: {detection_method.replace('_', ' ').title()}
-• Confidence: {fill_confidence}
-• Check Interval: 2s (Enhanced)"""
+• Confidence: {fill_confidence} ✅
+• Check Interval: 2s (Enhanced) ⚡"""
 
     if cancelled_orders:
-        message += f"\n\n<b>Cancelled Orders:</b>\n"
+        message += f"\n\n<b>❌ Cancelled Orders:</b>\n"
         for order in cancelled_orders[:5]:
             message += f"   • {order}\n"
         if len(cancelled_orders) > 5:
@@ -361,42 +363,43 @@ def format_sl_hit_alert(symbol: str, side: str, approach: str,
     # Add risk management insights
     message += f"""
 
-<b>Risk Management:</b>
-• Position Risk: {abs(pnl_percent):.2f}% of position
-• Account Impact: {abs(float(pnl) / 10000 * 100):.2f}% (est.)
-• Risk Control: ✅ Working as designed"""
+<b>🛡️ Risk Management:</b>
+• Position Risk: {abs(pnl_percent):.2f}% of position 📊
+• Account Impact: {abs(float(pnl) / 10000 * 100):.2f}% (est.) 💼
+• Risk Control: ✅ Working as designed 🎯"""
 
     # Add system status
     message += f"""
 
-<b>System Status:</b>
-• Enhanced TP/SL: Active
-• Direct Order Checks: Enabled
-• Risk Monitoring: Functional
+<b>⚙️ System Status:</b>
+• Enhanced TP/SL: Active ✅
+• Direct Order Checks: Enabled 🔍
+• Risk Monitoring: Functional 📈
 
-<b>Next Steps:</b>
-• Review market conditions
-• Check trading approach settings
-• Consider position sizing"""
+<b>📋 Next Steps:</b>
+• Review market conditions 📊
+• Check trading approach settings ⚙️
+• Consider position sizing 📏"""
 
     # Add mirror sync status if applicable
     if account_type == "MIRROR" or additional_info.get("has_mirror"):
         mirror_synced = additional_info.get("mirror_synced", True)
-        message += f"\n• Mirror Sync: {'Completed' if mirror_synced else 'Pending'}"
+        message += f"\n• Mirror Sync: {'Completed ✅' if mirror_synced else 'Pending ⏳'}"
 
     return message.strip()
 
 def format_limit_filled_alert(symbol: str, side: str, approach: str,
                             additional_info: Dict[str, Any]) -> str:
-    """Format limit order filled alert message with enhanced information"""
+    """Format limit order filled alert message with enhanced information and 2025 best practices"""
+    
+    # Enhanced 2025 emojis and formatting
+    account_type = additional_info.get("account_type", "main").upper()
+    account_emoji = "🏦" if account_type == "MAIN" else "🪞"
     side_emoji = "📈" if side == "Buy" else "📉"
     fill_price = additional_info.get("fill_price", Decimal("0"))
     fill_size = additional_info.get("fill_size", Decimal("0"))
     limit_number = additional_info.get("limit_number", 1)
     total_limits = additional_info.get("total_limits", 3)
-    
-    # Get additional context
-    account_type = additional_info.get("account_type", "main").upper()
     detection_method = additional_info.get("detection_method", "position_size")
     fill_confidence = additional_info.get("fill_confidence", "High")
     fill_timestamp = additional_info.get("fill_timestamp")
@@ -404,102 +407,95 @@ def format_limit_filled_alert(symbol: str, side: str, approach: str,
     avg_entry = additional_info.get("avg_entry", fill_price)
 
     # Format approach text and emoji
-    if approach == "conservative":
-        approach_text = "Conservative"
-        approach_emoji = "🛡️"
-    elif approach == "ggshot":
-        approach_text = "GGShot"
-        approach_emoji = "📸"
-    else:
-        approach_text = approach.capitalize()
-        approach_emoji = "🎯"
+    approach_emoji = {"conservative": "🛡️", "ggshot": "📸", "fast": "⚡"}.get(approach.lower(), "🎯")
+    approach_text = approach.capitalize()
 
     message = f"""📦 <b>LIMIT ORDER FILLED</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-<b>Trade Details:</b>
-• Symbol: {symbol} {side}
-• Approach: {approach_text}
-• Account: {account_type}
+<b>📊 Trade Details:</b>
+• Symbol: {symbol} {side_emoji} {side}
+• Approach: {approach_emoji} {approach_text}
+• Account: {account_emoji} {account_type}
 
-<b>Fill Information:</b>
-• Limit {limit_number}/{total_limits} Filled
-• Price: ${format_price(fill_price)}
-• Size: {format_decimal_or_na(fill_size)}"""
+<b>✅ Fill Information:</b>
+• Limit {limit_number}/{total_limits} Filled 📦
+• Price: ${format_price(fill_price)} 💰
+• Size: {format_decimal_or_na(fill_size)} 📊"""
 
     if fill_timestamp:
         from datetime import datetime
         fill_time = datetime.fromtimestamp(fill_timestamp / 1000)
-        message += f"\n• Time: {fill_time.strftime('%H:%M:%S')}"
+        message += f"\n• Time: {fill_time.strftime('%H:%M:%S')} ⏱️"
 
     filled_count = additional_info.get("filled_count", 1)
     if filled_count > 1:
-        message += f"\n• Total Filled: {filled_count}/{total_limits}"
-        message += f"\n• Avg Entry: ${format_price(avg_entry)}"
+        message += f"\n• Total Filled: {filled_count}/{total_limits} 📈"
+        message += f"\n• Avg Entry: ${format_price(avg_entry)} 📊"
 
     message += f"""
 
-<b>Position Status:</b>
-• Current Size: {format_decimal_or_na(position_size)}
-• Remaining Limits: {total_limits - filled_count}"""
+<b>📊 Position Status:</b>
+• Current Size: {format_decimal_or_na(position_size)} 📦
+• Remaining Limits: {total_limits - filled_count} ⏳"""
 
     # Add detection details
     message += f"""
 
-<b>Detection Details:</b>
+<b>🔍 Detection Details:</b>
 • Method: {detection_method.replace('_', ' ').title()}
-• Confidence: {fill_confidence}
-• Check Interval: 2s (Enhanced)"""
+• Confidence: {fill_confidence} ✅
+• Check Interval: 2s (Enhanced) ⚡"""
 
     # Add rebalancing note for conservative approach
     if approach == "conservative":
         message += """
 
-<b>Next Actions:</b>
-• Position will be automatically rebalanced
-• TP/SL quantities adjusted to maintain 85/5/5/5
-• SL will cover full position size"""
+<b>🔄 Next Actions:</b>
+• Position will be automatically rebalanced 🎯
+• TP/SL quantities adjusted to maintain 85/5/5/5 📊
+• SL will cover full position size 🛡️"""
 
     # Add system status
     message += f"""
 
-<b>System Status:</b>
-• Enhanced TP/SL: Active
-• Direct Order Checks: Enabled
-• Auto-Rebalancing: {'Active' if approach == 'conservative' else 'N/A'}"""
+<b>⚙️ System Status:</b>
+• Enhanced TP/SL: Active ✅
+• Direct Order Checks: Enabled 🔍
+• Auto-Rebalancing: {'Active ✅' if approach == 'conservative' else 'N/A ❌'}"""
 
     # Add mirror sync status if applicable
     if account_type == "MIRROR" or additional_info.get("has_mirror"):
         mirror_synced = additional_info.get("mirror_synced", True)
-        message += f"\n• Mirror Sync: {'Completed' if mirror_synced else 'Pending'}"
+        message += f"\n• Mirror Sync: {'Completed ✅' if mirror_synced else 'Pending ⏳'}"
 
     return message.strip()
 
 def format_tp1_early_hit_alert(symbol: str, side: str, approach: str,
                               cancelled_orders: List[str],
                               additional_info: Dict[str, Any]) -> str:
-    """Format TP1 early hit alert (before any limits filled)"""
+    """Format TP1 early hit alert (before any limits filled) with 2025 best practices"""
+    
+    # Enhanced 2025 emojis and formatting
+    account_type = additional_info.get("account_type", "main").upper() if additional_info else "MAIN"
+    account_emoji = "🏦" if account_type == "MAIN" else "🪞"
     side_emoji = "📈" if side == "Buy" else "📉"
-    # Format approach text properly
-    if approach == "conservative":
-        approach_text = "Conservative"
-    elif approach == "ggshot":
-        approach_text = "GGShot"
-    else:
-        approach_text = approach.capitalize()
+    approach_emoji = {"conservative": "🛡️", "ggshot": "📸", "fast": "⚡"}.get(approach.lower(), "🎯")
+    approach_text = approach.capitalize()
 
     # Removed breakeven functionality
     sl_moved = False
     new_sl_price = additional_info.get("new_sl_price") if additional_info else None
 
-    message = f"""
-🚨 <b>TP1 HIT EARLY - ALL ORDERS CANCELLED</b>
+    message = f"""🚨 <b>TP1 HIT EARLY - ALL ORDERS CANCELLED</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-🎯 {approach_text} Approach
-📊 {symbol} {side_emoji} {side}
+<b>📊 Trade Details:</b>
+• Symbol: {symbol} {side_emoji} {side}
+• Approach: {approach_emoji} {approach_text}
+• Account: {account_emoji} {account_type}
 
 ⚠️ <b>TP1 hit before limit orders filled!</b>
-📝 All remaining orders have been cancelled
-💡 Consider market conditions for next trade
+📝 All remaining orders have been cancelled ❌
+💡 Consider market conditions for next trade 📈
 """
 
     # Add SL movement info if applicable
@@ -515,38 +511,38 @@ def format_tp1_early_hit_alert(symbol: str, side: str, approach: str,
     # Add SL movement information for conservative/ggshot approaches
     if approach in ["conservative", "ggshot"]:
         message += f"\n\n🔄 <b>STOP LOSS WILL BE MOVED TO BREAKEVEN</b>"
-        message += f"\n🛡️ SL will be adjusted to entry + fees"
-        message += f"\n📊 Includes 0.12% fees + safety margin"
-        message += f"\n✅ Position will become risk-free!"
+        message += f"\n🛡️ SL will be adjusted to entry + fees 🎯"
+        message += f"\n📊 Includes 0.12% fees + safety margin 📈"
+        message += f"\n✅ Position will become risk-free! 🔒"
 
     return message.strip()
 
 def format_tp1_with_fills_alert(symbol: str, side: str, approach: str,
                                cancelled_orders: List[str],
                                additional_info: Dict[str, Any]) -> str:
-    """Format TP1 hit with fills alert (after some limits filled)"""
+    """Format TP1 hit with fills alert (after some limits filled) with 2025 best practices"""
+    
+    # Enhanced 2025 emojis and formatting
+    account_type = additional_info.get("account_type", "main").upper() if additional_info else "MAIN"
+    account_emoji = "🏦" if account_type == "MAIN" else "🪞"
     side_emoji = "📈" if side == "Buy" else "📉"
-    # Format approach text properly
-    if approach == "conservative":
-        approach_text = "Conservative"
-    elif approach == "ggshot":
-        approach_text = "GGShot"
-    else:
-        approach_text = approach.capitalize()
+    approach_emoji = {"conservative": "🛡️", "ggshot": "📸", "fast": "⚡"}.get(approach.lower(), "🎯")
+    approach_text = approach.capitalize()
     filled_count = additional_info.get("filled_count", 0)
     total_limits = additional_info.get("total_limits", 3)
     sl_moved = False  # Removed breakeven functionality
     new_sl_price = additional_info.get("new_sl_price")
 
-    message = f"""
-🎯 <b>TP1 HIT - REMAINING LIMITS CANCELLED</b>
+    message = f"""🎯 <b>TP1 HIT - REMAINING LIMITS CANCELLED</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-🎯 {approach_text} Approach
-📊 {symbol} {side_emoji} {side}
+<b>📊 Trade Details:</b>
+• Symbol: {symbol} {side_emoji} {side}
+• Approach: {approach_emoji} {approach_text}
+• Account: {account_emoji} {account_type}
 
 ✅ <b>TP1 hit with {filled_count}/{total_limits} limits filled</b>
-📝 Unfilled limit orders cancelled
-✨ TP2, TP3, TP4 remain active
+📝 Unfilled limit orders cancelled ❌
+✨ TP2, TP3, TP4 remain active 🎯
 """
 
     # Add SL movement info if applicable
@@ -616,9 +612,12 @@ async def send_position_closed_summary(chat_id: int,
         pnl_emoji = "💰" if pnl >= 0 else "🔴"
         result_text = "PROFIT" if pnl >= 0 else "LOSS"
         
-        # Extract additional info
+        # Extract additional info with enhanced 2025 formatting
         info = additional_info or {}
         account_type = info.get("account_type", "main").upper()
+        account_emoji = "🏦" if account_type == "MAIN" else "🪞"
+        side_emoji = "📈" if side == "Buy" else "📉"
+        approach_emoji = {"conservative": "🛡️", "ggshot": "📸", "fast": "⚡"}.get(approach.lower(), "🎯")
         total_fees = info.get("total_fees", 0)
         tp_hits = info.get("tp_hits", 0)
         limit_fills = info.get("limit_fills", 0)
@@ -627,35 +626,35 @@ async def send_position_closed_summary(chat_id: int,
 
         message = f"""📊 <b>POSITION CLOSED - {result_text}</b>
 ━━━━━━━━━━━━━━━━━━━━━━
-<b>Trade Summary:</b>
-• Symbol: {symbol} {side}
-• Approach: {approach.capitalize()}
-• Account: {account_type}
+<b>📊 Trade Summary:</b>
+• Symbol: {symbol} {side_emoji} {side}
+• Approach: {approach_emoji} {approach.capitalize()}
+• Account: {account_emoji} {account_type}
 
-<b>Final P&L: ${pnl:,.2f} ({pnl_percent:+.2f}%)</b>
-• Entry: ${format_price(Decimal(str(entry_price)))}
-• Exit: ${format_price(Decimal(str(exit_price)))}
-• Size: {format_decimal_or_na(Decimal(str(position_size)))}
-• Duration: {duration_text}"""
+<b>{pnl_emoji} Final P&L: ${pnl:,.2f} ({pnl_percent:+.2f}%)</b>
+• Entry: ${format_price(Decimal(str(entry_price)))} 📊
+• Exit: ${format_price(Decimal(str(exit_price)))} 🎯
+• Size: {format_decimal_or_na(Decimal(str(position_size)))} 📦
+• Duration: {duration_text} ⏱️"""
 
         # Add fees breakdown if available
         if total_fees:
             message += f"""
 
-<b>P&L Breakdown:</b>
-• Gross P&L: ${gross_pnl:,.2f}
-• Total Fees: -${abs(total_fees):,.2f}
-• Net P&L: ${pnl:,.2f}"""
+<b>💰 P&L Breakdown:</b>
+• Gross P&L: ${gross_pnl:,.2f} 📈
+• Total Fees: -${abs(total_fees):,.2f} 💸
+• Net P&L: ${pnl:,.2f} 💰"""
 
         # Add execution stats
         if tp_hits > 0 or limit_fills > 0:
             message += f"""
 
-<b>Execution Stats:</b>"""
+<b>📊 Execution Stats:</b>"""
             if tp_hits > 0:
-                message += f"\n• Take Profits Hit: {tp_hits}"
+                message += f"\n• Take Profits Hit: {tp_hits} 🎯"
             if limit_fills > 0:
-                message += f"\n• Limit Orders Filled: {limit_fills}"
+                message += f"\n• Limit Orders Filled: {limit_fills} 📦"
 
         # Add close reason if provided
         if close_reason:

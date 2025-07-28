@@ -25,6 +25,14 @@ class EnhancedCache:
         self._async_lock = asyncio.Lock()  # Separate async lock
         self._max_size = max_size
         self._cleanup_threshold = int(max_size * 0.8)  # Cleanup when 80% full
+        
+        # Enhanced monitoring (2025 best practices)
+        self._hit_count = 0
+        self._miss_count = 0
+        self._eviction_count = 0
+        self._size_limit_exceeded_count = 0
+        self._last_health_check = 0
+        self._health_check_interval = 300  # 5 minutes
 
     def _cleanup_expired(self) -> None:
         """Clean up expired entries"""
@@ -43,24 +51,65 @@ class EnhancedCache:
             logger.debug(f"Cleaned up {len(expired_keys)} expired cache entries")
 
     def _cleanup_lru(self) -> None:
-        """Clean up least recently used entries if cache is full"""
+        """Clean up least recently used entries if cache is full (Enhanced 2025)"""
         if len(self._cache) < self._cleanup_threshold:
             return
 
-        # Sort by access time and remove oldest entries
-        sorted_keys = sorted(self._access_times.items(), key=lambda x: x[1])
-        keys_to_remove = [key for key, _ in sorted_keys[:len(sorted_keys) // 4]]  # Remove 25%
+        # Enhanced LRU cleanup with better eviction strategy
+        current_time = time.time()
+        sorted_items = sorted(self._access_times.items(), key=lambda x: x[1])
+        
+        # Calculate how many entries to remove (adaptive based on cache pressure)
+        cache_pressure = len(self._cache) / self._max_size
+        if cache_pressure > 0.95:
+            # High pressure - remove 40%
+            removal_ratio = 0.4
+        elif cache_pressure > 0.9:
+            # Medium pressure - remove 30%
+            removal_ratio = 0.3
+        else:
+            # Normal pressure - remove 25%
+            removal_ratio = 0.25
+        
+        removal_count = max(1, int(len(sorted_items) * removal_ratio))
+        keys_to_remove = [key for key, _ in sorted_items[:removal_count]]
 
+        # Priority eviction: Remove expired entries first
+        expired_keys = []
         for key in keys_to_remove:
+            entry = self._cache.get(key)
+            if entry and entry.get('expires') and current_time > entry['expires']:
+                expired_keys.append(key)
+        
+        # Remove expired entries first
+        for key in expired_keys:
             self._cache.pop(key, None)
             self._access_times.pop(key, None)
+            self._eviction_count += 1
+        
+        # Remove remaining LRU entries if needed
+        remaining_to_remove = removal_count - len(expired_keys)
+        if remaining_to_remove > 0:
+            non_expired_keys = [k for k in keys_to_remove if k not in expired_keys]
+            for key in non_expired_keys[:remaining_to_remove]:
+                self._cache.pop(key, None)
+                self._access_times.pop(key, None)
+                self._eviction_count += 1
 
-        logger.debug(f"Cleaned up {len(keys_to_remove)} LRU cache entries")
+        total_removed = len(expired_keys) + min(remaining_to_remove, len(non_expired_keys))
+        if total_removed > 0:
+            logger.debug(f"Enhanced LRU cleanup: {total_removed} entries removed ({len(expired_keys)} expired, {total_removed - len(expired_keys)} LRU)")
+        
+        # Track size limit exceeded incidents
+        if len(self._cache) >= self._max_size:
+            self._size_limit_exceeded_count += 1
 
     def get(self, key: str) -> Optional[Any]:
-        """Get value from cache if not expired (thread-safe)"""
+        """Get value from cache if not expired (thread-safe, enhanced with metrics)"""
         with self._lock:
             if key not in self._cache:
+                self._miss_count += 1
+                self._perform_health_check_if_needed()
                 return None
 
             entry = self._cache[key]
@@ -71,10 +120,12 @@ class EnhancedCache:
                 # Expired - remove and return None
                 self._cache.pop(key, None)
                 self._access_times.pop(key, None)
+                self._miss_count += 1
                 return None
 
             # Update access time
             self._access_times[key] = current_time
+            self._hit_count += 1
 
             return entry['value']
 
@@ -134,22 +185,106 @@ class EnhancedCache:
                 logger.error(f"Error fetching value for key {key}: {e}")
                 return None
 
+    def _perform_health_check_if_needed(self) -> None:
+        """Perform periodic health check (called from within lock)"""
+        current_time = time.time()
+        if (current_time - self._last_health_check) > self._health_check_interval:
+            self._last_health_check = current_time
+            
+            # Calculate hit rate
+            total_requests = self._hit_count + self._miss_count
+            hit_rate = (self._hit_count / total_requests * 100) if total_requests > 0 else 0
+            
+            # Log health status
+            if hit_rate < 70 and total_requests > 100:
+                logger.warning(f"💾 Cache performance degraded: {hit_rate:.1f}% hit rate ({total_requests} requests)")
+            elif hit_rate > 90 and total_requests > 100:
+                logger.debug(f"💾 Cache performing well: {hit_rate:.1f}% hit rate ({total_requests} requests)")
+            
+            # Check for excessive evictions
+            if self._eviction_count > 100:
+                logger.info(f"💾 Cache evictions: {self._eviction_count} total, consider increasing cache size")
+            
+            # Auto-cleanup if needed
+            if len(self._cache) > (self._max_size * 0.95):
+                logger.debug("💾 Performing automatic cache cleanup due to high usage")
+                self._cleanup_expired()
+                self._cleanup_lru()
+
     def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics"""
+        """Get enhanced cache statistics (2025 version)"""
         with self._lock:
             current_time = time.time()
             expired_count = 0
-
+            
+            # Count expired entries
             for entry in self._cache.values():
                 if entry.get('expires') and current_time > entry['expires']:
                     expired_count += 1
-
+            
+            total_requests = self._hit_count + self._miss_count
+            hit_rate = (self._hit_count / total_requests) if total_requests > 0 else 0
+            
             return {
                 "total_entries": len(self._cache),
                 "expired_entries": expired_count,
                 "max_size": self._max_size,
-                "usage_percent": (len(self._cache) / self._max_size) * 100
+                "usage_percent": (len(self._cache) / self._max_size) * 100,
+                "hit_rate": hit_rate,
+                "hit_count": self._hit_count,
+                "miss_count": self._miss_count,
+                "eviction_count": self._eviction_count,
+                "size_limit_exceeded_count": self._size_limit_exceeded_count,
+                "health_status": "healthy" if hit_rate > 0.7 or total_requests < 10 else "degraded"
             }
+    
+    def reset_metrics(self) -> None:
+        """Reset performance metrics"""
+        with self._lock:
+            self._hit_count = 0
+            self._miss_count = 0
+            self._eviction_count = 0
+            self._size_limit_exceeded_count = 0
+            logger.debug("💾 Cache metrics reset")
+    
+    def get_cache_health_report(self) -> Dict[str, Any]:
+        """Generate comprehensive cache health report"""
+        stats = self.get_stats()
+        
+        # Calculate performance grade
+        hit_rate = stats['hit_rate']
+        usage_percent = stats['usage_percent']
+        
+        if hit_rate > 0.9:
+            performance_grade = "A"
+        elif hit_rate > 0.8:
+            performance_grade = "B"
+        elif hit_rate > 0.7:
+            performance_grade = "C"
+        elif hit_rate > 0.5:
+            performance_grade = "D"
+        else:
+            performance_grade = "F"
+        
+        # Determine recommendations
+        recommendations = []
+        if hit_rate < 0.7:
+            recommendations.append("Consider increasing cache TTL values")
+        if usage_percent > 90:
+            recommendations.append("Consider increasing cache size")
+        if stats['eviction_count'] > stats['total_entries']:
+            recommendations.append("High eviction rate - optimize cache usage patterns")
+        if not recommendations:
+            recommendations.append("Cache performance is optimal")
+        
+        return {
+            "performance_grade": performance_grade,
+            "hit_rate_percent": hit_rate * 100,
+            "memory_efficiency": 100 - usage_percent,
+            "recommendations": recommendations,
+            "detailed_stats": stats,
+            "health_status": stats['health_status']
+        }
 
 # Global cache instance with reasonable size
 enhanced_cache = EnhancedCache(max_size=1000)
@@ -382,6 +517,32 @@ def invalidate_all_caches():
     """Clear all caches"""
     enhanced_cache.clear()
     logger.info("All caches cleared")
+
+async def invalidate_all_caches_async():
+    """Async version of invalidate_all_caches for non-blocking operation"""
+    await asyncio.to_thread(invalidate_all_caches)
+    logger.info("All caches cleared (async)")
+
+async def progressive_cache_invalidation(volatile_only: bool = True):
+    """
+    Progressive cache invalidation to prevent blocking operations
+    Based on 2025 best practices for async cache management
+    
+    Args:
+        volatile_only: If True, only clear volatile data (prices, balances, market data)
+                      If False, clear all caches including expensive AI analysis
+    """
+    logger.info(f"🧹 Starting progressive cache invalidation (volatile_only={volatile_only})")
+    
+    # Use async context to prevent blocking the main thread
+    if volatile_only:
+        # Clear only frequently-changing data to preserve expensive AI analysis
+        await asyncio.to_thread(invalidate_volatile_caches)
+        logger.info("✅ Progressive cache invalidation completed (volatile data only)")
+    else:
+        # Clear all caches in background thread
+        await asyncio.to_thread(invalidate_all_caches)
+        logger.info("✅ Progressive cache invalidation completed (all caches)")
 
 def invalidate_position_related_caches():
     """Invalidate only position-related caches (keep instrument info)"""

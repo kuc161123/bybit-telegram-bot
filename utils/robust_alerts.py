@@ -97,16 +97,19 @@ class AlertMessage:
         )
 
 class CircuitBreaker:
-    """Circuit breaker for handling service failures"""
+    """Enhanced circuit breaker for handling service failures with 2025 improvements"""
 
     def __init__(self, failure_threshold: int = CIRCUIT_BREAKER_THRESHOLD,
                  timeout: int = CIRCUIT_BREAKER_TIMEOUT):
         self.failure_threshold = failure_threshold
         self.timeout = timeout
         self.failure_count = 0
+        self.success_count = 0
         self.last_failure_time = None
+        self.last_success_time = None
         self.state = CircuitBreakerState.CLOSED
         self._lock = asyncio.Lock()
+        self._state_change_history = deque(maxlen=10)  # Track recent state changes
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         """Execute function with circuit breaker protection"""
@@ -123,10 +126,15 @@ class CircuitBreaker:
             result = await func(*args, **kwargs)
 
             async with self._lock:
+                self.success_count += 1
+                self.last_success_time = time.time()
+                
                 if self.state == CircuitBreakerState.HALF_OPEN:
-                    logger.info("Circuit breaker closing after successful call")
+                    logger.info("🔄 Circuit breaker closing after successful call")
+                    old_state = self.state
                     self.state = CircuitBreakerState.CLOSED
                     self.failure_count = 0
+                    self._record_state_change(old_state, self.state, "successful_call")
 
             return result
 
@@ -136,42 +144,89 @@ class CircuitBreaker:
                 self.last_failure_time = time.time()
 
                 if self.failure_count >= self.failure_threshold:
-                    logger.error(f"Circuit breaker opening after {self.failure_count} failures")
+                    logger.error(f"🚨 Circuit breaker opening after {self.failure_count} failures: {e}")
+                    old_state = self.state
                     self.state = CircuitBreakerState.OPEN
+                    self._record_state_change(old_state, self.state, f"failures_exceeded: {e}")
 
             raise
 
+    def _record_state_change(self, old_state: CircuitBreakerState, new_state: CircuitBreakerState, reason: str):
+        """Record state change for monitoring"""
+        self._state_change_history.append({
+            "timestamp": time.time(),
+            "old_state": old_state.value,
+            "new_state": new_state.value,
+            "reason": reason
+        })
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get circuit breaker statistics"""
+        return {
+            "state": self.state.value,
+            "failure_count": self.failure_count,
+            "success_count": self.success_count,
+            "failure_threshold": self.failure_threshold,
+            "timeout_seconds": self.timeout,
+            "last_failure_time": self.last_failure_time,
+            "last_success_time": self.last_success_time,
+            "recent_state_changes": list(self._state_change_history)
+        }
+
 class AlertDeduplicator:
-    """Prevent duplicate alerts within a time window"""
+    """Enhanced duplicate alert prevention with account-aware keys (2025 best practices)"""
 
     def __init__(self, ttl: int = ALERT_CACHE_TTL):
         self.ttl = ttl
         self._cache: Dict[str, float] = {}
         self._lock = asyncio.Lock()
+        self._duplicate_count = 0
+        self._last_cleanup = time.time()
 
     def _generate_key(self, alert: AlertMessage) -> str:
-        """Generate unique key for alert"""
-        return f"{alert.chat_id}:{alert.alert_type}:{alert.symbol}:{alert.side}"
+        """Generate unique key for alert with account awareness"""
+        account_type = alert.data.get("additional_info", {}).get("account_type", "main")
+        return f"{alert.chat_id}:{alert.alert_type}:{alert.symbol}:{alert.side}:{account_type}"
 
     async def is_duplicate(self, alert: AlertMessage) -> bool:
-        """Check if alert is a duplicate"""
+        """Check if alert is a duplicate with enhanced logic"""
         async with self._lock:
             key = self._generate_key(alert)
             now = time.time()
 
-            # Clean expired entries
-            expired_keys = [k for k, v in self._cache.items() if now - v > self.ttl]
-            for k in expired_keys:
-                del self._cache[k]
+            # Periodic cleanup (every 5 minutes)
+            if now - self._last_cleanup > 300:
+                await self._cleanup_expired_entries()
+                self._last_cleanup = now
 
             # Check if duplicate
             if key in self._cache:
-                logger.debug(f"Duplicate alert detected: {key}")
+                age = now - self._cache[key]
+                self._duplicate_count += 1
+                logger.debug(f"🔄 Duplicate alert detected: {key} (age: {age:.1f}s, total duplicates: {self._duplicate_count})")
                 return True
 
             # Add to cache
             self._cache[key] = now
             return False
+
+    async def _cleanup_expired_entries(self):
+        """Clean expired entries from cache"""
+        now = time.time()
+        expired_keys = [k for k, v in self._cache.items() if now - v > self.ttl]
+        for k in expired_keys:
+            del self._cache[k]
+        
+        if expired_keys:
+            logger.debug(f"🧹 Cleaned {len(expired_keys)} expired alert cache entries")
+
+    def get_stats(self) -> Dict[str, int]:
+        """Get deduplication statistics"""
+        return {
+            "cached_alerts": len(self._cache),
+            "duplicates_prevented": self._duplicate_count,
+            "cache_ttl_seconds": self.ttl
+        }
 
 class FailedAlertStorage:
     """Persistent storage for failed alerts"""

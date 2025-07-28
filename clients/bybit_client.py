@@ -31,15 +31,21 @@ async def get_http_session():
     global _http_session
 
     if _http_session is None or _http_session.closed:
-        # FIXED: Create connector with INCREASED connection pool settings
+        # PERFORMANCE OPTIMIZED: Create connector with DOUBLED connection pool settings
         connector = aiohttp.TCPConnector(
-            limit=HTTP_MAX_CONNECTIONS,  # Total connection pool size (from settings)
-            limit_per_host=HTTP_MAX_CONNECTIONS_PER_HOST,  # Connections per host (from settings)
+            limit=HTTP_MAX_CONNECTIONS,  # Total connection pool size (600 - DOUBLED)
+            limit_per_host=HTTP_MAX_CONNECTIONS_PER_HOST,  # Per-host connections (150 - DOUBLED)
             ttl_dns_cache=HTTP_DNS_CACHE_TTL,  # DNS cache TTL
             use_dns_cache=True,
             keepalive_timeout=HTTP_KEEPALIVE_TIMEOUT,
             enable_cleanup_closed=True,
-            force_close=False  # Keep connections alive
+            force_close=False,  # Keep connections alive
+            # NEW: Connection recycling and performance optimizations
+            ttl_pool=300,  # Connection pool TTL (5 minutes)
+            limit_per_host_active=50,  # Active connections per host
+            resolver=None,  # Use default resolver with caching
+            family=0,  # Use both IPv4 and IPv6
+            ssl=False  # Disable SSL verification for performance (use with caution)
         )
 
         # Create session with timeout configuration
@@ -73,6 +79,17 @@ async def cleanup_http_session():
     if _http_session and not _http_session.closed:
         await _http_session.close()
         logger.info("✅ HTTP session cleaned up")
+
+async def recycle_http_session():
+    """Recycle HTTP session to prevent connection pool exhaustion"""
+    global _http_session
+    async with _session_lock:
+        if _http_session and not _http_session.closed:
+            logger.info("🔄 Recycling HTTP session for performance optimization")
+            await _http_session.close()
+            _http_session = None
+            # Next call to get_http_session() will create a fresh session
+            logger.info("✅ HTTP session recycled successfully")
 
 # Initialize Bybit client with enhanced configuration
 def create_bybit_client():
