@@ -22,7 +22,7 @@ from telegram.error import TelegramError
 from config.constants import *
 from utils.alert_helpers import (
     format_tp_hit_alert, format_sl_hit_alert, format_limit_filled_alert,
-    format_tp1_early_hit_alert, format_tp1_with_fills_alert
+    format_tp_early_hit_alert, format_tp_with_fills_alert
 )
 
 logger = logging.getLogger(__name__)
@@ -475,12 +475,12 @@ class RobustAlertSystem:
             return format_limit_filled_alert(
                 alert.symbol, alert.side, alert.approach, additional_info
             )
-        elif alert.alert_type == "tp1_early_hit":
-            return format_tp1_early_hit_alert(
+        elif alert.alert_type == "tp_early_hit":
+            return format_tp_early_hit_alert(
                 alert.symbol, alert.side, alert.approach, cancelled_orders, additional_info
             )
-        elif alert.alert_type == "tp1_with_fills":
-            return format_tp1_with_fills_alert(
+        elif alert.alert_type == "tp_with_fills":
+            return format_tp_with_fills_alert(
                 alert.symbol, alert.side, alert.approach, cancelled_orders, additional_info
             )
 
@@ -576,7 +576,7 @@ async def send_trade_alert_robust(bot: Bot, chat_id: int, alert_type: str,
     # Determine priority based on alert type
     if alert_type in ["sl_hit", "position_closed"]:
         priority = AlertPriority.CRITICAL
-    elif alert_type in ["tp_hit", "tp1_early_hit", "tp1_with_fills"]:
+    elif alert_type in ["tp_hit", "tp_early_hit", "tp_with_fills"]:
         priority = AlertPriority.HIGH
     elif alert_type == "limit_filled":
         priority = AlertPriority.MEDIUM

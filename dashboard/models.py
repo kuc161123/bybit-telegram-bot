@@ -55,11 +55,24 @@ class AccountSummary:
 @dataclass
 class PnLAnalysis:
     """P&L analysis data model"""
-    tp1_profit: Decimal
-    tp1_full_profit: Decimal
+    tp_profit: Decimal
+    tp_full_profit: Decimal
     all_tp_profit: Decimal
     all_sl_loss: Decimal
-    tp1_coverage: float
+    tp_coverage: float
+    
+    # Legacy aliases for backward compatibility
+    @property
+    def tp1_profit(self) -> Decimal:
+        return self.tp_profit
+    
+    @property
+    def tp1_full_profit(self) -> Decimal:
+        return self.tp_full_profit
+    
+    @property
+    def tp1_coverage(self) -> float:
+        return self.tp_coverage
 
     @property
     def risk_reward_ratio(self) -> float:

@@ -117,7 +117,7 @@ class EnhancedGGShotAnalyzer(ScreenshotAnalyzer):
         total_checks = 0
         discrepancies = []
 
-        key_fields = [PRIMARY_ENTRY_PRICE, TP1_PRICE, SL_PRICE]
+        key_fields = [PRIMARY_ENTRY_PRICE, TP1_PRICE, SL_PRICE]  # Single TP approach only
 
         for field in key_fields:
             if field in original_params:
@@ -177,24 +177,23 @@ class EnhancedGGShotAnalyzer(ScreenshotAnalyzer):
                     else:
                         issues.append("Sell entries not in ascending order")
 
-        # Check 2: TP levels are in correct order
-        tps = []
-        for key in [TP1_PRICE, TP2_PRICE, TP3_PRICE, TP4_PRICE]:
-            if key in params:
-                tps.append(params[key])
-
-        if len(tps) >= 2:
+        # Check 2: Single TP validation (no longer checking TP order since we only have TP1)
+        if TP1_PRICE in params:
             total_checks += 1
-            if side == "Buy":
-                if all(tps[i] <= tps[i+1] for i in range(len(tps)-1)):
-                    checks_passed += 1
-                else:
-                    issues.append("Buy TPs not in ascending order")
-            else:  # Sell
-                if all(tps[i] >= tps[i+1] for i in range(len(tps)-1)):
-                    checks_passed += 1
-                else:
-                    issues.append("Sell TPs not in descending order")
+            # Just verify TP1 is on correct side of entry
+            tp1 = params[TP1_PRICE]
+            entry = params.get(PRIMARY_ENTRY_PRICE)
+            if entry:
+                if side == "Buy":
+                    if tp1 > entry:
+                        checks_passed += 1
+                    else:
+                        issues.append("Buy TP not above entry")
+                else:  # Sell
+                    if tp1 < entry:
+                        checks_passed += 1
+                    else:
+                        issues.append("Sell TP not below entry")
 
         # Check 3: SL is on correct side of entries
         if SL_PRICE in params and PRIMARY_ENTRY_PRICE in params:
@@ -271,19 +270,8 @@ class EnhancedGGShotAnalyzer(ScreenshotAnalyzer):
         else:
             issues.append(f"SL too far from entry: {sl_distance:.4%}")
 
-        # Check 3: TP spacing validation for conservative
-        if params.get("strategy_type") == "conservative":
-            tp2 = params.get(TP2_PRICE)
-            tp3 = params.get(TP3_PRICE)
-            tp4 = params.get(TP4_PRICE)
-
-            if tp2 and tp3:
-                total_checks += 1
-                spacing_2_3 = abs((tp3 - tp2) / tp2)
-                if min_distance_pct <= spacing_2_3 <= max_distance_pct:
-                    checks_passed += 1
-                else:
-                    issues.append(f"TP2-TP3 spacing issue: {spacing_2_3:.4%}")
+        # Check 3: Single TP validation for conservative (no TP spacing needed with single TP)
+        # Only validating that TP1 exists and is properly positioned - already done above
 
         confidence = checks_passed / total_checks if total_checks > 0 else 0
 

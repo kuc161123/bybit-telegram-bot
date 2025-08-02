@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  bybit-bot:
+    build: .
+    container_name: bybit-telegram-bot
+    restart: unless-stopped
+    environment:
+      # Core Configuration (REQUIRED)
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - BYBIT_API_KEY=${BYBIT_API_KEY}
+      - BYBIT_API_SECRET=${BYBIT_API_SECRET}
+      - USE_TESTNET=${USE_TESTNET:-false}
+      
+      # OpenAI Integration (OPTIONAL)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - ENABLE_GPT4_REASONING=${ENABLE_GPT4_REASONING:-true}
+      
+      # Mirror Trading (OPTIONAL)
+      - BYBIT_API_KEY_2=${BYBIT_API_KEY_2}
+      - BYBIT_API_SECRET_2=${BYBIT_API_SECRET_2}
+      
+      # Social Media APIs (OPTIONAL)
+      - REDDIT_CLIENT_ID=${REDDIT_CLIENT_ID}
+      - REDDIT_CLIENT_SECRET=${REDDIT_CLIENT_SECRET}
+      - TWITTER_BEARER_TOKEN=${TWITTER_BEARER_TOKEN}
+      - TWITTER_API_KEY=${TWITTER_API_KEY}
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      
+      # Performance Configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PERSISTENCE_FILE=${PERSISTENCE_FILE:-bybit_bot_dashboard_v4.1_enhanced.pkl}
+      
+      # Enhanced Features
+      - ENABLE_ENHANCED_TP_SL=${ENABLE_ENHANCED_TP_SL:-true}
+      - CANCEL_LIMITS_ON_TP1=${CANCEL_LIMITS_ON_TP1:-true}
+      - DYNAMIC_FEE_CALCULATION=${DYNAMIC_FEE_CALCULATION:-true}
+      - BREAKEVEN_FAILSAFE_ENABLED=${BREAKEVEN_FAILSAFE_ENABLED:-true}
+      - ENABLE_ENHANCED_MARKET_ANALYSIS=${ENABLE_ENHANCED_MARKET_ANALYSIS:-true}
+      
+      # Performance Optimizations
+      - HTTP_MAX_CONNECTIONS=${HTTP_MAX_CONNECTIONS:-600}
+      - HTTP_MAX_CONNECTIONS_PER_HOST=${HTTP_MAX_CONNECTIONS_PER_HOST:-150}
+      - ENABLE_CIRCUIT_BREAKER=${ENABLE_CIRCUIT_BREAKER:-true}
+      - ENABLE_PERIODIC_MONITOR_CLEANUP=${ENABLE_PERIODIC_MONITOR_CLEANUP:-true}
+      
+    volumes:
+      # Persist bot data and logs
+      - ./data:/app/data
+      - ./logs:/app/logs
+      # Mount the pickle file to persist state
+      - ./bybit_bot_dashboard_v4.1_enhanced.pkl:/app/bybit_bot_dashboard_v4.1_enhanced.pkl
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('bybit_bot_dashboard_v4.1_enhanced.pkl') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

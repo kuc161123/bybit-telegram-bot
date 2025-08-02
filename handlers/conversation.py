@@ -87,7 +87,7 @@ SYMBOL, SIDE, APPROACH_SELECTION, SCREENSHOT_UPLOAD, PRIMARY_ENTRY, LIMIT_ENTRIE
 
 # Additional states for streamlined GGShot flow
 GGSHOT_LIMIT_FLOW_1, GGSHOT_LIMIT_FLOW_2, GGSHOT_LIMIT_FLOW_3 = range(13, 16)
-GGSHOT_TP_FLOW_1, GGSHOT_TP_FLOW_2, GGSHOT_TP_FLOW_3, GGSHOT_TP_FLOW_4 = range(16, 20)
+GGSHOT_TP_FLOW_1 = 16  # Single TP flow only
 
 def build_conversation_keyboard(include_back=False, back_state=None, include_cancel=True):
     """Build conversation keyboard with optional back button"""
@@ -712,9 +712,6 @@ async def mock_ai_screenshot_analysis(chat_data: dict) -> dict:
                 LIMIT_ENTRY_2_PRICE: Decimal("64600"),
                 LIMIT_ENTRY_3_PRICE: Decimal("64400"),
                 TP1_PRICE: Decimal("66500"),
-                TP2_PRICE: Decimal("67000"),
-                TP3_PRICE: Decimal("67500"),
-                TP4_PRICE: Decimal("68000"),
                 SL_PRICE: Decimal("63000"),
                 "leverage": 10,
                 "margin_amount": Decimal("100")
@@ -885,11 +882,8 @@ async def show_extracted_parameters_confirmation(context: ContextTypes.DEFAULT_T
             f"• Entry #1: {format_value_with_edit_indicator(params.get(LIMIT_ENTRY_1_PRICE), 'limit_1', edited_fields)}\n"
             f"• Entry #2: {format_value_with_edit_indicator(params.get(LIMIT_ENTRY_2_PRICE), 'limit_2', edited_fields)}\n"
             f"• Entry #3: {format_value_with_edit_indicator(params.get(LIMIT_ENTRY_3_PRICE), 'limit_3', edited_fields)}\n\n"
-            f"🎯 <b>Take Profits:</b>\n"
-            f"• TP1 (70%): {format_value_with_edit_indicator(params.get(TP1_PRICE), 'tp1', edited_fields)}\n"
-            f"• TP2 (10%): {format_value_with_edit_indicator(params.get(TP2_PRICE), 'tp2', edited_fields)}\n"
-            f"• TP3 (10%): {format_value_with_edit_indicator(params.get(TP3_PRICE), 'tp3', edited_fields)}\n"
-            f"• TP4 (10%): {format_value_with_edit_indicator(params.get(TP4_PRICE), 'tp4', edited_fields)}\n\n"
+            f"🎯 <b>Take Profit:</b>\n"
+            f"• Target (100%): {format_value_with_edit_indicator(params.get(TP1_PRICE), 'tp1', edited_fields)} - Complete Exit\n\n"
             f"🛡️ <b>Stop Loss:</b> {format_value_with_edit_indicator(params.get(SL_PRICE), 'sl', edited_fields)}\n\n"
             f"💡 <i>Review values and edit if needed</i>\n"
         )
@@ -1195,70 +1189,11 @@ async def handle_ggshot_callbacks(update: Update, context: ContextTypes.DEFAULT_
             return GGSHOT_LIMIT_FLOW_2
 
     elif query.data.startswith("ggshot_tp_back:"):
-        # Handle back navigation in TP flow
-        tp_num = int(query.data.split(":")[1])
-        if tp_num == 1:
-            # Going back to TP1
-            context.chat_data["ggshot_current_tp"] = 1
-            context.chat_data["ggshot_tp_flow_expecting"] = "tp_1"
-            return await start_ggshot_tp_flow(context, query.message.chat.id)
-        elif tp_num == 2:
-            # Going back to TP2 from TP3
-            context.chat_data["ggshot_current_tp"] = 2
-            context.chat_data["ggshot_tp_flow_expecting"] = "tp_2"
-
-            tp_msg = (
-                f"📊 <b>Edit Take Profits - Streamlined Flow</b>\n"
-                f"Symbol: {context.chat_data.get(SYMBOL, 'Unknown')} | Side: {context.chat_data.get(SIDE, 'Buy')}\n\n"
-                f"✅ TP1 (85%): <code>{format_price(context.chat_data.get(TP1_PRICE))}</code>\n\n"
-                f"🎯 <b>Take Profit 2 of 4 (5%)</b>\n\n"
-            )
-
-            current_tp_2 = context.chat_data.get(TP2_PRICE, None)
-            if current_tp_2:
-                tp_msg += f"Current value: <code>{format_price(current_tp_2)}</code>\n\n"
-
-            tp_msg += (
-                f"Enter the price for <b>TP2 (5% of position)</b>:\n"
-                f"💡 This is your second profit target"
-            )
-
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Back to TP1", callback_data="ggshot_tp_back:1")],
-                [InlineKeyboardButton("❌ Cancel Edit", callback_data="ggshot_back_to_edit")]
-            ])
-
-            await edit_last_message(context, query.message.chat.id, tp_msg, keyboard)
-            return GGSHOT_TP_FLOW_2
-        elif tp_num == 3:
-            # Going back to TP3 from TP4
-            context.chat_data["ggshot_current_tp"] = 3
-            context.chat_data["ggshot_tp_flow_expecting"] = "tp_3"
-
-            tp_msg = (
-                f"📊 <b>Edit Take Profits - Streamlined Flow</b>\n"
-                f"Symbol: {context.chat_data.get(SYMBOL, 'Unknown')} | Side: {context.chat_data.get(SIDE, 'Buy')}\n\n"
-                f"✅ TP1 (85%): <code>{format_price(context.chat_data.get(TP1_PRICE))}</code>\n"
-                f"✅ TP2 (5%): <code>{format_price(context.chat_data.get(TP2_PRICE))}</code>\n\n"
-                f"🎯 <b>Take Profit 3 of 4 (5%)</b>\n\n"
-            )
-
-            current_tp_3 = context.chat_data.get(TP3_PRICE, None)
-            if current_tp_3:
-                tp_msg += f"Current value: <code>{format_price(current_tp_3)}</code>\n\n"
-
-            tp_msg += (
-                f"Enter the price for <b>TP3 (5% of position)</b>:\n"
-                f"💡 This is your third profit target"
-            )
-
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("⬅️ Back to TP2", callback_data="ggshot_tp_back:2")],
-                [InlineKeyboardButton("❌ Cancel Edit", callback_data="ggshot_back_to_edit")]
-            ])
-
-            await edit_last_message(context, query.message.chat.id, tp_msg, keyboard)
-            return GGSHOT_TP_FLOW_3
+        # Handle back navigation in TP flow - Single TP approach
+        # For single TP approach, always go back to TP flow
+        context.chat_data["ggshot_current_tp"] = 1
+        context.chat_data["ggshot_tp_flow_expecting"] = "tp_1"
+        return await start_ggshot_tp_flow(context, query.message.chat.id)
 
     elif query.data == "ggshot_override_validation":
         # User wants to override validation errors and continue
@@ -1591,7 +1526,7 @@ async def limit_entries_handler(update: Update, context: ContextTypes.DEFAULT_TY
 # Fast approach function removed - only conservative approach supported
 
 async def ask_for_conservative_take_profits(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
-    """Ask for 4 take profit prices in conservative approach"""
+    """Ask for single take profit price in Take Profit approach"""
     symbol = context.chat_data.get(SYMBOL, "Unknown")
     side = context.chat_data.get(SIDE, "Buy")
     trade_group_id = context.chat_data.get(CONSERVATIVE_TRADE_GROUP_ID, "Unknown")
@@ -1608,11 +1543,11 @@ async def ask_for_conservative_take_profits(context: ContextTypes.DEFAULT_TYPE, 
         f"✅ <b>Approach:</b> 🛡️ Conservative Limits\n"
         f"✅ <b>Trade Group:</b> {trade_group_id} 🛡️\n"
         f"✅ <b>Limits:</b> {format_price(limit1_price)}, {format_price(limit2_price)}, {format_price(limit3_price)}\n\n"
-        f"🎯 <b>Step 5 of 7: Take Profit Prices</b>\n\n"
-        f"Enter 4 take profit prices (one per message):\n"
-        f"💡 TP1: 70% | TP2: 10% | TP3: 10% | TP4: 10%\n"
-        f"🛡️ All orders will be protected from cleanup\n\n"
-        f"Enter <b>Take Profit #1</b> price (70% close):"
+        f"🎯 <b>Step 5 of 7: Take Profit Price</b>\n\n"
+        f"Enter your Take Profit price:\n"
+        f"💡 Complete exit (100%) when target is reached\n"
+        f"🛡️ Position closes fully at take profit target\n\n"
+        f"Enter <b>Take Profit</b> price (100% close):"
     )
 
     cancel_keyboard = InlineKeyboardMarkup([
@@ -1648,76 +1583,12 @@ async def take_profits_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return TAKE_PROFITS
 
-        # Only conservative approach supported now - go to conservative take profits flow
-        # Conservative approach - 4 TPs
-        tps_entered = context.chat_data.get("take_profits_entered", 0)
+        # Single Take Profit approach - only collect 1 TP price
+        context.chat_data[TP1_PRICE] = price
+        context.chat_data["take_profits_entered"] = 1
 
-        if tps_entered == 0:
-            context.chat_data[TP1_PRICE] = price
-            context.chat_data["take_profits_entered"] = 1
-
-            # Ask for TP2
-            tp2_msg = (
-                f"✅ <b>TP1 (70%):</b> <code>{format_price(price)}</code> 🛡️\n\n"
-                f"🎯 <b>Step 5 of 7: Take Profit Prices</b>\n\n"
-                f"Enter <b>Take Profit #2</b> price (10% close):"
-            )
-
-            cancel_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_conversation")]
-            ])
-
-            await edit_last_message(context, chat_id, tp2_msg, cancel_keyboard)
-            return TAKE_PROFITS
-
-        elif tps_entered == 1:
-            context.chat_data[TP2_PRICE] = price
-            context.chat_data["take_profits_entered"] = 2
-
-            # Ask for TP3
-            tp1_price = context.chat_data.get(TP1_PRICE)
-            tp3_msg = (
-                f"✅ <b>TP1 (70%):</b> <code>{format_price(tp1_price)}</code> 🛡️\n"
-                f"✅ <b>TP2 (10%):</b> <code>{format_price(price)}</code> 🛡️\n\n"
-                f"🎯 <b>Step 5 of 7: Take Profit Prices</b>\n\n"
-                f"Enter <b>Take Profit #3</b> price (10% close):"
-            )
-
-            cancel_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_conversation")]
-            ])
-
-            await edit_last_message(context, chat_id, tp3_msg, cancel_keyboard)
-            return TAKE_PROFITS
-
-        elif tps_entered == 2:
-            context.chat_data[TP3_PRICE] = price
-            context.chat_data["take_profits_entered"] = 3
-
-            # Ask for TP4
-            tp1_price = context.chat_data.get(TP1_PRICE)
-            tp2_price = context.chat_data.get(TP2_PRICE)
-            tp4_msg = (
-                f"✅ <b>TP1 (70%):</b> <code>{format_price(tp1_price)}</code> 🛡️\n"
-                f"✅ <b>TP2 (10%):</b> <code>{format_price(tp2_price)}</code> 🛡️\n"
-                f"✅ <b>TP3 (10%):</b> <code>{format_price(price)}</code> 🛡️\n\n"
-                f"🎯 <b>Step 5 of 7: Take Profit Prices</b>\n\n"
-                f"Enter <b>Take Profit #4</b> price (10% close):"
-            )
-
-            cancel_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_conversation")]
-            ])
-
-            await edit_last_message(context, chat_id, tp4_msg, cancel_keyboard)
-            return TAKE_PROFITS
-
-        elif tps_entered == 3:
-            context.chat_data[TP4_PRICE] = price
-            context.chat_data["take_profits_entered"] = 4
-
-            # All 4 TPs entered, move to stop loss
-            return await ask_for_stop_loss(context, chat_id)
+        # Single TP entered, move directly to stop loss
+        return await ask_for_stop_loss(context, chat_id)
 
     except (ValueError, InvalidOperation):
         await send_error_and_retry(
@@ -1765,10 +1636,7 @@ async def ask_for_stop_loss(context: ContextTypes.DEFAULT_TYPE, chat_id: int) ->
         limit1_price = context.chat_data.get(LIMIT_ENTRY_1_PRICE)
         limit2_price = context.chat_data.get(LIMIT_ENTRY_2_PRICE)
         limit3_price = context.chat_data.get(LIMIT_ENTRY_3_PRICE)
-        tp1_price = context.chat_data.get(TP1_PRICE)
-        tp2_price = context.chat_data.get(TP2_PRICE)
-        tp3_price = context.chat_data.get(TP3_PRICE)
-        tp4_price = context.chat_data.get(TP4_PRICE)
+        tp_price = context.chat_data.get(TP_PRICE)
 
         sl_msg = (
             f"✅ <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
@@ -1776,7 +1644,7 @@ async def ask_for_stop_loss(context: ContextTypes.DEFAULT_TYPE, chat_id: int) ->
             f"✅ <b>Approach:</b> {approach_emoji} {approach_text}\n"
             f"✅ <b>Trade Group:</b> {trade_group_id} 🛡️\n"
             f"✅ <b>Limits:</b> {format_price(limit1_price)}, {format_price(limit2_price)}, {format_price(limit3_price)}\n"
-            f"✅ <b>TPs:</b> {format_price(tp1_price)}, {format_price(tp2_price)}, {format_price(tp3_price)}, {format_price(tp4_price)} 🛡️\n\n"
+            f"✅ <b>TP:</b> {format_price(tp_price)} 🛡️\n\n"
             f"🛡️ <b>Step 6 of 7: Stop Loss</b>\n\n"
             f"Enter your stop loss price:\n"
             f"💡 This will cancel all remaining orders if hit\n"
@@ -1834,15 +1702,17 @@ async def stop_loss_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # =============================================
 
 async def ask_for_leverage_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
-    """Ask for leverage with quick selection buttons"""
+    """Ask for leverage with quick selection buttons and 2% risk recommendation"""
     max_lev = int(context.chat_data.get(MAX_LEVERAGE_FOR_SYMBOL, 100))
 
+    # Start with base message
     leverage_msg = (
         f"🛡️ <b>Stop Loss Set!</b>\n\n"
         f"⚡ <b>Step 7a: Select Leverage</b>\n\n"
-        f"Choose your leverage (max {max_lev}x):\n"
-        f"💡 Select a quick option or choose Custom for your own value"
     )
+
+    leverage_msg += f"Choose your leverage (max {max_lev}x):\n"
+    leverage_msg += f"💡 Select a quick option or choose Custom for your own value"
 
     # Build leverage selection keyboard with common options
     common_leverages = [5, 10, 20, 50]
@@ -1996,11 +1866,74 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
 
     # Only conservative approach supported now - both trades option removed
 
+    # ENHANCED: Calculate 2% risk margin recommendation
+    recommended_margin = None
+    try:
+        from utils.leverage_calculator import calculate_2_percent_risk_margin
+        
+        # Get required data from chat context - use limit entry prices for more accuracy
+        limit_1 = safe_decimal_conversion(context.chat_data.get("limit_entry_1_price", 0))
+        limit_2 = safe_decimal_conversion(context.chat_data.get("limit_entry_2_price", 0))
+        limit_3 = safe_decimal_conversion(context.chat_data.get("limit_entry_3_price", 0))
+        
+        # Calculate average entry price from limit orders (more accurate than primary entry)
+        valid_limits = [price for price in [limit_1, limit_2, limit_3] if price > 0]
+        if valid_limits:
+            entry_price = sum(valid_limits) / len(valid_limits)
+            logger.info(f"💡 Using average of {len(valid_limits)} limit prices: {valid_limits} → ${entry_price}")
+        else:
+            # Fallback to primary entry price if no limits set yet
+            entry_price = safe_decimal_conversion(context.chat_data.get("primary_entry_price", 0))
+            logger.info(f"🔄 Fallback to primary entry price: ${entry_price}")
+        
+        sl_price = safe_decimal_conversion(context.chat_data.get("sl_price", 0))
+        
+        logger.info(f"🔍 Debug margin calc - Entry: {entry_price}, SL: {sl_price}, Leverage: {leverage}")
+        
+        if all([entry_price > 0, sl_price > 0, leverage > 0]):
+            logger.info(f"💡 Calculating margin recommendation: Entry=${entry_price}, SL=${sl_price}, Leverage={leverage}x")
+            recommended_margin, explanation = await calculate_2_percent_risk_margin(
+                entry_price, sl_price, leverage
+            )
+            logger.info(f"💡 Margin calculation result: {recommended_margin}% - {explanation}")
+        else:
+            logger.warning(f"❌ Missing data for margin calculation - Entry: {entry_price}, SL: {sl_price}, Leverage: {leverage}")
+            if entry_price <= 0:
+                logger.warning("❌ Entry price is invalid or missing")
+            if sl_price <= 0:
+                logger.warning("❌ Stop loss price is invalid or missing")
+            if leverage <= 0:
+                logger.warning("❌ Leverage is invalid or missing")
+            
+    except Exception as e:
+        logger.error(f"Error calculating margin recommendation: {e}")
+        recommended_margin = None
+
     # Standard single margin selection
     margin_msg = (
         f"⚡ <b>Leverage Set: {leverage}x</b>\n"
         f"💰 <b>{balance_display}</b>\n\n"
         f"📊 <b>Step 7b: Select Margin Percentage</b>\n\n"
+    )
+    
+    # Add recommendation if available
+    if recommended_margin:
+        # Check if we used limit prices for better user understanding
+        limit_count = len([p for p in [context.chat_data.get("limit_entry_1_price", 0), 
+                                     context.chat_data.get("limit_entry_2_price", 0), 
+                                     context.chat_data.get("limit_entry_3_price", 0)] if p > 0])
+        
+        if limit_count > 0:
+            margin_msg += f"💡 <b>Recommended: {recommended_margin}%</b> ({explanation})\n"
+            margin_msg += f"📊 <i>Based on average of {limit_count} limit entry prices</i>\n\n"
+        else:
+            margin_msg += f"💡 <b>Recommended: {recommended_margin}%</b> ({explanation})\n\n"
+            
+        logger.info(f"✅ Added margin recommendation to message: {recommended_margin}%")
+    else:
+        logger.info("ℹ️ No margin recommendation available")
+    
+    margin_msg += (
         f"Choose what percentage of your account to use:\n"
         f"💡 Select a quick option or choose Custom for your own percentage"
     )
@@ -2008,6 +1941,17 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
     # Build margin selection keyboard with percentage options
     common_percentages = [0.5, 1, 2, 5, 10]  # Percentage values including 0.5%
     keyboard = []
+    
+    # ENHANCED: Add recommended margin as first button if it doesn't match common options
+    if recommended_margin and recommended_margin not in common_percentages:
+        if available_balance > 0:
+            rec_usdt_amount = (available_balance * Decimal(str(recommended_margin))) / 100
+            rec_button_text = f"💡 {recommended_margin}% (≈${format_decimal_or_na(rec_usdt_amount, 2)}) - 2% Risk"
+        else:
+            rec_button_text = f"💡 {recommended_margin}% - 2% Risk"
+        keyboard.append([
+            InlineKeyboardButton(rec_button_text, callback_data=f"conv_margin_pct:{recommended_margin}")
+        ])
 
     # Add common percentage buttons (2 per row)
     for i in range(0, len(common_percentages), 2):
@@ -2018,9 +1962,18 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
                 # Calculate USDT amount for display
                 if available_balance > 0:
                     usdt_amount = (available_balance * Decimal(str(percentage))) / 100
-                    button_text = f"{percentage}% (≈${format_decimal_or_na(usdt_amount, 2)})"
+                    
+                    # Highlight recommended margin if it matches a common option
+                    if recommended_margin and abs(percentage - recommended_margin) < 0.1:  # Close enough match
+                        button_text = f"💡 {percentage}% (≈${format_decimal_or_na(usdt_amount, 2)}) - 2% Risk"
+                    else:
+                        button_text = f"{percentage}% (≈${format_decimal_or_na(usdt_amount, 2)})"
                 else:
-                    button_text = f"{percentage}%"
+                    if recommended_margin and abs(percentage - recommended_margin) < 0.1:
+                        button_text = f"💡 {percentage}% - 2% Risk"
+                    else:
+                        button_text = f"{percentage}%"
+                        
                 row.append(InlineKeyboardButton(button_text, callback_data=f"conv_margin_pct:{percentage}"))
         if row:
             keyboard.append(row)
@@ -2749,10 +2702,7 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         limit1_price = context.chat_data.get(LIMIT_ENTRY_1_PRICE, Decimal("0"))
         limit2_price = context.chat_data.get(LIMIT_ENTRY_2_PRICE, Decimal("0"))
         limit3_price = context.chat_data.get(LIMIT_ENTRY_3_PRICE, Decimal("0"))
-        tp1_price = context.chat_data.get(TP1_PRICE, Decimal("0"))
-        tp2_price = context.chat_data.get(TP2_PRICE, Decimal("0"))
-        tp3_price = context.chat_data.get(TP3_PRICE, Decimal("0"))
-        tp4_price = context.chat_data.get(TP4_PRICE, Decimal("0"))
+        tp_price = context.chat_data.get(TP_PRICE, Decimal("0"))
         sl_price = context.chat_data.get(SL_PRICE, Decimal("0"))
 
         # Check if merge will happen
@@ -2794,11 +2744,8 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
             f"• <b>Limit #1:</b> <code>{format_price(limit1_price)}</code> 🛡️\n"
             f"• <b>Limit #2:</b> <code>{format_price(limit2_price)}</code> 🛡️\n"
             f"• <b>Limit #3:</b> <code>{format_price(limit3_price)}</code> 🛡️\n\n"
-            f"🎯 <b>TAKE PROFITS:</b>\n"
-            f"• <b>TP1 (70%):</b> <code>{format_price(tp1_price)}</code> 🛡️\n"
-            f"• <b>TP2 (10%):</b> <code>{format_price(tp2_price)}</code> 🛡️\n"
-            f"• <b>TP3 (10%):</b> <code>{format_price(tp3_price)}</code> 🛡️\n"
-            f"• <b>TP4 (10%):</b> <code>{format_price(tp4_price)}</code> 🛡️\n\n"
+            f"🎯 <b>TAKE PROFIT:</b>\n"
+            f"• <b>TP (100%):</b> <code>{format_price(tp_price)}</code> 🛡️\n\n"
             f"🛡️ <b>Stop Loss:</b> <code>{format_price(sl_price)}</code> 🛡️\n"
             f"⚡ <b>Leverage:</b> {leverage}x\n"
             f"💰 <b>Total Margin:</b> {format_decimal_or_na(margin)} USDT"
@@ -2858,10 +2805,7 @@ async def show_both_trades_confirmation(context: ContextTypes.DEFAULT_TYPE, chat
 
     # Get all extracted prices
     entry_price = context.chat_data.get(PRIMARY_ENTRY_PRICE, Decimal("0"))
-    tp1_price = context.chat_data.get(TP1_PRICE, Decimal("0"))
-    tp2_price = context.chat_data.get(TP2_PRICE, Decimal("0"))
-    tp3_price = context.chat_data.get(TP3_PRICE, Decimal("0"))
-    tp4_price = context.chat_data.get(TP4_PRICE, Decimal("0"))
+    tp_price = context.chat_data.get(TP_PRICE, Decimal("0"))
     sl_price = context.chat_data.get(SL_PRICE, Decimal("0"))
 
     # Conservative limit prices
@@ -2925,11 +2869,8 @@ async def show_both_trades_confirmation(context: ContextTypes.DEFAULT_TYPE, chat
         f"  • L1: <code>{format_price(limit1_price)}</code> (33.33%)\n"
         f"  • L2: <code>{format_price(limit2_price)}</code> (33.33%)\n"
         f"  • L3: <code>{format_price(limit3_price)}</code> (33.33%)\n"
-        f"🎯 <b>Take Profits:</b>\n"
-        f"  • TP1: <code>{format_price(tp1_price)}</code> (70%)\n"
-        f"  • TP2: <code>{format_price(tp2_price)}</code> (10%)\n"
-        f"  • TP3: <code>{format_price(tp3_price)}</code> (10%)\n"
-        f"  • TP4: <code>{format_price(tp4_price)}</code> (10%)\n"
+        f"🎯 <b>Take Profit:</b>\n"
+        f"  • TP: <code>{format_price(tp_price)}</code> (100%)\n"
         f"🛡️ SL: <code>{format_price(sl_price)}</code>\n\n"
         f"{'─' * 30}\n"
         f"🛡️ <b>Protection:</b> Both trades protected from cleanup\n"
@@ -3145,7 +3086,7 @@ async def handle_modify_trade(update: Update, context: ContextTypes.DEFAULT_TYPE
     keys_to_clear = [
         TRADING_APPROACH, ORDER_STRATEGY, LEVERAGE, MARGIN_AMOUNT,
         PRIMARY_ENTRY_PRICE, LIMIT_ENTRY_1_PRICE, LIMIT_ENTRY_2_PRICE,
-        TP1_PRICE, TP2_PRICE, TP3_PRICE, TP4_PRICE, SL_PRICE,
+        TP_PRICE, SL_PRICE,
         "limit_orders_entered", "conservative_trade_group_id",
         "margin_percentage", "tp_count"
     ]
@@ -3866,11 +3807,8 @@ async def show_ggshot_edit_tps(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     symbol = context.chat_data.get(SYMBOL, "Unknown")
     side = context.chat_data.get(SIDE, "Buy")
 
-    # Get current TP prices
+    # Get current TP price (single TP approach)
     tp1 = context.chat_data.get(TP1_PRICE, "Not Set")
-    tp2 = context.chat_data.get(TP2_PRICE, "Not Set")
-    tp3 = context.chat_data.get(TP3_PRICE, "Not Set")
-    tp4 = context.chat_data.get(TP4_PRICE, "Not Set")
 
     # Get edited fields
     edited_fields = context.chat_data.get("ggshot_edited_fields", set())
@@ -3880,27 +3818,12 @@ async def show_ggshot_edit_tps(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     if "tp1" in edited_fields:
         tp1_display += " ✅ <i>(edited)</i>"
 
-    tp2_display = f"<code>{format_decimal_or_na(tp2)}</code>"
-    if "tp2" in edited_fields:
-        tp2_display += " ✅ <i>(edited)</i>"
-
-    tp3_display = f"<code>{format_decimal_or_na(tp3)}</code>"
-    if "tp3" in edited_fields:
-        tp3_display += " ✅ <i>(edited)</i>"
-
-    tp4_display = f"<code>{format_decimal_or_na(tp4)}</code>"
-    if "tp4" in edited_fields:
-        tp4_display += " ✅ <i>(edited)</i>"
-
     edit_msg = (
-        f"🎯 <b>Edit Take Profits</b>\n"
+        f"🎯 <b>Edit Take Profit</b>\n"
         f"{'═' * 25}\n\n"
         f"Symbol: <code>{symbol}</code> {'📈' if side == 'Buy' else '📉'} {side.upper()}\n\n"
-        f"Current take profit prices:\n\n"
-        f"• TP1 (70%): {tp1_display}\n"
-        f"• TP2 (10%): {tp2_display}\n"
-        f"• TP3 (10%): {tp3_display}\n"
-        f"• TP4 (10%): {tp4_display}\n\n"
+        f"Current take profit price:\n\n"
+        f"• Take Profit (100%): {tp1_display}\n\n"
     )
 
     # Add instruction based on edit status
@@ -3912,21 +3835,15 @@ async def show_ggshot_edit_tps(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     # Build keyboard with edit status
     buttons = []
 
-    # Add edit buttons with indicators
-    btn1_text = "🎯 Edit TP1" if "tp1" not in edited_fields else "✏️ Edit TP1 (Modified)"
-    btn2_text = "🎯 Edit TP2" if "tp2" not in edited_fields else "✏️ Edit TP2 (Modified)"
-    btn3_text = "🎯 Edit TP3" if "tp3" not in edited_fields else "✏️ Edit TP3 (Modified)"
-    btn4_text = "🎯 Edit TP4" if "tp4" not in edited_fields else "✏️ Edit TP4 (Modified)"
+    # Add edit button with indicator
+    btn1_text = "🎯 Edit Take Profit" if "tp1" not in edited_fields else "✏️ Edit Take Profit (Modified)"
 
     buttons.extend([
-        [InlineKeyboardButton(btn1_text, callback_data="ggshot_set_tp_1")],
-        [InlineKeyboardButton(btn2_text, callback_data="ggshot_set_tp_2")],
-        [InlineKeyboardButton(btn3_text, callback_data="ggshot_set_tp_3")],
-        [InlineKeyboardButton(btn4_text, callback_data="ggshot_set_tp_4")]
+        [InlineKeyboardButton(btn1_text, callback_data="ggshot_set_tp_1")]
     ])
 
     # Add Done button if any edits were made
-    if any(f"tp{i}" in edited_fields for i in range(1, 5)):
+    if "tp1" in edited_fields:
         buttons.append([InlineKeyboardButton("✅ Done Editing", callback_data="ggshot_back_to_edit")])
     else:
         buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="ggshot_back_to_edit")])
@@ -4133,19 +4050,9 @@ async def ggshot_edit_value_handler(update: Update, context: ContextTypes.DEFAUL
                 context.chat_data[LIMIT_ENTRY_3_PRICE] = new_value
                 context.chat_data["ggshot_edited_fields"].add("limit_3")
         elif editing_field.startswith("tp_"):
-            tp_num = editing_field.split("_")[1]
-            if tp_num == "1":
-                context.chat_data[TP1_PRICE] = new_value
-                context.chat_data["ggshot_edited_fields"].add("tp1")
-            elif tp_num == "2":
-                context.chat_data[TP2_PRICE] = new_value
-                context.chat_data["ggshot_edited_fields"].add("tp2")
-            elif tp_num == "3":
-                context.chat_data[TP3_PRICE] = new_value
-                context.chat_data["ggshot_edited_fields"].add("tp3")
-            elif tp_num == "4":
-                context.chat_data[TP4_PRICE] = new_value
-                context.chat_data["ggshot_edited_fields"].add("tp4")
+            # Single TP approach
+            context.chat_data[TP_PRICE] = new_value
+            context.chat_data["ggshot_edited_fields"].add("tp")
 
         # Clear editing state
         context.chat_data.pop("ggshot_editing", None)
@@ -4407,17 +4314,17 @@ async def start_ggshot_tp_flow(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     current_tp_1 = context.chat_data.get(TP1_PRICE, None)
 
     tp_msg = (
-        f"📊 <b>Edit Take Profits - Streamlined Flow</b>\n"
+        f"📊 <b>Edit Take Profit - Single Target</b>\n"
         f"Symbol: {symbol} | Side: {side}\n\n"
-        f"🎯 <b>Take Profit 1 of 4 (85%)</b>\n\n"
+        f"🎯 <b>Take Profit (100% Complete Exit)</b>\n\n"
     )
 
     if current_tp_1:
         tp_msg += f"Current value: <code>{format_price(current_tp_1)}</code>\n\n"
 
     tp_msg += (
-        f"Enter the price for <b>TP1 (85% of position)</b>:\n"
-        f"💡 This is your main profit target"
+        f"Enter the price for <b>Take Profit (100% position)</b>:\n"
+        f"💡 Position closes completely at this target"
     )
 
     # Create keyboard with cancel option
@@ -4433,7 +4340,7 @@ async def start_ggshot_tp_flow(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
     return GGSHOT_TP_FLOW_1
 
 async def handle_ggshot_tp_1_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle TP1 input and move to TP2"""
+    """Handle Take Profit input and complete flow"""
     if not update.message or not update.message.text:
         return GGSHOT_TP_FLOW_1
 
@@ -4455,36 +4362,11 @@ async def handle_ggshot_tp_1_input(update: Update, context: ContextTypes.DEFAULT
         context.chat_data[TP1_PRICE] = new_price
         context.chat_data.setdefault("ggshot_edited_fields", set()).add("tp1")
 
-        # Move to TP2
-        context.chat_data["ggshot_current_tp"] = 2
-        current_tp_2 = context.chat_data.get(TP2_PRICE, None)
+        # Complete the flow - single TP approach
+        context.chat_data["ggshot_tp_flow_active"] = False
 
-        tp_msg = (
-            f"📊 <b>Edit Take Profits - Streamlined Flow</b>\n"
-            f"Symbol: {context.chat_data.get(SYMBOL, 'Unknown')} | Side: {context.chat_data.get(SIDE, 'Buy')}\n\n"
-            f"✅ TP1 (85%): <code>{format_price(new_price)}</code>\n\n"
-            f"🎯 <b>Take Profit 2 of 4 (5%)</b>\n\n"
-        )
-
-        if current_tp_2:
-            tp_msg += f"Current value: <code>{format_price(current_tp_2)}</code>\n\n"
-
-        tp_msg += (
-            f"Enter the price for <b>TP2 (5% of position)</b>:\n"
-            f"💡 This is your second profit target"
-        )
-
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅️ Back to TP1", callback_data="ggshot_tp_back:1")],
-            [InlineKeyboardButton("❌ Cancel Edit", callback_data="ggshot_back_to_edit")]
-        ])
-
-        await edit_last_message(context, chat_id, tp_msg, keyboard)
-
-        # Set state to expect TP2 input
-        context.chat_data["ggshot_tp_flow_expecting"] = "tp_2"
-
-        return GGSHOT_TP_FLOW_2
+        # Return to the main edit screen
+        return await show_ggshot_edit_values(context, chat_id)
 
     except (ValueError, InvalidOperation):
         await send_error_and_retry(
@@ -4513,41 +4395,13 @@ async def handle_ggshot_tp_2_input(update: Update, context: ContextTypes.DEFAULT
         if new_price <= 0:
             raise ValueError("Price must be positive")
 
-        # Store TP2 price
-        context.chat_data[TP2_PRICE] = new_price
-        context.chat_data.setdefault("ggshot_edited_fields", set()).add("tp2")
+        # Store TP price (single TP approach)
+        context.chat_data[TP_PRICE] = new_price
+        context.chat_data.setdefault("ggshot_edited_fields", set()).add("tp")
 
-        # Move to TP3
-        context.chat_data["ggshot_current_tp"] = 3
-        current_tp_3 = context.chat_data.get(TP3_PRICE, None)
-
-        tp_msg = (
-            f"📊 <b>Edit Take Profits - Streamlined Flow</b>\n"
-            f"Symbol: {context.chat_data.get(SYMBOL, 'Unknown')} | Side: {context.chat_data.get(SIDE, 'Buy')}\n\n"
-            f"✅ TP1 (85%): <code>{format_price(context.chat_data.get(TP1_PRICE))}</code>\n"
-            f"✅ TP2 (5%): <code>{format_price(new_price)}</code>\n\n"
-            f"🎯 <b>Take Profit 3 of 4 (5%)</b>\n\n"
-        )
-
-        if current_tp_3:
-            tp_msg += f"Current value: <code>{format_price(current_tp_3)}</code>\n\n"
-
-        tp_msg += (
-            f"Enter the price for <b>TP3 (5% of position)</b>:\n"
-            f"💡 This is your third profit target"
-        )
-
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅️ Back to TP2", callback_data="ggshot_tp_back:2")],
-            [InlineKeyboardButton("❌ Cancel Edit", callback_data="ggshot_back_to_edit")]
-        ])
-
-        await edit_last_message(context, chat_id, tp_msg, keyboard)
-
-        # Set state to expect TP3 input
-        context.chat_data["ggshot_tp_flow_expecting"] = "tp_3"
-
-        return GGSHOT_TP_FLOW_3
+        # Single TP approach - return to confirmation
+        return await show_extracted_parameters_confirmation(context, update.effective_chat.id,
+            {"success": True, "parameters": context.chat_data, "strategy_type": "conservative"})
 
     except (ValueError, InvalidOperation):
         await send_error_and_retry(
@@ -4577,20 +4431,17 @@ async def handle_ggshot_tp_3_input(update: Update, context: ContextTypes.DEFAULT
             raise ValueError("Price must be positive")
 
         # Store TP3 price
-        context.chat_data[TP3_PRICE] = new_price
+        context.chat_data[TP_PRICE] = new_price
         context.chat_data.setdefault("ggshot_edited_fields", set()).add("tp3")
 
         # Move to TP4
         context.chat_data["ggshot_current_tp"] = 4
-        current_tp_4 = context.chat_data.get(TP4_PRICE, None)
+        current_tp_4 = None  # Single TP approach - no TP4
 
         tp_msg = (
             f"📊 <b>Edit Take Profits - Streamlined Flow</b>\n"
             f"Symbol: {context.chat_data.get(SYMBOL, 'Unknown')} | Side: {context.chat_data.get(SIDE, 'Buy')}\n\n"
-            f"✅ TP1 (85%): <code>{format_price(context.chat_data.get(TP1_PRICE))}</code>\n"
-            f"✅ TP2 (5%): <code>{format_price(context.chat_data.get(TP2_PRICE))}</code>\n"
-            f"✅ TP3 (5%): <code>{format_price(new_price)}</code>\n\n"
-            f"🎯 <b>Take Profit 4 of 4 (5%)</b>\n\n"
+            f"✅ TP (100%): <code>{format_price(new_price)}</code> - Single TP Approach\n\n"
         )
 
         if current_tp_4:
@@ -4641,7 +4492,7 @@ async def handle_ggshot_tp_4_input(update: Update, context: ContextTypes.DEFAULT
             raise ValueError("Price must be positive")
 
         # Store TP4 price
-        context.chat_data[TP4_PRICE] = new_price
+        context.chat_data[TP_PRICE] = new_price
         context.chat_data.setdefault("ggshot_edited_fields", set()).add("tp4")
 
         # Clear flow tracking
@@ -4652,11 +4503,8 @@ async def handle_ggshot_tp_4_input(update: Update, context: ContextTypes.DEFAULT
         tp_msg = (
             f"✅ <b>Take Profits Updated Successfully!</b>\n\n"
             f"Symbol: {context.chat_data.get(SYMBOL, 'Unknown')} | Side: {context.chat_data.get(SIDE, 'Buy')}\n\n"
-            f"📊 <b>Your Take Profits:</b>\n"
-            f"• TP1 (85%): <code>{format_price(context.chat_data.get(TP1_PRICE))}</code>\n"
-            f"• TP2 (5%): <code>{format_price(context.chat_data.get(TP2_PRICE))}</code>\n"
-            f"• TP3 (5%): <code>{format_price(context.chat_data.get(TP3_PRICE))}</code>\n"
-            f"• TP4 (5%): <code>{format_price(new_price)}</code>\n\n"
+            f"📊 <b>Your Take Profit:</b>\n"
+            f"• TP (100%): <code>{format_price(new_price)}</code> - Single TP Approach\n\n"
             f"What would you like to do next?"
         )
 

@@ -44,7 +44,7 @@ from .conversation import (
     margin_conservative_handler,
     # NEW: Streamlined GGShot flow handlers
     handle_ggshot_limit_1_input, handle_ggshot_limit_2_input, handle_ggshot_limit_3_input,
-    handle_ggshot_tp_1_input, handle_ggshot_tp_2_input, handle_ggshot_tp_3_input, handle_ggshot_tp_4_input
+    handle_ggshot_tp_1_input
 )
 
 # Import position close handlers
@@ -60,7 +60,7 @@ SYMBOL, SIDE, APPROACH_SELECTION, SCREENSHOT_UPLOAD, PRIMARY_ENTRY, LIMIT_ENTRIE
 
 # Additional states for streamlined GGShot flow
 GGSHOT_LIMIT_FLOW_1, GGSHOT_LIMIT_FLOW_2, GGSHOT_LIMIT_FLOW_3 = range(13, 16)
-GGSHOT_TP_FLOW_1, GGSHOT_TP_FLOW_2, GGSHOT_TP_FLOW_3, GGSHOT_TP_FLOW_4 = range(16, 20)
+GGSHOT_TP_FLOW_1 = 16  # Single TP flow only
 
 def setup_enhanced_conversation_handlers(app):
     """Setup enhanced conversation handlers for conservative approach trading"""
@@ -149,18 +149,6 @@ def setup_enhanced_conversation_handlers(app):
                 GGSHOT_TP_FLOW_1: [
                     CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_tp_1_input)
-                ],
-                GGSHOT_TP_FLOW_2: [
-                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_tp_2_input)
-                ],
-                GGSHOT_TP_FLOW_3: [
-                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_tp_3_input)
-                ],
-                GGSHOT_TP_FLOW_4: [
-                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_tp_4_input)
                 ]
             },
             fallbacks=[
@@ -176,7 +164,7 @@ def setup_enhanced_conversation_handlers(app):
         app.add_handler(conv_handler)
         logger.info("✅ Enhanced conservative approach conversation handlers loaded!")
         logger.info("🛡️ Conservative Limits approach enabled (Fast approach removed)")
-        logger.info("📊 Support for 3 limit orders + 4 take profits active")
+        logger.info("📊 Support for 3 limit orders + 1 take profit active")
 
     except Exception as e:
         logger.error(f"❌ Error loading enhanced conversation handlers: {e}")
@@ -466,7 +454,7 @@ def setup_conservative_specific_handlers(app):
         app.add_handler(CallbackQueryHandler(handle_approach_callback, pattern="^approach_"))
 
         logger.info("✅ Conservative approach handlers loaded!")
-        logger.info("🛡️ 3 limit orders + 4 TPs + isolated order management active")
+        logger.info("🛡️ 3 limit orders + 1 TP + isolated order management active")
 
     except Exception as e:
         logger.error(f"❌ Error loading conservative approach handlers: {e}")
@@ -477,7 +465,7 @@ def setup_enhanced_stats_handlers(app):
         # Enhanced stats tracking for conservative approach
         logger.info("✅ Enhanced statistics handlers loaded!")
         logger.info("📊 Conservative approach performance tracking enabled")
-        logger.info("🚨 TP1 cancellation statistics enabled")
+        logger.info("🚨 Take Profit cancellation statistics enabled")
 
     except Exception as e:
         logger.error(f"❌ Error loading enhanced stats handlers: {e}")
@@ -704,10 +692,10 @@ def setup_handlers(app: Application):
 
     logger.info("✅ All enhanced conservative approach handlers loaded successfully!")
     logger.info("📝 Enhanced manual trading with conservative approach")
-    logger.info("🛡️ Conservative Limits: 3 limit orders + 4 TPs + 1 SL")
+    logger.info("🛡️ Conservative Limits: 3 limit orders + 1 TP + 1 SL")
     logger.info("🎯 Position Mode Commands: /hedge_mode, /one_way_mode, /check_mode")
     logger.info("📊 Isolated order management for conservative approach")
-    logger.info("🚨 TP1 hit cancellation logic for conservative trades")
+    logger.info("🚨 Take Profit hit cancellation logic for conservative trades")
     logger.info("📈 Enhanced performance tracking for conservative approach")
     logger.info("🧠 AI insights enabled for conservative trading strategy")
     logger.info("📱 Mobile-first design with improved workflows")

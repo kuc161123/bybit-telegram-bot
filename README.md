@@ -1,4 +1,11 @@
-# Bybit Telegram Trading Bot 🤖
+# 🚀 Bybit Telegram Trading Bot
+
+## **INSTANT CLOUD DEPLOYMENT** 
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/bybit-telegram-bot) [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy) [![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy)
+
+**Deploy to cloud in 2 minutes!** → [📖 ONE-CLICK DEPLOY GUIDE](ONE_CLICK_DEPLOY.md)
+
+---
 
 A sophisticated, production-ready Telegram bot for automated cryptocurrency trading on Bybit exchange. Built with Python 3.9+ and featuring AI-powered market analysis, social media sentiment integration, and advanced risk management.
 
@@ -28,7 +35,7 @@ A sophisticated, production-ready Telegram bot for automated cryptocurrency trad
 
 ### Core Trading Features
 - **Automated Trading**: Execute trades via Telegram with advanced order management
-- **Conservative Trading Approach**: Multiple limit orders with 4 TP levels (85/5/5/5%)
+- **Conservative Trading Approach**: Multiple limit orders with single TP level (85% fill threshold)
 - **Position Monitoring**: Real-time tracking with automatic TP/SL management
 - **Smart Position Merging**: Intelligent merge logic for both approaches
 - **Auto-Rebalancing**: Automatic position size adjustment based on approach
@@ -37,7 +44,7 @@ A sophisticated, production-ready Telegram bot for automated cryptocurrency trad
 ### Risk Management
 - **Position Sizing**: Dynamic sizing based on account balance and risk percentage
 - **Stop Loss Protection**: Automatic SL placement with all positions
-- **Take Profit Management**: Single or multiple TP levels based on approach
+- **Take Profit Management**: Single TP level with complete position closure
 - **Emergency Shutdown**: Instant close all positions with `/emergency`
 - **Health Monitoring**: Continuous position health checks with auto-recovery
 
@@ -283,7 +290,7 @@ python main.py
 1. **Click "⚡ New Trade"** or send `/trade`
 2. **Enter symbol** (e.g., BTCUSDT)
 3. **Select direction** (Long/Short)
-4. **Choose approach** (Fast/Conservative/GGShot)
+4. **Choose approach** (Conservative/GGShot)
 5. **Set parameters** (entry, TP, SL, leverage, margin)
 6. **Confirm and execute**
 
@@ -293,7 +300,7 @@ python main.py
 
 The bot's primary trading approach with sophisticated order management:
 - **Entry**: Multiple limit orders (up to 3) for gradual position building
-- **Take Profits**: 4 levels with 85%, 5%, 5%, 5% distribution
+- **Take Profit**: Single TP level at 85% position fill threshold with complete closure
 - **Stop Loss**: Single SL covering entire position
 - **Monitoring**: Enhanced TP/SL system with 5-second checks
 - **Use Case**: Swing trades, trend following, risk management
@@ -362,7 +369,7 @@ Automatically adjusts position sizes based on approach:
 ```
 
 Triggers on:
-- New positions (Fast approach)
+- New positions (Conservative approach)
 - Position merges (both approaches)
 - Filled limit orders
 

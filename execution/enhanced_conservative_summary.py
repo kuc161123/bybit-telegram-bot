@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Enhanced Conservative Trade Summary
-Shows correct TP distribution (85/5/5/5) and comprehensive trade information
+Enhanced Conservative Trade Summary - Take Profit Strategy
+Shows Take Profit approach (100% closure at 85% target) and comprehensive trade information
 """
 
 def format_enhanced_conservative_summary(
@@ -29,7 +29,8 @@ def format_enhanced_conservative_summary(
 
     # Calculate derived values
     position_value = position_size * avg_entry
-    risk_reward_ratio = max_reward / risk_amount if risk_amount > 0 else 0
+    # FIXED: Correct risk-reward ratio formula (risk/reward, not reward/risk)
+    risk_reward_ratio = risk_amount / max_reward if max_reward > 0 else 0
 
     # Side emoji
     side_emoji = "🟢" if side == "Buy" else "🔴"
@@ -77,23 +78,13 @@ def format_enhanced_conservative_summary(
 🎯 <b>TAKE PROFIT STRATEGY</b> (Updated Distribution)
 """
 
-    # TP order details with CORRECT percentages
-    tp_percentages = [85, 5, 5, 5]
-    total_profit = 0
+    # TP1-ONLY: Single target at 85% position level (100% closure)
+    tp1_price = tp_prices[0] if tp_prices else avg_entry
+    distance = ((tp1_price - avg_entry) / avg_entry * 100) if side == "Buy" else ((avg_entry - tp1_price) / avg_entry * 100)
+    tp_value = position_value * (abs(distance) / 100)
+    total_profit = tp_value
 
-    for i, (price, percentage) in enumerate(zip(tp_prices[:4], tp_percentages)):
-        distance = ((price - avg_entry) / avg_entry * 100) if side == "Buy" else ((avg_entry - price) / avg_entry * 100)
-        tp_value = position_value * (percentage / 100) * (abs(distance) / 100)
-        total_profit += tp_value
-
-        emoji = "🎯" if i == 0 else "🏹"
-
-        if i == 0:
-            message += f"├─ TP1: <code>${price:,.2f}</code> (+{distance:.2f}%) │ <b>{percentage}%</b> exit │ <code>+${tp_value:,.2f}</code> {emoji}\n"
-        elif i == 3:
-            message += f"└─ TP4: <code>${price:,.2f}</code> (+{distance:.2f}%) │ <b>{percentage}%</b> exit │ <code>+${tp_value:,.2f}</code> {emoji}\n"
-        else:
-            message += f"├─ TP{i+1}: <code>${price:,.2f}</code> (+{distance:.2f}%) │ <b>{percentage}%</b> exit │ <code>+${tp_value:,.2f}</code> {emoji}\n"
+    message += f"└─ Take Profit: <code>${tp1_price:,.2f}</code> (+{distance:.2f}%) │ <b>100%</b> exit │ <code>+${tp_value:,.2f}</code> 🎯"
 
     message += f"""
    <b>Max Potential Profit: <code>+${max_reward:,.2f}</code></b> 💰
@@ -102,7 +93,7 @@ def format_enhanced_conservative_summary(
 ├─ Stop Loss: <code>${sl_price:,.2f}</code>
 ├─ Distance from Entry: {((avg_entry - sl_price) / avg_entry * 100 if side == "Buy" else (sl_price - avg_entry) / avg_entry * 100):.2f}%
 ├─ Max Risk: <code>-${risk_amount:,.2f}</code>
-└─ Risk/Reward Ratio: <b>1:{risk_reward_ratio:.2f}</b> {'🌟' if risk_reward_ratio >= 3 else '✅' if risk_reward_ratio >= 2 else '⚠️'}
+└─ Risk/Reward Ratio: <b>1:{(1/risk_reward_ratio):.2f}</b> {'🌟' if (1/risk_reward_ratio) >= 3 else '✅' if (1/risk_reward_ratio) >= 2 else '⚠️'}
 
 📋 <b>TRADE LOGIC EXPLAINED</b>
 
@@ -112,11 +103,12 @@ def format_enhanced_conservative_summary(
    • Equal 33.3% allocation reduces timing risk
    • If price moves favorably, limits may not fill
 
-<b>2. Take Profit Distribution (85/5/5/5):</b>
-   • TP1 (85%): Primary exit - locks in bulk profit
-   • TP2-4 (5% each): Runners for extended moves
-   • Updated from old 70/10/10/10 distribution
-   • More conservative, secures profits earlier
+<b>2. Take Profit Strategy:</b>
+   • Target: 85% position fill threshold
+   • Exit Strategy: 100% position closure at target
+   • Simplified approach: Single profit target
+   • Risk Management: Complete exit ensures profit capture
+   • Enhanced focus: Single target maximizes efficiency
 
 <b>3. Risk Protection:</b>
    • Single stop loss protects entire position
@@ -151,7 +143,7 @@ def format_enhanced_conservative_summary(
     # Add execution summary
     message += f"""⚡ <b>EXECUTION SUMMARY</b>
 ├─ Setup Time: {execution_time}
-├─ Orders Placed: {3 + 4 + 1} (3 entries + 4 TPs + 1 SL)
+├─ Orders Placed: {3 + 1 + 1} (3 entries + 1 TP + 1 SL)
 ├─ Network: Mainnet (Live Trading)
 └─ Status: Monitoring Active ✅"""
 

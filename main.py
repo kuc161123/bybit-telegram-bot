@@ -1545,6 +1545,15 @@ def main():
     logger.info(f"🚀 Bot ready! Use /start to begin trading.")
     logger.info(f"📱 Enhanced mobile experience with EXTERNAL POSITION ADOPTION and RESOURCE MANAGEMENT!")
     
+    # Start health check server for cloud deployment
+    try:
+        from health_check import start_health_server
+        health_server = start_health_server(port=int(os.getenv('PORT', '8000')))
+        if health_server:
+            logger.info("✅ Health check server started for cloud deployment")
+    except Exception as e:
+        logger.warning(f"Could not start health check server: {e}")
+    
     try:
         app.run_polling(allowed_updates=Update.ALL_TYPES)
     except KeyboardInterrupt:

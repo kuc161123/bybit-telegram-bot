@@ -316,8 +316,8 @@ class DashboardGenerator:
     async def _calculate_pnl_analysis_single(self, positions: List[Dict], orders: List[Dict]) -> PnLAnalysis:
         """Calculate P&L analysis for a single account with comprehensive validation"""
 
-        tp1_profit = Decimal("0")
-        tp1_full_profit = Decimal("0")
+        tp_profit = Decimal("0")
+        tp_full_profit = Decimal("0")
         all_tp_profit = Decimal("0")
         all_sl_loss = Decimal("0")
 
@@ -362,12 +362,12 @@ class DashboardGenerator:
                     # Check if order is TP/SL based on OrderLinkId (for Enhanced TP/SL system)
                     order_link_id = order.get('orderLinkId', '')
                     is_enhanced_tp_sl = ('_TP' in order_link_id.upper() or
-                                        'TP1' in order_link_id.upper() or
-                                        'TP2' in order_link_id.upper() or
-                                        'TP3' in order_link_id.upper() or
-                                        'TP4' in order_link_id.upper() or
+                                        'TP' in order_link_id.upper() or
                                         '_SL' in order_link_id.upper() or
                                         'SL' in order_link_id.upper())
+                    # Legacy compatibility: Check for old TP1-4 format as well
+                    is_legacy_tp_sl = any(f'TP{i}' in order_link_id.upper() for i in range(1, 5))
+                    is_enhanced_tp_sl = is_enhanced_tp_sl or is_legacy_tp_sl
 
                     # Include orders that are either reduce_only OR Enhanced TP/SL orders
                     if not order.get('reduceOnly', False) and not is_enhanced_tp_sl:
@@ -418,10 +418,8 @@ class DashboardGenerator:
 
                     # Priority 1: Order Link ID detection (most reliable)
                     if ('_TP' in order_link_id.upper() or
-                        'TP1' in order_link_id.upper() or
-                        'TP2' in order_link_id.upper() or
-                        'TP3' in order_link_id.upper() or
-                        'TP4' in order_link_id.upper()):
+                        'TP' in order_link_id.upper() or
+                        any(f'TP{i}' in order_link_id.upper() for i in range(1, 5))):  # Legacy TP1-4 support
                         is_tp_order = True
                     elif ('_SL' in order_link_id.upper() or
                           'SL' in order_link_id.upper()):
@@ -499,27 +497,27 @@ class DashboardGenerator:
                 else:
                     tp_orders.sort(key=lambda x: safe_float_order_price(x), reverse=True)
 
-                # Calculate TP1 profit (normalized for fair comparison between accounts)
+                # Calculate TP profit (normalized for fair comparison between accounts)
                 if tp_orders:
-                    tp1_order = tp_orders[0]
-                    tp1_price = safe_decimal_order_price(tp1_order)
-                    tp1_qty = Decimal(str(tp1_order.get('qty', 0)))
+                    tp_order = tp_orders[0]
+                    tp_price = safe_decimal_order_price(tp_order)
+                    tp_qty = Decimal(str(tp_order.get('qty', 0)))
 
-                    if tp1_price > 0:  # Only calculate if valid price
+                    if tp_price > 0:  # Only calculate if valid price
                         # Calculate price difference per unit
                         if side == 'Buy':
-                            price_diff_per_unit = tp1_price - avg_price
+                            price_diff_per_unit = tp_price - avg_price
                         else:
-                            price_diff_per_unit = avg_price - tp1_price
+                            price_diff_per_unit = avg_price - tp_price
 
-                        # For fair comparison: normalize TP1 to conservative approach standard (85% of position)
+                        # For fair comparison: normalize TP to conservative approach standard (85% of position)
                         # This ensures both accounts show similar R:R ratios regardless of proportional sizing
-                        conservative_tp1_percentage = Decimal('0.85')  # 85% is standard TP1 in conservative approach
-                        normalized_tp1_qty = size * conservative_tp1_percentage
+                        conservative_tp_percentage = Decimal('0.85')  # 85% is standard TP in conservative approach
+                        normalized_tp_qty = size * conservative_tp_percentage
 
                         # Calculate profits using normalized quantities for fair comparison
-                        tp1_profit += price_diff_per_unit * normalized_tp1_qty
-                        tp1_full_profit += price_diff_per_unit * size
+                        tp_profit += price_diff_per_unit * normalized_tp_qty
+                        tp_full_profit += price_diff_per_unit * size
 
                 # Calculate all TP profit (normalized for fair comparison between accounts)
                 for tp_order in tp_orders:
@@ -550,27 +548,27 @@ class DashboardGenerator:
 
             # Calculate coverage with zero division protection
             try:
-                tp1_coverage = float(tp1_profit / tp1_full_profit * 100) if tp1_full_profit > 0 else 0
+                tp_coverage = float(tp_profit / tp_full_profit * 100) if tp_full_profit > 0 else 0
             except (ZeroDivisionError, InvalidOperation):
-                tp1_coverage = 0
+                tp_coverage = 0
 
             return PnLAnalysis(
-                tp1_profit=tp1_profit,
-                tp1_full_profit=tp1_full_profit,
+                tp_profit=tp_profit,
+                tp_full_profit=tp_full_profit,
                 all_tp_profit=all_tp_profit,
                 all_sl_loss=all_sl_loss,
-                tp1_coverage=tp1_coverage
+                tp_coverage=tp_coverage
             )
 
         except Exception as e:
             logger.error(f"Error in P&L analysis calculation: {e}")
             # Return safe default values
             return PnLAnalysis(
-                tp1_profit=Decimal("0"),
-                tp1_full_profit=Decimal("0"),
+                tp_profit=Decimal("0"),
+                tp_full_profit=Decimal("0"),
                 all_tp_profit=Decimal("0"),
                 all_sl_loss=Decimal("0"),
-                tp1_coverage=0.0
+                tp_coverage=0.0
             )
 
     async def _fetch_performance_stats(self, bot_data: Dict) -> PerformanceMetrics:

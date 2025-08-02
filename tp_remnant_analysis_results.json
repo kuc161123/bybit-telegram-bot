@@ -1,0 +1,158 @@
+{
+  "total_findings": 20,
+  "findings": [
+    {
+      "type": "KEY_REFERENCE",
+      "path": "['chat_data']['5634913742']['tp2_price']",
+      "key": "tp2_price",
+      "value": "1.609",
+      "risk_level": "CRITICAL",
+      "description": "Dictionary key contains TP2-4 reference: 'tp2_price'"
+    },
+    {
+      "type": "KEY_REFERENCE",
+      "path": "['chat_data']['5634913742']['tp3_price']",
+      "key": "tp3_price",
+      "value": "1.522",
+      "risk_level": "CRITICAL",
+      "description": "Dictionary key contains TP2-4 reference: 'tp3_price'"
+    },
+    {
+      "type": "KEY_REFERENCE",
+      "path": "['chat_data']['5634913742']['tp4_price']",
+      "key": "tp4_price",
+      "value": "1.260",
+      "risk_level": "CRITICAL",
+      "description": "Dictionary key contains TP2-4 reference: 'tp4_price'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['WIFUSDT_Sell_main']['tp_orders']['c31e8d8c-5fad-4ecc-a894-dc799ffd19cf']['order_link_id']",
+      "value": "BOT_CONS_WIFUSDT_TP2_152321",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp2'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['WIFUSDT_Sell_main']['tp_orders']['05d69b0f-1e42-47a2-a069-86886a6ab674']['order_link_id']",
+      "value": "BOT_CONS_WIFUSDT_TP3_152322",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp3'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['WIFUSDT_Sell_main']['tp_orders']['ab30449d-f476-4eb0-b139-62b27c613704']['order_link_id']",
+      "value": "BOT_CONS_WIFUSDT_TP4_152322",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp4'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['WIFUSDT_Sell_mirror']['tp_orders']['320966c0-e416-4b95-aab0-2b78d214dc87']['order_link_id']",
+      "value": "MIR_TP4_WIFUSDT_1753878215941",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp4'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['WIFUSDT_Sell_mirror']['tp_orders']['4c8c0eb0-ad8d-41a2-aad1-6bcf382532d3']['order_link_id']",
+      "value": "MIR_TP4_WIFUSDT_1753878216326",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp4'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['WIFUSDT_Sell_mirror']['tp_orders']['4f0c319b-8c1c-41c5-8449-9143db77ca11']['order_link_id']",
+      "value": "MIR_TP4_WIFUSDT_1753878216706",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp4'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['WIFUSDT_Sell_mirror']['tp_orders']['db3e680d-64fe-4629-b37b-29c5769b3f17']['order_link_id']",
+      "value": "MIR_TP4_WIFUSDT_1753878217079",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp4'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['AUCTIONUSDT_Sell_main']['tp_orders']['2cdb6b15-ae8f-4a40-afe7-dc7eb6560b82']['order_link_id']",
+      "value": "BOT_CONS_AUCTIONUSDT_TP2_152921",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp2'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['AUCTIONUSDT_Sell_main']['tp_orders']['111a2911-6fa4-4c9c-80cd-b13fdab511a6']['order_link_id']",
+      "value": "BOT_CONS_AUCTIONUSDT_TP3_152922",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp3'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['AUCTIONUSDT_Sell_main']['tp_orders']['9da7ce0b-8ecb-4694-a6cd-9b590c965519']['order_link_id']",
+      "value": "BOT_CONS_AUCTIONUSDT_TP4_152923",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp4'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['AUCTIONUSDT_Sell_mirror']['tp_orders']['8f0e64ea-5250-47a8-aed1-4d802227a1ca']['order_link_id']",
+      "value": "MIR_TP4_AUCTIONUSDT_1753878579381",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp4'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['AUCTIONUSDT_Sell_mirror']['tp_orders']['84c958e5-6104-4339-b19d-a54ea83fd07a']['order_link_id']",
+      "value": "MIR_TP4_AUCTIONUSDT_1753878580448",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp4'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['AUCTIONUSDT_Sell_mirror']['tp_orders']['50433c00-8075-41a6-8358-af6fc60cb1f3']['order_link_id']",
+      "value": "MIR_TP4_AUCTIONUSDT_1753878580814",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp4'"
+    },
+    {
+      "type": "STRING_REFERENCE",
+      "path": "['bot_data']['enhanced_tp_sl_monitors']['AUCTIONUSDT_Sell_mirror']['tp_orders']['fccd6171-8620-4487-9a0b-cfb3d73ad7d5']['order_link_id']",
+      "value": "MIR_TP4_AUCTIONUSDT_1753878581879",
+      "risk_level": "CRITICAL",
+      "description": "String contains TP2-4 reference: 'tp4'"
+    },
+    {
+      "type": "CHAT_TP_PRICE",
+      "path": "chat_data[5634913742]['tp2_price']",
+      "key": "tp2_price",
+      "value": "1.609",
+      "risk_level": "WARNING",
+      "description": "Chat data contains tp2_price that might be accessed by UI code"
+    },
+    {
+      "type": "CHAT_TP_PRICE",
+      "path": "chat_data[5634913742]['tp3_price']",
+      "key": "tp3_price",
+      "value": "1.522",
+      "risk_level": "WARNING",
+      "description": "Chat data contains tp3_price that might be accessed by UI code"
+    },
+    {
+      "type": "CHAT_TP_PRICE",
+      "path": "chat_data[5634913742]['tp4_price']",
+      "key": "tp4_price",
+      "value": "1.260",
+      "risk_level": "WARNING",
+      "description": "Chat data contains tp4_price that might be accessed by UI code"
+    }
+  ],
+  "summary": {
+    "critical_issues": 17,
+    "warning_issues": 3,
+    "info_issues": 0,
+    "risk_assessment": "HIGH - Critical issues found that may cause runtime errors",
+    "cleanup_required": true
+  }
+}

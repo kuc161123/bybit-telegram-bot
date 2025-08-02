@@ -1,0 +1,107 @@
+{
+  "name": "bybit-telegram-bot",
+  "type": "web",
+  "env": "docker",
+  "plan": "starter",
+  "region": "oregon",
+  "dockerfilePath": "./Dockerfile",
+  "envVars": [
+    {
+      "key": "TELEGRAM_TOKEN",
+      "name": "Telegram Bot Token",
+      "description": "Get this from @BotFather on Telegram",
+      "required": true
+    },
+    {
+      "key": "BYBIT_API_KEY", 
+      "name": "Bybit API Key",
+      "description": "Your Bybit API Key with derivatives trading permission",
+      "required": true
+    },
+    {
+      "key": "BYBIT_API_SECRET",
+      "name": "Bybit API Secret", 
+      "description": "Your Bybit API Secret",
+      "required": true
+    },
+    {
+      "key": "USE_TESTNET",
+      "name": "Use Testnet",
+      "description": "Set to 'true' for testing, 'false' for live trading",
+      "value": "false"
+    },
+    {
+      "key": "OPENAI_API_KEY",
+      "name": "OpenAI API Key",
+      "description": "Optional: For AI market analysis features",
+      "required": false
+    },
+    {
+      "key": "LLM_PROVIDER",
+      "value": "openai"
+    },
+    {
+      "key": "ENABLE_GPT4_REASONING",
+      "value": "true"
+    },
+    {
+      "key": "BYBIT_API_KEY_2",
+      "name": "Mirror Account API Key",
+      "description": "Optional: Second Bybit account for mirror trading",
+      "required": false
+    },
+    {
+      "key": "BYBIT_API_SECRET_2",
+      "name": "Mirror Account API Secret",
+      "description": "Optional: Second Bybit account API secret",
+      "required": false
+    },
+    {
+      "key": "LOG_LEVEL",
+      "value": "INFO"
+    },
+    {
+      "key": "ENABLE_ENHANCED_TP_SL",
+      "value": "true"
+    },
+    {
+      "key": "CANCEL_LIMITS_ON_TP1",
+      "value": "true"
+    },
+    {
+      "key": "DYNAMIC_FEE_CALCULATION",
+      "value": "true"
+    },
+    {
+      "key": "BREAKEVEN_FAILSAFE_ENABLED",
+      "value": "true"
+    },
+    {
+      "key": "ENABLE_ENHANCED_MARKET_ANALYSIS",
+      "value": "true"
+    },
+    {
+      "key": "HTTP_MAX_CONNECTIONS",
+      "value": "600"
+    },
+    {
+      "key": "HTTP_MAX_CONNECTIONS_PER_HOST",
+      "value": "150"
+    },
+    {
+      "key": "ENABLE_CIRCUIT_BREAKER",
+      "value": "true"
+    },
+    {
+      "key": "ENABLE_PERIODIC_MONITOR_CLEANUP",
+      "value": "true"
+    }
+  ],
+  "disk": {
+    "name": "bot-data",
+    "mountPath": "/app/data",
+    "sizeGB": 1
+  },
+  "healthCheckPath": "/health",
+  "autoDeploy": true
+}

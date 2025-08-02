@@ -12,8 +12,8 @@ RISK_PERCENTAGE = "risk_percentage"  # Chat data key for risk percentage
 
 # Conservative approach only - fast approach removed
 
-# Conservative Approach: 4 TPs with specified percentages
-TP_PERCENTAGES_CONSERVATIVE = [Decimal("0.85"), Decimal("0.05"), Decimal("0.05"), Decimal("0.05")]
+# Conservative Approach: Single TP with 100% position closure
+TP_PERCENTAGES_CONSERVATIVE = [Decimal("1.0")]  # Single take profit closes 100% of position
 CONSERVATIVE_TP_PERCENTAGES = TP_PERCENTAGES_CONSERVATIVE  # Alias for compatibility
 
 # Default TP percentages
@@ -105,11 +105,10 @@ LIMIT_ENTRY_1_PRICE = "limit_entry_1_price"
 LIMIT_ENTRY_2_PRICE = "limit_entry_2_price"
 LIMIT_ENTRY_3_PRICE = "limit_entry_3_price"
 
-# Take profit prices
-TP1_PRICE = "tp1_price"
-TP2_PRICE = "tp2_price"
-TP3_PRICE = "tp3_price"
-TP4_PRICE = "tp4_price"
+# Take profit prices - Single TP approach only
+TP_PRICE = "tp_price"  # Single take profit price
+# Legacy alias for backward compatibility
+TP1_PRICE = TP_PRICE
 
 # Stop loss
 SL_PRICE = "sl_price"
@@ -166,9 +165,9 @@ INITIAL_POSITION_VALUE = "initial_position_value"
 
 # ENHANCED: Conservative approach tracking
 CONSERVATIVE_LIMITS_FILLED = "conservative_limits_filled"
-CONSERVATIVE_TP1_HIT_BEFORE_LIMITS = "conservative_tp1_hit_before_limits"
-CONSERVATIVE_TP1_HIT_WITH_FILLS = "conservative_tp1_hit_with_fills"
-CONSERVATIVE_TP1_HIT_WITH_FILLS_PROCESSED = "conservative_tp1_hit_with_fills_processed"
+CONSERVATIVE_TP1_HIT_BEFORE_LIMITS = "conservative_tp1_hit_before_limits"  # TP hit before limit fills
+CONSERVATIVE_TP1_HIT_WITH_FILLS = "conservative_tp1_hit_with_fills"  # TP hit with limit fills
+CONSERVATIVE_TP1_HIT_WITH_FILLS_PROCESSED = "conservative_tp1_hit_with_fills_processed"  # TP hit processing complete
 CONSERVATIVE_ORDERS_CANCELLED = "conservative_orders_cancelled"
 
 # REFINED: Monitoring and performance tracking
@@ -197,7 +196,9 @@ STATS_TOTAL_LOSSES = 'stats_total_losses'
 STATS_TOTAL_PNL = 'stats_total_pnl'
 
 # Exit Stats
-STATS_TP1_HITS = 'stats_tp1_hits'
+STATS_TP_HITS = 'stats_tp_hits'  # Single take profit hits
+# Legacy alias for backward compatibility
+STATS_TP1_HITS = STATS_TP_HITS
 STATS_SL_HITS = 'stats_sl_hits'
 STATS_OTHER_CLOSURES = 'stats_other_closures'
 
@@ -214,7 +215,9 @@ STATS_CONSERVATIVE_TRADES = 'stats_conservative_trades'
 # Fast approach stats removed
 STATS_GGSHOT_TRADES = 'stats_ggshot_trades'
 STATS_GGSHOT_AI_SUCCESS_RATE = 'stats_ggshot_ai_success_rate'
-STATS_CONSERVATIVE_TP1_CANCELLATIONS = 'stats_conservative_tp1_cancellations'
+STATS_CONSERVATIVE_TP_CANCELLATIONS = 'stats_conservative_tp_cancellations'  # Limit cancellations when TP hits
+# Legacy alias for backward compatibility  
+STATS_CONSERVATIVE_TP1_CANCELLATIONS = STATS_CONSERVATIVE_TP_CANCELLATIONS
 
 # Meta Stats
 STATS_LAST_RESET = 'stats_last_reset_timestamp'
@@ -253,7 +256,7 @@ MIN_POSITION_SIZE = Decimal("1")
 # MONITORING PARAMETERS
 # =============================================
 MONITOR_CHECK_INTERVAL = 8  # seconds
-MONITOR_CLEANUP_INTERVAL = 600  # seconds (10 minutes)
+MONITOR_CLEANUP_INTERVAL = 600  # seconds (10 minutes) - for periodic monitor cleanup
 MAX_POSITION_HISTORY = 10  # entries
 READ_ONLY_MONITORING_CHAT_ID_BASE = 9000000000  # Base for synthetic chat IDs
 
@@ -322,10 +325,7 @@ SUCCESS_MESSAGES = {
     ASK_L1_PRICE,
     ASK_L2_PRICE,
     ASK_L3_PRICE,  # NEW: Third limit order
-    ASK_TP1_PRICE,
-    ASK_TP2_PRICE,
-    ASK_TP3_PRICE,
-    ASK_TP4_PRICE,
+    ASK_TP_PRICE,
     ASK_SL_PRICE,
     AWAIT_AI_RECOMMENDATIONS,
     DISPLAY_AI_RECOMMENDATIONS,
@@ -335,7 +335,10 @@ SUCCESS_MESSAGES = {
     HANDLE_MANUAL_LEVERAGE_SETUP,
     HANDLE_MANUAL_STRATEGY_SETUP,
     REVIEW_TRADE_WITH_FINAL_PARAMS
-) = range(21)  # Updated range to accommodate new states
+) = range(18)  # Updated range for single TP approach (18 states total)
+
+# Legacy alias for backward compatibility
+ASK_TP1_PRICE = ASK_TP_PRICE
 
 # =============================================
 # EXPORT ALL CONSTANTS
@@ -357,7 +360,7 @@ __all__ = [
 
     # Chat Data Keys - Prices
     'PRIMARY_ENTRY_PRICE', 'LIMIT_ENTRY_1_PRICE', 'LIMIT_ENTRY_2_PRICE',
-    'LIMIT_ENTRY_3_PRICE', 'TP1_PRICE', 'TP2_PRICE', 'TP3_PRICE', 'TP4_PRICE',
+    'LIMIT_ENTRY_3_PRICE', 'TP_PRICE', 'TP1_PRICE',  # Single TP approach with legacy alias
     'SL_PRICE',
 
     # Chat Data Keys - UI/State
@@ -407,11 +410,11 @@ __all__ = [
 
     # Performance Stats Keys
     'STATS_TOTAL_TRADES', 'STATS_TOTAL_WINS', 'STATS_TOTAL_LOSSES',
-    'STATS_TOTAL_PNL', 'STATS_TP1_HITS', 'STATS_SL_HITS', 'STATS_OTHER_CLOSURES',
+    'STATS_TOTAL_PNL', 'STATS_TP_HITS', 'STATS_TP1_HITS', 'STATS_SL_HITS', 'STATS_OTHER_CLOSURES',
     'STATS_WIN_STREAK', 'STATS_LOSS_STREAK', 'STATS_BEST_TRADE',
     'STATS_WORST_TRADE', 'STATS_CONSERVATIVE_TRADES',
     'STATS_GGSHOT_TRADES', 'STATS_GGSHOT_AI_SUCCESS_RATE',
-    'STATS_CONSERVATIVE_TP1_CANCELLATIONS', 'STATS_LAST_RESET',
+    'STATS_CONSERVATIVE_TP_CANCELLATIONS', 'STATS_CONSERVATIVE_TP1_CANCELLATIONS', 'STATS_LAST_RESET',
 
     # External Stats Keys
     'STATS_EXTERNAL_TRADES', 'STATS_EXTERNAL_PNL', 'STATS_EXTERNAL_WINS',
@@ -447,7 +450,7 @@ __all__ = [
     # Legacy States
     'ASK_SYMBOL', 'ASK_SIDE', 'ASK_APPROACH_SELECTION', 'ASK_ORDER_STRATEGY',
     'ASK_PRIMARY_ENTRY_PRICE', 'ASK_L1_PRICE', 'ASK_L2_PRICE', 'ASK_L3_PRICE',
-    'ASK_TP1_PRICE', 'ASK_TP2_PRICE', 'ASK_TP3_PRICE', 'ASK_TP4_PRICE',
+    'ASK_TP_PRICE', 'ASK_TP1_PRICE',  # Single TP approach with legacy alias
     'ASK_SL_PRICE', 'HANDLE_MANUAL_MARGIN_SETUP_TYPE',
     'HANDLE_MANUAL_MARGIN_SETUP_FIXED_AMOUNT',
     'HANDLE_MANUAL_MARGIN_SETUP_PERCENTAGE_VALUE',

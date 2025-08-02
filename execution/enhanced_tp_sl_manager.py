@@ -15,7 +15,7 @@ import time
 from config.constants import *
 from config.constants import ENABLE_MIRROR_ALERTS  # Explicit import for mirror alerts
 from config.settings import (
-    CANCEL_LIMITS_ON_TP1, DYNAMIC_FEE_CALCULATION, BREAKEVEN_SAFETY_MARGIN,
+    CANCEL_LIMITS_ON_TP, DYNAMIC_FEE_CALCULATION, BREAKEVEN_SAFETY_MARGIN,
     ENHANCED_FILL_DETECTION, ADAPTIVE_MONITORING_INTERVALS,
     BREAKEVEN_FAILSAFE_ENABLED, BREAKEVEN_MAX_RETRIES, BREAKEVEN_EMERGENCY_SL_OFFSET,
     BREAKEVEN_VERIFICATION_INTERVAL, BREAKEVEN_PREFER_AMEND, BREAKEVEN_ENABLE_PROGRESSIVE_RETRY,
@@ -92,6 +92,23 @@ class EnhancedTPSLManager:
         self._execution_cache = {}    # Cache API calls during execution (5s TTL)
         self._execution_cache_ttl = 5  # 5 second cache during execution
         self._last_execution_cache_clear = 0
+        
+        # EXECUTION SPEED OPTIMIZATION: Enhanced execution mode system
+        self._execution_mode_start_time = 0  # Track when execution mode was enabled
+        self._execution_mode_timeout = 120   # Auto-disable after 120 seconds
+        self._pre_execution_monitoring_interval = 5  # Store original interval
+        self._execution_monitoring_interval = 30    # Reduced interval during execution
+        
+        # ULTRA-HIGH PERFORMANCE: Dynamic monitoring system for 100+ trades
+        self._position_urgency_cache = {}    # position_key -> (urgency, last_calculated_time)
+        self._urgency_cache_ttl = 30        # Cache urgency calculations for 30 seconds
+        self._last_position_count = 0       # Track position count changes
+        self._dynamic_intervals_enabled = False  # Will be enabled based on position count
+        
+        # EXTREME PERFORMANCE: For 400+ trades - emergency measures
+        self._extreme_mode_active = False   # Ultra-aggressive mode for massive scale
+        self._critical_only_monitoring = False  # Only monitor critical positions during execution
+        self._batch_processing_enabled = False  # Process positions in batches
         
         # MONITORING MODE: Normal operations cache (15s TTL)
         self._monitoring_cache = {}   # Cache for normal monitoring operations
@@ -853,7 +870,7 @@ class EnhancedTPSLManager:
                         return True
                         
             # Check if breakeven move is pending
-            if monitor_data.get("tp1_hit", False) and not monitor_data.get("sl_moved_to_be", False):
+            if (monitor_data.get("tp_hit", False) or monitor_data.get("tp1_hit", False)) and not monitor_data.get("sl_moved_to_be", False):
                 return True
                 
             # Check if in phase transition
@@ -1533,9 +1550,9 @@ class EnhancedTPSLManager:
                     tp_quantities.append(adjusted_qty)
                     tp_valid.append(True)
 
-            # Redistribute remaining percentage to TP1 if needed
+            # Redistribute remaining percentage to TP if needed
             if remaining_percentage > 0 and tp_valid[0]:
-                logger.info(f"Redistributing {remaining_percentage}% to TP1")
+                logger.info(f"Redistributing {remaining_percentage}% to TP")
                 tp_quantities[0] = value_adjusted_to_step(
                     tp_sl_position_size * (Decimal(str(tp_percentages[0])) + remaining_percentage) / Decimal("100"),
                     qty_step
@@ -1611,7 +1628,8 @@ class EnhancedTPSLManager:
                 "limit_orders": [],  # Track entry limit orders for Conservative approach
                 "limit_orders_filled": False,  # Track if limit orders have been filled
                 "phase": "BUILDING",  # Position phase (starts in building phase for conservative approach)
-                "tp1_hit": False,  # Track if TP1 (85%) has been hit
+                "tp_hit": False,  # Track if Take Profit (85%) has been hit
+                "tp1_hit": False,  # Legacy alias for backward compatibility
                 "phase_transition_time": None,  # When phase changed
                 "total_tp_filled": Decimal("0"),  # Total TP amount filled
                 "cleanup_completed": False,  # Track if cleanup was performed
@@ -1688,7 +1706,7 @@ class EnhancedTPSLManager:
         approach: str,
         current_size: Decimal,
         target_size: Decimal,
-        tp1_hit: bool = False
+        tp_hit: bool = False
     ) -> Decimal:
         """
         ENHANCED: Calculate SL quantity for 100% position coverage
@@ -1703,7 +1721,7 @@ class EnhancedTPSLManager:
             approach: Trading approach (CONSERVATIVE only)
             current_size: Currently filled position size
             target_size: Full intended position size (including limit orders)
-            tp1_hit: Whether TP1 (85%) has been reached (kept for compatibility)
+            tp_hit: Whether Take Profit (85%) has been reached
 
         Returns:
             Decimal: SL quantity to place (always 100% of target position)
@@ -1886,7 +1904,7 @@ class EnhancedTPSLManager:
                     approach=approach,
                     current_size=main_current_size,
                     target_size=main_target_size,
-                    tp1_hit=False
+                    tp_hit=False
                 )
 
                 sl_order_link_id = generate_order_link_id(approach, symbol, ORDER_TYPE_SL)
@@ -1945,7 +1963,7 @@ class EnhancedTPSLManager:
                     approach=approach,
                     current_size=mirror_current_size,
                     target_size=mirror_target_size,
-                    tp1_hit=False
+                    tp_hit=False
                 )
 
                 mirror_sl_order_link_id = generate_order_link_id("MIR", symbol, ORDER_TYPE_SL)
@@ -2058,7 +2076,7 @@ class EnhancedTPSLManager:
         elif ADAPTIVE_MONITORING_INTERVALS:
             if monitor_data.get("phase") == "PROFIT_TAKING":
                 target_interval = self.critical_position_interval  # 2 seconds
-            elif monitor_data.get("tp1_hit", False):
+            elif monitor_data.get("tp_hit", False) or monitor_data.get("tp1_hit", False):  # Check both for compatibility
                 target_interval = self.active_position_interval    # 5 seconds
             else:
                 target_interval = self.standard_monitor_interval   # 12 seconds
@@ -2098,13 +2116,27 @@ class EnhancedTPSLManager:
             if not position or Decimal(str(position.get("size", "0"))) == 0:
                 logger.info(f"Position {symbol} {side} closed - stopping monitor")
 
-                # CRITICAL FIX: Clean up all orders when position is closed (SL hit or manual close)
+                # CRITICAL FIX: Determine closure reason FIRST before sending alerts
+                closure_reason = await self._determine_closure_reason(monitor_data, symbol, side, account_type)
+                
+                # Send SPECIFIC alert based on closure reason
+                if closure_reason == "sl_hit":
+                    # SL hit during BUILDING/MONITORING/PROFIT_TAKING - send SL alert
+                    logger.info(f"🛑 SL HIT detected for {symbol} {side} ({account_type}) - sending SL hit alert")
+                    await self._send_sl_hit_alert(monitor_data)
+                elif closure_reason == "all_tps_filled":
+                    # All TPs completed - send position closed summary
+                    logger.info(f"🎯 All TPs completed for {symbol} {side} ({account_type}) - sending completion alert")
+                    await self._send_position_closed_alert(monitor_data)
+                else:
+                    # Manual closure or unknown - send generic position closed alert
+                    logger.info(f"📊 Position manually closed for {symbol} {side} ({account_type}) - sending closure alert")
+                    await self._send_position_closed_alert(monitor_data)
+
+                # Clean up all orders when position is closed
                 await self.cleanup_position_orders(symbol, side)
 
-                # Send position closed alert
-                await self._send_position_closed_alert(monitor_data)
-
-                # Handle position closure analysis
+                # Handle position closure analysis (for statistics/cleanup)
                 await self._handle_position_closure(monitor_data, position)
 
                 # Clean up monitor (may already be done by cleanup_position_orders)
@@ -2125,20 +2157,59 @@ class EnhancedTPSLManager:
             # ENHANCED: Check and update limit order statuses for better tracking
             # This MUST happen before any early returns
             if monitor_data.get("limit_orders") and monitor_data.get("approach", "").upper() == "CONSERVATIVE":
-                logger.info(f"🔍 Checking limit orders for {monitor_key}: {len(monitor_data.get('limit_orders', []))} orders registered")
+                # Extract valid order IDs and clean up invalid/executed entries
+                valid_orders = []
+                for order in monitor_data["limit_orders"]:
+                    if (isinstance(order, dict) and 
+                        order.get("order_id") and
+                        order.get("status") not in ["FILLED", "CANCELLED", "EXECUTED"]):
+                        valid_orders.append(order)
+                    elif isinstance(order, dict) and order.get("order_id"):
+                        logger.debug(f"🗑️ Filtering out executed/cancelled order {order.get('order_id')[:8]}... status: {order.get('status', 'UNKNOWN')}")
+                
+                # Update monitor data to only contain valid orders
+                if len(valid_orders) != len(monitor_data["limit_orders"]):
+                    logger.info(f"🧹 Cleaned invalid orders from {monitor_key}: {len(monitor_data['limit_orders'])} → {len(valid_orders)}")
+                    monitor_data["limit_orders"] = valid_orders
+                    # Force save the cleaned data immediately
+                    self.save_monitors_to_persistence(force=True)
+                
+                order_ids = [order.get("order_id") for order in valid_orders]
+                
+                logger.info(f"🔍 Checking limit orders for {monitor_key}: {len(order_ids)} orders registered")
+                logger.info(f"🔍 Found {len(order_ids)} order IDs to check: {[oid[:8] + '...' for oid in order_ids[:2]]}")
+                
                 try:
-                    
-                    # Extract order IDs from limit orders
-                    order_ids = [order.get("order_id") for order in monitor_data["limit_orders"] 
-                               if isinstance(order, dict) and order.get("order_id")]
-                    
-                    logger.info(f"🔍 Found {len(order_ids)} order IDs to check: {[oid[:8] + '...' for oid in order_ids[:2]]}")
-                    
                     if order_ids:
                         # Fetch and update order details
                         order_details = await limit_order_tracker.fetch_and_update_limit_order_details(
                             order_ids, symbol, account_type
                         )
+                        
+                        # Filter out orders that are actually filled/cancelled on the exchange
+                        active_order_ids = []
+                        for order_id in order_ids:
+                            if order_id in order_details:
+                                status = order_details[order_id].get("orderStatus", "Unknown")
+                                if status in ["New", "PartiallyFilled", "PartialFilled"]:
+                                    active_order_ids.append(order_id)
+                                else:
+                                    logger.info(f"🗑️ Excluding {status} order {order_id[:8]}... from limit order count")
+                            else:
+                                logger.debug(f"🔍 Order {order_id[:8]}... not found in exchange response")
+                        
+                        # Update the count to reflect only active orders
+                        if len(active_order_ids) != len(order_ids):
+                            logger.info(f"📊 Active limit orders for {monitor_key}: {len(active_order_ids)}/{len(order_ids)} (excluding filled/cancelled)")
+                            
+                            # Update monitor data to remove filled/cancelled orders
+                            updated_limit_orders = []
+                            for order in monitor_data["limit_orders"]:
+                                if isinstance(order, dict) and order.get("order_id") in active_order_ids:
+                                    updated_limit_orders.append(order)
+                            
+                            monitor_data["limit_orders"] = updated_limit_orders
+                            self.save_monitors_to_persistence(force=True)
                         
                         # Update monitor data with new statuses
                         filled_count, active_count = limit_order_tracker.update_monitor_limit_orders(
@@ -2376,6 +2447,69 @@ class EnhancedTPSLManager:
             # Use error recovery system for monitoring errors
             await self._handle_monitor_error(symbol, side, e, account_type)
 
+    async def _determine_closure_reason(self, monitor_data: Dict, symbol: str, side: str, account_type: str) -> str:
+        """
+        Determine why a position was closed BEFORE sending alerts
+        Returns: 'sl_hit', 'all_tps_filled', or 'manual'
+        """
+        try:
+            # Check if SL was hit (from our tracking)
+            if monitor_data.get("sl_hit"):
+                return "sl_hit"
+                
+            # Check if all TPs were filled
+            if monitor_data.get("all_tps_filled"):
+                return "all_tps_filled"
+            
+            # Fallback: Check active orders to determine closure reason
+            active_orders = await self._get_cached_open_orders(symbol, account_type)
+            
+            # Check if SL order is missing (likely it triggered)
+            sl_still_active = False
+            if monitor_data.get("sl_order"):
+                sl_order_id = monitor_data["sl_order"]["order_id"]
+                sl_order_id_str = str(sl_order_id)
+                sl_still_active = any(
+                    o.get("orderId") == sl_order_id or 
+                    str(o.get("orderId")) == sl_order_id_str or
+                    str(o.get("orderId")) == str(sl_order_id)
+                    for o in active_orders
+                )
+            
+            # If SL is missing and position closed, SL was likely hit
+            if not sl_still_active and monitor_data.get("sl_order"):
+                logger.info(f"🔍 SL order missing from active orders - SL likely hit for {symbol} {side} ({account_type})")
+                # Mark SL as hit for proper alert formatting
+                monitor_data["sl_hit"] = True
+                return "sl_hit"
+            
+            # Check if all TP orders are gone (all TPs filled)
+            tp_orders = self._ensure_tp_orders_dict(monitor_data)
+            tp_still_active = False
+            for order_id, tp_order in tp_orders.items():
+                order_id_str = str(order_id)
+                if any(
+                    o.get("orderId") == order_id or 
+                    str(o.get("orderId")) == order_id_str or
+                    str(o.get("orderId")) == str(order_id)
+                    for o in active_orders
+                ):
+                    tp_still_active = True
+                    break
+            
+            if not tp_still_active and tp_orders:
+                logger.info(f"🎯 All TP orders missing from active orders - all TPs filled for {symbol} {side} ({account_type})")
+                monitor_data["all_tps_filled"] = True
+                return "all_tps_filled"
+            
+            # Default: manual closure or unknown reason
+            logger.info(f"❓ Unknown closure reason for {symbol} {side} ({account_type}) - treating as manual closure")
+            return "manual"
+            
+        except Exception as e:
+            logger.error(f"Error determining closure reason for {symbol} {side} ({account_type}): {e}")
+            return "manual"
+
     async def _handle_conservative_position_change(self, monitor_data: Dict, current_size: Decimal, fill_percentage: float):
         """
         Handle position changes for conservative approach
@@ -2420,13 +2554,14 @@ class EnhancedTPSLManager:
                 # Pre-emptively cancel all remaining orders
                 await self._emergency_cancel_all_orders(monitor_data["symbol"], monitor_data["side"], monitor_data)
             
-            # If TP1 was filled, set the tp1_hit flag regardless of fill percentage
-            if tp_number == 1 and not monitor_data.get("tp1_hit", False):
-                monitor_data["tp1_hit"] = True
-                logger.info(f"✅ TP1 hit detected - will trigger breakeven movement and limit order cleanup")
+            # If TP was filled, set the tp_hit flag regardless of fill percentage
+            if tp_number == 1 and not monitor_data.get("tp_hit", False):
+                monitor_data["tp_hit"] = True
+                monitor_data["tp1_hit"] = True  # Legacy compatibility
+                logger.info(f"✅ Take Profit hit detected - will trigger final closure")
                 
-                # ENHANCED LOGGING FOR TP1 HIT DETECTION
-                logger.info(f"🎯 TP1 HIT DETECTION for {monitor_data.get('symbol')} {monitor_data.get('side')}")
+                # ENHANCED LOGGING FOR TAKE PROFIT HIT DETECTION
+                logger.info(f"🎯 TAKE PROFIT HIT DETECTION for {monitor_data.get('symbol')} {monitor_data.get('side')}")
                 logger.info(f"  Monitor Key: {monitor_data.get('monitor_key', 'unknown')}")
                 logger.info(f"  Account Type: {monitor_data.get('account_type', 'main')}")
                 logger.info(f"  Position Size: {monitor_data.get('position_size')}")
@@ -2449,14 +2584,20 @@ class EnhancedTPSLManager:
                     else:
                         logger.error(f"❌ Could not find chat_id for position")
                 
-                # Save the tp1_hit flag to persistence
+                # Save the tp_hit flag to persistence
                 self.save_monitors_to_persistence(force=True, reason="tp_hit")
                 
                 # Trigger phase transition to PROFIT_TAKING
                 await self._transition_to_profit_taking(monitor_data)
                 
-                # Trigger breakeven movement
-                logger.info(f"🎯 Triggering breakeven movement after TP1...")
+                # SINGLE TP APPROACH: For single TP strategy, close position immediately when TP is hit
+                if tp_number == 1:  # Single TP approach - TP means complete closure
+                    logger.info(f"🎯 SINGLE TP APPROACH: TP hit detected - initiating immediate 100% closure")
+                    await self._handle_take_profit_final_closure(monitor_data, fill_percentage, current_size)
+                    return  # Exit early since position is fully closed
+                
+                # Legacy: Trigger breakeven movement for multi-TP approach (not used in current system)
+                logger.info(f"🎯 Triggering breakeven movement after TP...")
                 # Get position data for breakeven
                 positions = await get_position_info_for_account(monitor_data["symbol"], monitor_data.get("account_type", "main"))
                 position = None
@@ -2473,12 +2614,14 @@ class EnhancedTPSLManager:
                         is_tp1_trigger=True
                     )
                     if success:
-                        logger.info(f"✅ SL moved to breakeven successfully after TP1")
+                        logger.info(f"✅ SL moved to breakeven successfully after TP")
                         monitor_data["sl_moved_to_be"] = True
-                        # Send breakeven alert
-                        await self._send_enhanced_breakeven_alert(monitor_data, "TP1")
+                        # Send breakeven alert only if not already sent
+                        if not monitor_data.get("breakeven_alert_sent", False):
+                            await self._send_enhanced_breakeven_alert(monitor_data, "TP")
+                            monitor_data["breakeven_alert_sent"] = True
                     else:
-                        logger.error(f"❌ Failed to move SL to breakeven after TP1")
+                        logger.error(f"❌ Failed to move SL to breakeven after TP")
                 else:
                     logger.error(f"❌ Could not find position data for breakeven movement")
             
@@ -2525,16 +2668,16 @@ class EnhancedTPSLManager:
         else:
             # Fallback: If order ID detection failed but position reduced, it's likely a TP fill
             # CRITICAL PROTECTION: Only allow fallback TP detection if we're already in PROFIT_TAKING phase
-            # This prevents false TP1 hits during BUILDING phase when limit orders cause size fluctuations
+            # This prevents false TP hits during BUILDING phase when limit orders cause size fluctuations
             current_phase = monitor_data.get("phase", "BUILDING")
             
             if not position_increased and current_size < monitor_data.get("position_size", 0):
                 if current_phase in ["BUILDING", "MONITORING"]:
-                    # PROTECTIVE LOGIC: During BUILDING/MONITORING phase, position reductions should NOT trigger TP1
-                    logger.info(f"🛡️ BUILDING/MONITORING phase: Position reduction detected but protected from false TP1 trigger")
+                    # PROTECTIVE LOGIC: During BUILDING/MONITORING phase, position reductions should NOT trigger TP
+                    logger.info(f"🛡️ BUILDING/MONITORING phase: Position reduction detected but protected from false TP trigger")
                     logger.info(f"📊 Phase: {current_phase}, Position: {monitor_data.get('position_size', 0)} → {current_size}")
                     logger.info(f"💡 Note: This reduction may be due to limit order rebalancing or market fluctuations")
-                    logger.info(f"🔒 TP1 detection protected until explicit TP order fill is detected")
+                    logger.info(f"🔒 TP detection protected until explicit TP order fill is detected")
                     
                     # Update last known size but don't trigger TP logic
                     monitor_data["last_known_size"] = current_size
@@ -2542,7 +2685,7 @@ class EnhancedTPSLManager:
                     self.save_monitors_to_persistence(reason="position_change_protected")
                     
                     # Log this event for monitoring
-                    logger.info(f"✅ Position size updated without triggering false TP1: {symbol} {side} ({current_phase})")
+                    logger.info(f"✅ Position size updated without triggering false TP: {symbol} {side} ({current_phase})")
                     return
                 
                 # Only proceed with TP detection if we're already in PROFIT_TAKING phase
@@ -2554,12 +2697,13 @@ class EnhancedTPSLManager:
                     cumulative_fill = monitor_data.get("position_size", 0) - current_size
                     cumulative_percentage = (cumulative_fill / monitor_data.get("position_size", 1)) * 100
                     
-                    # Estimate TP number based on percentage (but TP1 should already be hit in PROFIT_TAKING phase)
+                    # Estimate TP number based on percentage (but TP should already be hit in PROFIT_TAKING phase)
                     if cumulative_percentage >= 85:
-                        # This should not happen in PROFIT_TAKING phase unless TP1 was already hit
-                        if not monitor_data.get("tp1_hit", False):
-                            logger.warning(f"⚠️ Unexpected state: PROFIT_TAKING phase but TP1 not marked as hit")
-                            monitor_data["tp1_hit"] = True
+                        # This should not happen in PROFIT_TAKING phase unless TP was already hit
+                        if not monitor_data.get("tp_hit", False) and not monitor_data.get("tp1_hit", False):
+                            logger.warning(f"⚠️ Unexpected state: PROFIT_TAKING phase but TP not marked as hit")
+                            monitor_data["tp_hit"] = True
+                            monitor_data["tp1_hit"] = True  # Legacy compatibility
                         tp_number = 1
                     elif cumulative_percentage >= 90:
                         tp_number = 2
@@ -2596,8 +2740,8 @@ class EnhancedTPSLManager:
             # ENHANCED: Progressive SL Management with Breakeven Automation
             monitor_key = f"{monitor_data['symbol']}_{monitor_data['side']}"
 
-            # Check for TP1 breakeven trigger - now based on tp1_hit flag
-            if monitor_data.get("tp1_hit", False) and not monitor_data.get("sl_moved_to_be", False):
+            # Check for TP breakeven trigger - now based on tp_hit flag
+            if (monitor_data.get("tp_hit", False) or monitor_data.get("tp1_hit", False)) and not monitor_data.get("sl_moved_to_be", False):
                 # Use atomic lock to prevent race conditions
                 if monitor_key not in self.breakeven_locks:
                     self.breakeven_locks[monitor_key] = asyncio.Lock()
@@ -2605,13 +2749,15 @@ class EnhancedTPSLManager:
                 async with self.breakeven_locks[monitor_key]:
                     # Double-check flag after acquiring lock
                     if not monitor_data.get("sl_moved_to_be", False):
-                        logger.info(f"🔒 ENHANCED TP1 BREAKEVEN: {monitor_key} - TP1 has been hit")
+                        logger.info(f"🔒 ENHANCED TP BREAKEVEN: {monitor_key} - TP has been hit")
 
                         # First, transition to profit-taking phase and cleanup limit orders
                         await self._transition_to_profit_taking(monitor_data)
 
-                        # Get fresh position data for breakeven calculation
-                        positions = await get_position_info(monitor_data["symbol"])
+                        # Get fresh position data for breakeven calculation (account-aware)
+                        from clients.bybit_helpers import get_position_info_for_account
+                        account_type = monitor_data.get("account_type", "main")
+                        positions = await get_position_info_for_account(monitor_data["symbol"], account_type)
                         position = None
                         if positions:
                             for pos in positions:
@@ -2620,6 +2766,7 @@ class EnhancedTPSLManager:
                                     break
 
                         if position:
+                            logger.info(f"📍 Position found for {account_type} account: {monitor_data['symbol']} {monitor_data['side']}")
                             # ENHANCED: Use enhanced breakeven with full position management
                             success = await self._move_sl_to_breakeven_enhanced_v2(
                                 monitor_data=monitor_data,
@@ -2629,20 +2776,32 @@ class EnhancedTPSLManager:
 
                             if success:
                                 monitor_data["sl_moved_to_be"] = True
-                                logger.info(f"✅ ENHANCED TP1 breakeven completed for {monitor_key}")
+                                logger.info(f"✅ ENHANCED TP breakeven completed for {monitor_key}")
 
-                                # Send enhanced breakeven alert
-                                await self._send_enhanced_breakeven_alert(monitor_data, "TP1")
+                                # Send enhanced breakeven alert only if not already sent
+                                if not monitor_data.get("breakeven_alert_sent", False):
+                                    await self._send_enhanced_breakeven_alert(monitor_data, "TP")
+                                    monitor_data["breakeven_alert_sent"] = True
 
                                 # Synchronize with mirror account
                                 await self._sync_breakeven_with_mirror(monitor_data)
                             else:
-                                logger.error(f"❌ ENHANCED TP1 breakeven failed for {monitor_key}")
+                                logger.error(f"❌ ENHANCED TP breakeven failed for {monitor_key}")
+                        else:
+                            logger.error(f"❌ CRITICAL: No position found for {account_type} account: {monitor_data['symbol']} {monitor_data['side']}")
+                            logger.error(f"   • This prevents breakeven movement and mirror sync!")
+                            logger.error(f"   • Positions fetched: {len(positions) if positions else 0}")
 
-            # ENHANCED: Progressive breakeven for subsequent TP fills (TP2, TP3, TP4)
-            elif monitor_data.get("sl_moved_to_be", False) and fill_percentage > 85:
-                # TP2/3/4 fills - adjust SL progressively
-                await self._handle_progressive_tp_fills(monitor_data, fill_percentage, current_size)
+            # TAKE PROFIT: When Take Profit hits (85%), close entire position immediately
+            # This handles both direct TP detection and fallback cases
+            elif (monitor_data.get("tp_hit", False) or monitor_data.get("tp1_hit", False)) and fill_percentage >= 85:
+                # Take Profit hit - close 100% of position and complete the trade
+                logger.info(f"🎯 TAKE PROFIT FINAL CLOSURE: Fill percentage {fill_percentage:.2f}% >= 85%, closing entire position")
+                await self._handle_take_profit_final_closure(monitor_data, fill_percentage, current_size)
+            # Fallback: Also check if SL moved to breakeven AND fill percentage >= 85% (legacy path)
+            elif monitor_data.get("sl_moved_to_be", False) and fill_percentage >= 85:
+                logger.info(f"🎯 TAKE PROFIT FALLBACK CLOSURE: SL at breakeven and fill percentage {fill_percentage:.2f}% >= 85%")
+                await self._handle_take_profit_final_closure(monitor_data, fill_percentage, current_size)
 
 
     def _count_filled_limit_orders(self, monitor_data: Dict) -> int:
@@ -2842,13 +3001,13 @@ class EnhancedTPSLManager:
             # Sort orders by price to determine TP hierarchy
             side = monitor_data.get("side")
             if side == "Buy":
-                # For long positions, higher TP prices = TP1, TP2, etc.
+                # For long positions, higher TP prices = TP (single TP approach)
                 sorted_orders = sorted(exchange_orders, key=lambda x: float(x.get("price", 0)), reverse=True)
             else:
-                # For short positions, lower TP prices = TP1, TP2, etc.
+                # For short positions, lower TP prices = TP (single TP approach)
                 sorted_orders = sorted(exchange_orders, key=lambda x: float(x.get("price", 0)))
             
-            for i, order in enumerate(sorted_orders[:4]):  # Max 4 TPs
+            for i, order in enumerate(sorted_orders[:1]):  # Single TP approach only
                 order_id = order.get("orderId")
                 tp_num = i + 1
                 
@@ -2971,7 +3130,7 @@ class EnhancedTPSLManager:
             logger.info(f"🔧 Mirror position size for TP recreation: {mirror_position_size}")
             
             # Create TP orders based on main account structure but mirror position size
-            tp_percentages = [Decimal("85"), Decimal("5"), Decimal("5"), Decimal("5")]
+            tp_percentages = [Decimal("100")]  # Single TP approach - 100% position closure
             recreated_orders = {}
             
             # Sort main TP orders by TP number
@@ -3062,7 +3221,7 @@ class EnhancedTPSLManager:
                 logger.info(f"📊 Fallback recovery position: {position_size} @ {current_price}")
                 
                 # Calculate TP levels based on conservative approach
-                tp_percentages = [Decimal("85"), Decimal("5"), Decimal("5"), Decimal("5")]
+                tp_percentages = [Decimal("100")]  # Single TP approach - 100% position closure
                 
                 # Determine price direction for TP calculation
                 if side == "Buy":
@@ -3483,8 +3642,8 @@ class EnhancedTPSLManager:
         Extract TP number from OrderLinkID
         
         Examples:
-        - "BOT_TP1_BTCUSDT_123456" -> 1
-        - "MIR_TP2_ETHUSDT_789012" -> 2
+        - "BOT_TP_BTCUSDT_123456" -> 1
+        - "BOT_TP_ETHUSDT_789012" -> 1 (single TP approach)
         
         Returns:
             Optional[int]: TP number if found, None otherwise
@@ -3600,8 +3759,8 @@ class EnhancedTPSLManager:
             approach = monitor_data.get("approach", "CONSERVATIVE")
 
             # Define TP percentages based on approach
-            # Conservative approach only: TP1: 85%, TP2-4: 5% each
-            tp_percentages = [Decimal("85"), Decimal("5"), Decimal("5"), Decimal("5")]
+            # Conservative approach only: Single TP: 100% position closure
+            tp_percentages = [Decimal("100")]  # Single TP approach
 
             logger.info(f"🎯 Using {approach} approach with TP percentages: {[str(p) for p in tp_percentages]}%")
             logger.info(f"🔄 Using {approach} approach with absolute position sizing")
@@ -3853,7 +4012,7 @@ class EnhancedTPSLManager:
     async def _adjust_sl_quantity(self, monitor_data: Dict, new_quantity: Decimal):
         """
         Adjust SL order quantity to match remaining position size
-        Enhanced: Now adjusts SL after any TP hit, not just TP1
+        Enhanced: Now adjusts SL after any TP hit, not just first TP
         ENHANCED V2: Includes comprehensive validation and unique OrderLinkID generation
         """
         if not monitor_data.get("sl_order"):
@@ -4175,10 +4334,10 @@ class EnhancedTPSLManager:
             # Add unfilled limit order quantities
             unfilled_limit_qty = Decimal("0")
             
-            # Check if TP1 has been hit (limit orders should be cancelled after TP1)
-            tp1_hit = monitor_data.get("tp1_hit", False)
+            # Check if TP has been hit (limit orders should be cancelled after TP)
+            tp_hit = monitor_data.get("tp_hit", False) or monitor_data.get("tp1_hit", False)  # Check both for compatibility
             
-            if not tp1_hit:
+            if not tp_hit:
                 # Get unfilled limit orders and add their quantities
                 try:
                     # Get limit order IDs from monitor data
@@ -4245,21 +4404,21 @@ class EnhancedTPSLManager:
             logger.info(f"🔄 SL Adjustment for {symbol} {side} ({account_indicator} account)")
             logger.info(f"   Current position size: {current_position_size}")
             logger.info(f"   Original position size: {monitor_data.get('position_size', 'Unknown')}")
-            logger.info(f"   TP1 hit: {monitor_data.get('tp1_hit', False)}")
+            logger.info(f"   TP hit: {monitor_data.get('tp_hit', False) or monitor_data.get('tp1_hit', False)}")
             
             # Calculate total exposure (position + unfilled limits)
             total_exposure = await self._calculate_total_exposure(monitor_data, current_position_size)
             
             # Use the full position coverage calculation
             approach = "conservative"  # Conservative approach only
-            tp1_hit = monitor_data.get('tp1_hit', False)
+            tp_hit = monitor_data.get('tp_hit', False) or monitor_data.get('tp1_hit', False)  # Check both for compatibility
             
             # Calculate SL quantity to cover full exposure
             sl_quantity = self._calculate_full_position_sl_quantity(
                 approach=approach,
                 current_size=current_position_size,
                 target_size=total_exposure,
-                tp1_hit=tp1_hit
+                tp_hit=tp_hit
             )
             
             # Log the decision
@@ -4813,48 +4972,96 @@ class EnhancedTPSLManager:
             return False
 
     async def _emergency_cancel_all_orders(self, symbol: str, side: str, monitor_data: Dict):
-        """Emergency cancel all orders when SL or final TP is about to close position"""
+        """Emergency cancel ALL orders when TP is hit - comprehensive approach"""
         try:
-            logger.info(f"🚨 EMERGENCY: Cancelling all orders for {symbol} {side} - position closure imminent")
-            
-            # Cancel all TP orders immediately
-            tp_orders = self._ensure_tp_orders_dict(monitor_data)
-            cancelled_count = 0
-            for order_id, tp_order in tp_orders.items():
-                if tp_order.get("status") != "FILLED":
-                    try:
-                        await cancel_order_with_retry(symbol, order_id)
-                        cancelled_count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to cancel TP order {order_id[:8]}...: {e}")
-            
-            # Cancel SL order if it exists and wasn't the trigger
-            if monitor_data.get("sl_order") and not monitor_data.get("sl_hit"):
-                try:
-                    await cancel_order_with_retry(symbol, monitor_data["sl_order"]["order_id"])
-                    cancelled_count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to cancel SL order: {e}")
-            
-            # Cancel any remaining limit orders
-            for limit_order in monitor_data.get("limit_orders", []):
-                if isinstance(limit_order, dict) and limit_order.get("status") == "ACTIVE":
-                    try:
-                        await cancel_order_with_retry(symbol, limit_order["order_id"])
-                        cancelled_count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to cancel limit order: {e}")
-            
-            logger.info(f"✅ Emergency cancellation complete: {cancelled_count} orders cancelled")
-            
-            # Check if final TP was hit and close any remaining position
-            if monitor_data.get("all_tps_filled", False):
-                await self._ensure_position_fully_closed(symbol, side, monitor_data)
-            
-            # Also trigger mirror account cancellation
             account_type = monitor_data.get("account_type", "main")
-            if account_type == "main":
-                await self._cleanup_mirror_position_orders(symbol, side)
+            logger.info(f"🚨 EMERGENCY: Cancelling ALL orders for {symbol} {side} ({account_type.upper()}) - TP hit, closing position")
+            
+            # COMPREHENSIVE APPROACH: Get ALL orders from exchange for this symbol
+            from clients.bybit_helpers import get_all_open_orders
+            from clients.bybit_client import bybit_client_1, bybit_client_2
+            
+            # Use appropriate client
+            client = bybit_client_2 if account_type == "mirror" else bybit_client_1
+            
+            try:
+                # Get ALL open orders for this account
+                all_orders = await get_all_open_orders(client=client)
+                cancelled_count = 0
+                
+                if all_orders:
+                    # Filter orders for this symbol
+                    symbol_orders = [order for order in all_orders if order.get("symbol") == symbol]
+                    
+                    logger.info(f"📋 Found {len(symbol_orders)} orders for {symbol} on {account_type} account")
+                    
+                    # Cancel each order
+                    for order in symbol_orders:
+                        try:
+                            order_id = order.get("orderId")
+                            order_type = order.get("orderType", "Unknown")
+                            price = order.get("price", "Market")
+                            qty = order.get("qty", "Unknown")
+                            
+                            logger.info(f"🚫 Cancelling {order_type} order: {order_id[:12]}... Price: {price}, Qty: {qty}")
+                            
+                            # Use client-specific cancellation
+                            cancel_result = client.cancel_order(
+                                category="linear",
+                                symbol=symbol,
+                                orderId=order_id
+                            )
+                            
+                            if cancel_result and cancel_result.get("retCode") == 0:
+                                cancelled_count += 1
+                                logger.info(f"✅ Cancelled order {order_id[:12]}...")
+                            else:
+                                logger.warning(f"⚠️ Cancel response: {cancel_result}")
+                                
+                        except Exception as order_e:
+                            logger.warning(f"Failed to cancel order {order.get('orderId', 'Unknown')[:12]}...: {order_e}")
+                
+                logger.info(f"✅ COMPREHENSIVE CANCELLATION COMPLETE: {cancelled_count} orders cancelled for {symbol} ({account_type})")
+                
+            except Exception as e:
+                logger.error(f"❌ Error getting orders from exchange: {e}")
+                # Fallback to monitor data approach
+                logger.info("🔄 Falling back to monitor data order cancellation")
+                
+                cancelled_count = 0
+                # Cancel TP orders from monitor data
+                tp_orders = self._ensure_tp_orders_dict(monitor_data)
+                for order_id, tp_order in tp_orders.items():
+                    if tp_order.get("status") != "FILLED":
+                        try:
+                            await cancel_order_with_retry(symbol, order_id)
+                            cancelled_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to cancel TP order {order_id[:8]}...: {e}")
+                
+                # Cancel SL order from monitor data
+                if monitor_data.get("sl_order") and not monitor_data.get("sl_hit"):
+                    try:
+                        await cancel_order_with_retry(symbol, monitor_data["sl_order"]["order_id"])
+                        cancelled_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to cancel SL order: {e}")
+                
+                # Cancel limit orders from monitor data
+                for limit_order in monitor_data.get("limit_orders", []):
+                    if isinstance(limit_order, dict) and limit_order.get("status") == "ACTIVE":
+                        try:
+                            await cancel_order_with_retry(symbol, limit_order["order_id"])
+                            cancelled_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to cancel limit order: {e}")
+                
+                logger.info(f"✅ Fallback cancellation complete: {cancelled_count} orders cancelled")
+            
+            # CRITICAL: Also trigger mirror account cancellation if this is main account
+            if account_type == "main" and ENABLE_MIRROR_TRADING:
+                logger.info(f"🪞 MIRROR: Main account TP hit - cancelling ALL mirror account orders for {symbol}")
+                await self._cleanup_mirror_position_orders_comprehensive(symbol, side)
                 
         except Exception as e:
             logger.error(f"Error in emergency order cancellation: {e}")
@@ -4975,20 +5182,282 @@ All take profit targets have been achieved! 🎯"""
             logger.error(f"Error in orphaned order cleanup failsafe: {e}")
     
     def enable_execution_mode(self):
-        """Enable execution mode to optimize API calls during trade placement"""
+        """Enable execution mode to optimize speed during trade placement with safety features"""
+        from config.settings import ENABLE_EXECUTION_SPEED_OPTIMIZATION, EXECUTION_MODE_TIMEOUT
+        
+        # Check if optimization is enabled
+        if not ENABLE_EXECUTION_SPEED_OPTIMIZATION:
+            logger.debug("⚡ Execution speed optimization disabled via settings")
+            return
+            
         self._execution_mode = True
         self._execution_cache = {}
+        self._execution_mode_start_time = time.time()
+        self._execution_mode_timeout = EXECUTION_MODE_TIMEOUT
         self._last_execution_cache_clear = time.time()
-        logger.info("🚀 Execution mode ENABLED - API calls will be cached for 5s")
+        
+        logger.info("🚀 EXECUTION MODE ENABLED - Speed optimizations active")
+        logger.info(f"   ⏱️ Timeout protection: {EXECUTION_MODE_TIMEOUT}s")
+        logger.info(f"   📡 Monitoring interval reduced: 5s → 30s during execution")
     
     def disable_execution_mode(self):
-        """Disable execution mode and clear cache"""
+        """Disable execution mode and restore normal monitoring with metrics"""
         was_enabled = self._execution_mode
         self._execution_mode = False
         cache_size = len(self._execution_cache)
         self._execution_cache = {}
+        
         if was_enabled:
-            logger.info(f"🏁 Execution mode DISABLED - cleared {cache_size} cached entries")
+            # Calculate execution mode duration
+            execution_duration = time.time() - self._execution_mode_start_time
+            logger.info(f"🏁 EXECUTION MODE DISABLED after {execution_duration:.1f}s")
+            logger.info(f"   🧹 Cleared {cache_size} cached entries")
+            logger.info(f"   📡 Monitoring interval restored: 30s → 5s")
+            
+            # Reset timing
+            self._execution_mode_start_time = 0
+    
+    def _check_execution_mode_timeout(self):
+        """Check if execution mode has timed out and auto-disable if needed"""
+        if self._execution_mode and self._execution_mode_start_time > 0:
+            current_time = time.time()
+            execution_duration = current_time - self._execution_mode_start_time
+            
+            if execution_duration > self._execution_mode_timeout:
+                logger.warning(f"⚠️ Execution mode TIMEOUT after {execution_duration:.1f}s - auto-disabling")
+                self.disable_execution_mode()
+                return True
+        return False
+    
+    def get_execution_mode_status(self) -> dict:
+        """Get current execution mode status for monitoring"""
+        if not self._execution_mode:
+            return {"enabled": False, "duration": 0, "timeout_remaining": 0}
+        
+        current_time = time.time()
+        duration = current_time - self._execution_mode_start_time
+        timeout_remaining = max(0, self._execution_mode_timeout - duration)
+        
+        return {
+            "enabled": True,
+            "duration": duration,
+            "timeout_remaining": timeout_remaining,
+            "cache_entries": len(self._execution_cache)
+        }
+    
+    def is_execution_mode_active(self) -> bool:
+        """Check if execution mode is currently active (with timeout check)"""
+        if self._execution_mode:
+            # Check for timeout
+            self._check_execution_mode_timeout()
+        return self._execution_mode
+    
+    def _classify_position_urgency(self, monitor_data: dict, current_price: Decimal) -> str:
+        """
+        Classify position urgency for ultra-high performance monitoring
+        Returns: CRITICAL, URGENT, ACTIVE, BUILDING, STABLE, or DORMANT
+        """
+        from config.settings import (
+            CRITICAL_DISTANCE_PERCENT, URGENT_DISTANCE_PERCENT,
+            STABLE_POSITION_THRESHOLD_MINUTES, DORMANT_POSITION_THRESHOLD_MINUTES,
+            FORCE_CRITICAL_MONITORING
+        )
+        
+        try:
+            current_time = time.time()
+            symbol = monitor_data.get('symbol', '')
+            side = monitor_data.get('side', '')
+            phase = monitor_data.get('phase', 'BUILDING')
+            
+            # SAFETY OVERRIDE: Always classify SL-approaching positions as CRITICAL
+            sl_price = monitor_data.get('sl_price')
+            if sl_price and FORCE_CRITICAL_MONITORING:
+                sl_distance_percent = abs(float(current_price - Decimal(str(sl_price))) / float(current_price)) * 100
+                if sl_distance_percent <= CRITICAL_DISTANCE_PERCENT:
+                    return "CRITICAL"
+            
+            # Check TP proximity for CRITICAL/URGENT classification
+            tp_prices = monitor_data.get('tp_prices', [])
+            if tp_prices:
+                min_tp_distance = float('inf')
+                for tp_price in tp_prices:
+                    if tp_price:
+                        tp_distance_percent = abs(float(current_price - Decimal(str(tp_price))) / float(current_price)) * 100
+                        min_tp_distance = min(min_tp_distance, tp_distance_percent)
+                
+                if min_tp_distance <= CRITICAL_DISTANCE_PERCENT:
+                    return "CRITICAL"
+                elif min_tp_distance <= URGENT_DISTANCE_PERCENT:
+                    return "URGENT"
+            
+            # Check phase-based urgency
+            if phase == "PROFIT_TAKING":
+                return "ACTIVE"
+            elif phase == "BUILDING":
+                return "BUILDING"
+            
+            # Check activity-based urgency (time since last activity)
+            last_activity = monitor_data.get('last_activity_time', current_time)
+            minutes_since_activity = (current_time - last_activity) / 60
+            
+            if minutes_since_activity > DORMANT_POSITION_THRESHOLD_MINUTES:
+                return "DORMANT"
+            elif minutes_since_activity > STABLE_POSITION_THRESHOLD_MINUTES:
+                return "STABLE"
+            else:
+                return "ACTIVE"
+                
+        except Exception as e:
+            logger.debug(f"Error classifying position urgency for {symbol}: {e}")
+            # SAFETY DEFAULT: If classification fails, assume URGENT for safety
+            return "URGENT"
+    
+    def _get_cached_position_urgency(self, monitor_key: str, monitor_data: dict, current_price: Decimal) -> str:
+        """Get cached position urgency or calculate if needed"""
+        current_time = time.time()
+        
+        # Check cache
+        if monitor_key in self._position_urgency_cache:
+            urgency, cached_time = self._position_urgency_cache[monitor_key]
+            if current_time - cached_time < self._urgency_cache_ttl:
+                return urgency
+        
+        # Calculate new urgency
+        urgency = self._classify_position_urgency(monitor_data, current_price)
+        self._position_urgency_cache[monitor_key] = (urgency, current_time)
+        
+        return urgency
+    
+    def _calculate_dynamic_monitoring_interval(self, position_count: int, position_urgencies: dict) -> dict:
+        """
+        Calculate dynamic monitoring intervals for ultra-high performance
+        Returns dict mapping urgency -> interval_seconds
+        """
+        from config.settings import (
+            ENABLE_ULTRA_PERFORMANCE_MODE, HIGH_POSITION_COUNT_THRESHOLD,
+            ULTRA_HIGH_POSITION_THRESHOLD, CRITICAL_POSITION_INTERVAL,
+            URGENT_POSITION_INTERVAL, ACTIVE_POSITION_INTERVAL,
+            BUILDING_POSITION_INTERVAL, STABLE_POSITION_INTERVAL,
+            DORMANT_POSITION_INTERVAL
+        )
+        
+        if not ENABLE_ULTRA_PERFORMANCE_MODE:
+            # Use normal 5-second intervals for all positions
+            return {
+                "CRITICAL": 5, "URGENT": 5, "ACTIVE": 5,
+                "BUILDING": 5, "STABLE": 5, "DORMANT": 5
+            }
+        
+        # Base intervals
+        intervals = {
+            "CRITICAL": CRITICAL_POSITION_INTERVAL,
+            "URGENT": URGENT_POSITION_INTERVAL,  
+            "ACTIVE": ACTIVE_POSITION_INTERVAL,
+            "BUILDING": BUILDING_POSITION_INTERVAL,
+            "STABLE": STABLE_POSITION_INTERVAL,
+            "DORMANT": DORMANT_POSITION_INTERVAL
+        }
+        
+        # Scale intervals based on position count for ultra-performance
+        if position_count >= ULTRA_HIGH_POSITION_THRESHOLD:
+            # 100+ positions: Ultra-aggressive scaling
+            scale_factor = 2.0
+            logger.debug(f"🔥 ULTRA-HIGH PERFORMANCE: {position_count} positions, scaling intervals by {scale_factor}x")
+        elif position_count >= HIGH_POSITION_COUNT_THRESHOLD:
+            # 25+ positions: Moderate scaling  
+            scale_factor = 1.5
+            logger.debug(f"⚡ HIGH PERFORMANCE: {position_count} positions, scaling intervals by {scale_factor}x")
+        else:
+            # <25 positions: No scaling
+            scale_factor = 1.0
+        
+        # Apply scaling (but never scale CRITICAL positions beyond 2 seconds for safety)
+        scaled_intervals = {}
+        for urgency, interval in intervals.items():
+            scaled_interval = int(interval * scale_factor)
+            
+            # SAFETY LIMIT: Critical positions never exceed 2 seconds
+            if urgency == "CRITICAL":
+                scaled_intervals[urgency] = min(scaled_interval, 2)
+            else:
+                scaled_intervals[urgency] = scaled_interval
+        
+        return scaled_intervals
+    
+    def _calculate_extreme_monitoring_interval(self, position_count: int, position_urgencies: dict) -> dict:
+        """
+        Calculate EXTREME monitoring intervals for 400+ trades
+        Ultra-aggressive optimization with maximum safety preservation
+        """
+        from config.settings import (
+            ENABLE_EXTREME_PERFORMANCE_MODE, EXTREME_POSITION_THRESHOLD,
+            EXTREME_CRITICAL_INTERVAL, EXTREME_URGENT_INTERVAL, EXTREME_ACTIVE_INTERVAL,
+            EXTREME_BUILDING_INTERVAL, EXTREME_STABLE_INTERVAL, EXTREME_DORMANT_INTERVAL
+        )
+        
+        if not ENABLE_EXTREME_PERFORMANCE_MODE or position_count < EXTREME_POSITION_THRESHOLD:
+            # Fall back to ultra-high performance mode
+            return self._calculate_dynamic_monitoring_interval(position_count, position_urgencies)
+        
+        # EXTREME MODE: For 400+ positions
+        self._extreme_mode_active = True
+        
+        extreme_intervals = {
+            "CRITICAL": EXTREME_CRITICAL_INTERVAL,    # 2s even for critical (extreme scale)
+            "URGENT": EXTREME_URGENT_INTERVAL,        # 5s
+            "ACTIVE": EXTREME_ACTIVE_INTERVAL,        # 20s
+            "BUILDING": EXTREME_BUILDING_INTERVAL,    # 60s
+            "STABLE": EXTREME_STABLE_INTERVAL,        # 300s (5 minutes)
+            "DORMANT": EXTREME_DORMANT_INTERVAL       # 900s (15 minutes)
+        }
+        
+        logger.info(f"🔥🔥 EXTREME PERFORMANCE MODE: {position_count} positions")
+        logger.info(f"   Intervals: CRITICAL({EXTREME_CRITICAL_INTERVAL}s) → DORMANT({EXTREME_DORMANT_INTERVAL}s)")
+        
+        return extreme_intervals
+    
+    def enable_extreme_execution_mode(self):
+        """Enable extreme execution mode - pauses ALL non-critical monitoring"""
+        from config.settings import (
+            ENABLE_EXTREME_PERFORMANCE_MODE, EXTREME_EXECUTION_PAUSE_MONITORING,
+            EXTREME_EXECUTION_API_CONCURRENCY, EXTREME_EXECUTION_TIMEOUT
+        )
+        
+        if not ENABLE_EXTREME_PERFORMANCE_MODE:
+            # Fall back to normal execution mode
+            self.enable_execution_mode()
+            return
+        
+        self._execution_mode = True
+        self._critical_only_monitoring = EXTREME_EXECUTION_PAUSE_MONITORING
+        self._execution_mode_start_time = time.time()
+        self._execution_mode_timeout = EXTREME_EXECUTION_TIMEOUT
+        
+        logger.warning("🔥🔥 EXTREME EXECUTION MODE ENABLED")
+        logger.warning(f"   🚨 Critical-only monitoring: {EXTREME_EXECUTION_PAUSE_MONITORING}")
+        logger.warning(f"   ⚡ API concurrency: {EXTREME_EXECUTION_API_CONCURRENCY}")
+        logger.warning(f"   ⏱️ Timeout: {EXTREME_EXECUTION_TIMEOUT}s")
+    
+    def disable_extreme_execution_mode(self):
+        """Disable extreme execution mode and restore full monitoring"""
+        was_extreme = self._critical_only_monitoring
+        
+        self._execution_mode = False
+        self._critical_only_monitoring = False
+        self._extreme_mode_active = False
+        
+        if was_extreme:
+            execution_duration = time.time() - self._execution_mode_start_time
+            logger.warning(f"🔥🔥 EXTREME EXECUTION MODE DISABLED after {execution_duration:.1f}s")
+            logger.warning("   📡 Full monitoring restored for all positions")
+    
+    def is_extreme_mode_active(self) -> bool:
+        """Check if extreme performance mode is currently active"""
+        return self._extreme_mode_active
+    
+    def is_critical_only_monitoring(self) -> bool:
+        """Check if only critical positions should be monitored (during extreme execution)"""
+        return self._critical_only_monitoring
     
     def _cleanup_execution_cache(self):
         """Clean up expired execution cache entries"""
@@ -5500,6 +5969,106 @@ All take profit targets have been achieved! 🎯"""
         except Exception as e:
             logger.error(f"Error cleaning up mirror account orders: {e}")
 
+    async def _cleanup_mirror_position_orders_comprehensive(self, symbol: str, side: str):
+        """Comprehensive cleanup of ALL mirror account orders when main TP hits"""
+        try:
+            if not ENABLE_MIRROR_TRADING:
+                logger.debug("Mirror trading disabled - skipping mirror cleanup")
+                return
+                
+            logger.info(f"🪞 COMPREHENSIVE MIRROR CLEANUP: Cancelling ALL orders for {symbol} on mirror account")
+            
+            # Get ALL orders from mirror account
+            from clients.bybit_helpers import get_all_open_orders
+            from clients.bybit_client import bybit_client_2
+            
+            if not bybit_client_2:
+                logger.warning("❌ Mirror client not available for comprehensive cleanup")
+                return
+            
+            try:
+                # Get ALL open orders for mirror account
+                all_mirror_orders = await get_all_open_orders(client=bybit_client_2)
+                cancelled_count = 0
+                
+                if all_mirror_orders:
+                    # Filter orders for this symbol
+                    symbol_orders = [order for order in all_mirror_orders if order.get("symbol") == symbol]
+                    
+                    logger.info(f"🪞 Found {len(symbol_orders)} mirror orders for {symbol}")
+                    
+                    # Cancel each order
+                    for order in symbol_orders:
+                        try:
+                            order_id = order.get("orderId")
+                            order_type = order.get("orderType", "Unknown")
+                            order_side = order.get("side", "Unknown")  
+                            price = order.get("price", "Market")
+                            qty = order.get("qty", "Unknown")
+                            
+                            logger.info(f"🪞🚫 Cancelling mirror {order_type} {order_side}: {order_id[:12]}... Price: {price}, Qty: {qty}")
+                            
+                            # Cancel using mirror client
+                            cancel_result = bybit_client_2.cancel_order(
+                                category="linear",
+                                symbol=symbol,
+                                orderId=order_id
+                            )
+                            
+                            if cancel_result and cancel_result.get("retCode") == 0:
+                                cancelled_count += 1
+                                logger.info(f"🪞✅ Cancelled mirror order {order_id[:12]}...")
+                            else:
+                                logger.warning(f"🪞⚠️ Mirror cancel response: {cancel_result}")
+                                
+                        except Exception as order_e:
+                            logger.warning(f"🪞❌ Failed to cancel mirror order {order.get('orderId', 'Unknown')[:12]}...: {order_e}")
+                    
+                    logger.info(f"🪞✅ MIRROR CLEANUP COMPLETE: {cancelled_count} orders cancelled for {symbol}")
+                    
+                    # Also close any remaining mirror position
+                    try:
+                        from clients.bybit_helpers import get_position_info_for_account
+                        mirror_positions = await get_position_info_for_account(symbol, "mirror")
+                        
+                        if mirror_positions:
+                            for pos in mirror_positions:
+                                if pos.get("side") == side and float(pos.get("size", 0)) > 0:
+                                    remaining_size = pos.get("size")
+                                    close_side = "Sell" if side == "Buy" else "Buy"
+                                    
+                                    logger.info(f"🪞🔴 Closing remaining mirror position: {remaining_size} {symbol}")
+                                    
+                                    close_result = bybit_client_2.place_order(
+                                        category="linear",
+                                        symbol=symbol,
+                                        side=close_side,
+                                        orderType="Market",
+                                        qty=str(remaining_size),
+                                        reduceOnly=True,
+                                        timeInForce="GTC"
+                                    )
+                                    
+                                    if close_result and close_result.get("retCode") == 0:
+                                        logger.info(f"🪞✅ Mirror position closed successfully")
+                                    else:
+                                        logger.error(f"🪞❌ Failed to close mirror position: {close_result}")
+                                    break
+                        else:
+                            logger.info(f"🪞✅ No mirror position found for {symbol} - already closed")
+                            
+                    except Exception as pos_e:
+                        logger.error(f"🪞❌ Error checking/closing mirror position: {pos_e}")
+                        
+                else:
+                    logger.info(f"🪞 No mirror orders found for {symbol}")
+                    
+            except Exception as e:
+                logger.error(f"🪞❌ Error in comprehensive mirror cleanup: {e}")
+                
+        except Exception as e:
+            logger.error(f"Error in comprehensive mirror cleanup: {e}")
+
     async def _reset_stale_monitor_data(self, monitor_data: Dict, symbol: str, side: str, account_type: str = "main"):
         """
         CRITICAL: Reset all stale data to prevent contamination of next trade
@@ -5523,10 +6092,8 @@ All take profit targets have been achieved! 🎯"""
                 "total_filled_quantity",
                 
                 # TP/SL state (prevents order confusion)
-                "tp1_hit",
-                "tp2_hit", 
-                "tp3_hit",
-                "tp4_hit",
+                "tp_hit",  # Single TP approach only
+                "tp1_hit",  # Legacy compatibility
                 "all_tps_filled",
                 "sl_moved_to_be",
                 "sl_hit",
@@ -5576,8 +6143,8 @@ All take profit targets have been achieved! 🎯"""
                                   "last_tp_check", "last_sl_check", "last_position_check", "last_order_update",
                                   "phase_transition_time", "last_cache_refresh"]:
                         monitor_data[field] = 0
-                    elif field in ["limit_orders_filled", "tp1_hit", "tp2_hit", "tp3_hit", "tp4_hit", 
-                                  "all_tps_filled", "sl_moved_to_be", "sl_hit"]:
+                    elif field in ["limit_orders_filled", "tp_hit", "tp1_hit", 
+                                  "all_tps_filled", "sl_moved_to_be", "sl_hit"]:  # Single TP approach only
                         monitor_data[field] = False
                     elif field in ["tp_orders", "limit_orders", "active_order_ids", "cancelled_orders",
                                   "alerts_sent", "cached_position_data", "cached_order_data"]:
@@ -5660,29 +6227,67 @@ All take profit targets have been achieved! 🎯"""
             async with self.mirror_sync_locks[mirror_monitor_key]:
                 logger.info(f"🪞 Synchronizing breakeven with mirror account: {symbol} {side}")
 
-                # CRITICAL FIX: Update mirror monitor state FIRST
+                # ENHANCED: Comprehensive mirror monitor state synchronization
                 mirror_monitor_data = self.position_monitors.get(mirror_monitor_key)
                 if mirror_monitor_data:
                     logger.info(f"🔄 Synchronizing mirror monitor state: {mirror_monitor_key}")
                     
-                    # Sync all critical state from main monitor
-                    mirror_monitor_data["tp1_hit"] = True
-                    mirror_monitor_data["sl_moved_to_be"] = True
-                    mirror_monitor_data["phase"] = "PROFIT_TAKING"
-                    mirror_monitor_data["phase_transition_time"] = time.time()
+                    # PHASE VALIDATION: Check current mirror phase before sync
+                    current_mirror_phase = mirror_monitor_data.get("phase", "BUILDING")
+                    main_phase = monitor_data.get("phase", "BUILDING")
                     
-                    # Cancel unfilled limit orders for mirror if enabled
-                    if CANCEL_LIMITS_ON_TP1 and not mirror_monitor_data.get("limit_orders_cancelled", False):
-                        logger.info(f"🧹 Cancelling unfilled limit orders for mirror: {mirror_monitor_key}")
-                        await self._cancel_unfilled_limit_orders(mirror_monitor_data)
-                        mirror_monitor_data["limit_orders_cancelled"] = True
+                    logger.info(f"🪞 PHASE ANALYSIS: Main={main_phase}, Mirror={current_mirror_phase}")
+                    
+                    # Ensure account_type is set for proper mirror detection
+                    mirror_monitor_data["account_type"] = "mirror"
+                    
+                    # PHASE CORRECTION: If mirror is in wrong phase, fix it first
+                    if current_mirror_phase not in ["PROFIT_TAKING"] and main_phase == "PROFIT_TAKING":
+                        logger.info(f"🔧 PHASE CORRECTION: Mirror in {current_mirror_phase}, should match main ({main_phase})")
                         
-                    logger.info(f"✅ Mirror monitor state synchronized: {mirror_monitor_key} → PROFIT_TAKING phase")
+                        # Force correct phase for stuck mirrors
+                        if current_mirror_phase in ["BUILDING", "MONITORING", "ACTIVE"]:
+                            logger.info(f"🔄 Triggering proper phase transition for mirror: {mirror_monitor_key}")
+                            await self._transition_to_profit_taking(mirror_monitor_data)
+                        else:
+                            # Direct phase correction for edge cases
+                            logger.warning(f"⚠️ Direct phase correction for mirror: {current_mirror_phase} → PROFIT_TAKING")
+                            mirror_monitor_data["phase"] = "PROFIT_TAKING"
+                            mirror_monitor_data["phase_transition_time"] = time.time()
+                            mirror_monitor_data["tp_hit"] = True
+                            mirror_monitor_data["tp1_hit"] = True  # Legacy compatibility
+                    
+                    # VERIFICATION: Ensure transition was successful
+                    final_mirror_phase = mirror_monitor_data.get("phase", "UNKNOWN")
+                    if final_mirror_phase != "PROFIT_TAKING":
+                        logger.error(f"❌ CRITICAL: Mirror phase transition failed! Final phase: {final_mirror_phase}")
+                        # Emergency phase correction
+                        mirror_monitor_data["phase"] = "PROFIT_TAKING"
+                        mirror_monitor_data["tp_hit"] = True
+                        mirror_monitor_data["tp1_hit"] = True  # Legacy compatibility
+                        logger.info(f"🚨 EMERGENCY: Forced mirror to PROFIT_TAKING phase")
+                    
+                    # Mirror-specific state that's not handled by transition method
+                    mirror_monitor_data["sl_moved_to_be"] = True
+                    mirror_monitor_data["breakeven_alert_sent"] = True
+                    
+                    # FINAL VERIFICATION
+                    logger.info(f"✅ Mirror monitor state synchronized: {mirror_monitor_key} → {mirror_monitor_data.get('phase')} phase")
+                    logger.info(f"🪞 FINAL STATE: Phase={mirror_monitor_data.get('phase')}, TP_hit={mirror_monitor_data.get('tp_hit', False) or mirror_monitor_data.get('tp1_hit', False)}, SL_moved={mirror_monitor_data.get('sl_moved_to_be')}")
                     
                     # CRITICAL: Save the updated monitor state to persistence immediately
                     await self._save_monitor_state_to_persistence(mirror_monitor_key, mirror_monitor_data, force=True)
                 else:
                     logger.warning(f"⚠️ Mirror monitor not found for synchronization: {mirror_monitor_key}")
+                    # Try to find mirror monitor with alternative lookup
+                    alternative_key = f"{symbol}_{side}_mirror"
+                    if alternative_key in self.position_monitors:
+                        logger.info(f"🔍 Found mirror monitor with alternative key: {alternative_key}")
+                        mirror_monitor_data = self.position_monitors[alternative_key]
+                        # Recursive call with corrected data
+                        await self._sync_breakeven_with_mirror(monitor_data)
+                    else:
+                        logger.error(f"❌ CRITICAL: No mirror monitor found for {symbol} {side} - cannot sync phase")
 
                 # Try to use mirror enhanced TP/SL manager for SL price update
                 try:
@@ -5698,7 +6303,7 @@ All take profit targets have been achieved! 🎯"""
                 # Fallback: Direct mirror breakeven sync
                 try:
                     from execution.mirror_trader import bybit_client_2
-                    from clients.bybit_helpers import get_position_info, get_open_orders, cancel_order_with_retry, place_order_with_retry
+                    from clients.bybit_helpers import get_position_info, get_all_open_orders, cancel_order_with_retry, place_order_with_retry
                     from utils.order_identifier import generate_order_link_id, ORDER_TYPE_SL
 
                     if not bybit_client_2:
@@ -5734,7 +6339,7 @@ All take profit targets have been achieved! 🎯"""
                         breakeven_price = entry_price * (1 - fee_rate - safety_margin)
 
                     # Cancel existing mirror SL orders
-                    mirror_orders = await get_open_orders(bybit_client_2)
+                    mirror_orders = await get_all_open_orders(client=bybit_client_2)
                     symbol_orders = [o for o in mirror_orders if o.get('symbol') == symbol]
 
                     for order in symbol_orders:
@@ -5866,7 +6471,7 @@ All take profit targets have been achieved! 🎯"""
             "sl_at_breakeven": monitor_data["sl_moved_to_be"],
             "monitoring_duration": time.time() - monitor_data["created_at"],
             "phase": monitor_data.get("phase", "UNKNOWN"),
-            "tp1_hit": monitor_data.get("tp1_hit", False),
+            "tp_hit": monitor_data.get("tp_hit", False) or monitor_data.get("tp1_hit", False),
             "limit_orders_count": len(monitor_data.get("limit_orders", []))
         }
 
@@ -6101,50 +6706,78 @@ All take profit targets have been achieved! 🎯"""
         """
         Clean up monitors that no longer have corresponding positions
         This prevents resource leaks and memory buildup
+        Enhanced to handle both main and mirror accounts properly
         """
         try:
             monitors_to_remove = []
 
-            logger.info("🧹 Starting orphaned monitor cleanup")
+            logger.info("🧹 Starting enhanced orphaned monitor cleanup (main + mirror)")
 
-            for monitor_key, monitor_data in self.position_monitors.items():
+            for monitor_key, monitor_data in list(self.position_monitors.items()):
                 symbol = monitor_data["symbol"]
                 side = monitor_data["side"]
+                account_type = monitor_data.get("account_type", "main")
 
                 try:
-                    # Check if position still exists
-                    positions = await get_position_info(symbol)
+                    # Check if position still exists for the specific account
                     position_exists = False
-
-                    if positions:
-                        for pos in positions:
-                            if pos.get("side") == side and float(pos.get("size", 0)) > 0:
-                                position_exists = True
-                                break
+                    
+                    if account_type == "main":
+                        positions = await get_position_info(symbol)
+                        if positions:
+                            for pos in positions:
+                                if pos.get("side") == side and float(pos.get("size", 0)) > 0:
+                                    position_exists = True
+                                    break
+                    else:  # mirror account
+                        from execution.mirror_trader import bybit_client_2
+                        if bybit_client_2:
+                            from clients.bybit_helpers import get_all_positions
+                            mirror_positions = await get_all_positions(client=bybit_client_2)
+                            if mirror_positions:
+                                for pos in mirror_positions:
+                                    if (pos.get("symbol") == symbol and 
+                                        pos.get("side") == side and 
+                                        float(pos.get("size", 0)) > 0):
+                                        position_exists = True
+                                        break
 
                     if not position_exists:
                         # Position closed, schedule monitor for removal
                         monitors_to_remove.append(monitor_key)
-                        logger.info(f"📍 Orphaned monitor found: {monitor_key}")
+                        logger.info(f"📍 Orphaned monitor found: {monitor_key} ({account_type} account)")
 
                         # Cancel monitoring task if running
                         task = self.active_tasks.get(monitor_key) if hasattr(self, 'active_tasks') else None
                         if task:
                             task.cancel()
+                            logger.debug(f"🛑 Cancelled monitoring task for {monitor_key}")
 
-                        # Clean up related orders
-                        await self._cleanup_monitor_orders(monitor_data)
+                        # Skip order cleanup for orphaned monitors - orders are already cancelled
+                        # when position was manually closed or hit TP/SL
+                        logger.info(f"⏭️ Skipping order cleanup for orphaned monitor {monitor_key} - orders already cancelled")
 
                         # Clean up order lifecycle data
                         await self._cleanup_order_lifecycle_data(symbol, side)
+                        
+                        # Remove from bot_data monitor_tasks as well
+                        await self._remove_monitor_tasks_entry(
+                            symbol, side, 
+                            monitor_data.get("chat_id"), 
+                            "CONSERVATIVE", 
+                            account_type
+                        )
 
                 except Exception as e:
                     logger.error(f"Error checking position for {monitor_key}: {e}")
 
-            # Remove orphaned monitors
+            # Remove orphaned monitors from memory
             for monitor_key in monitors_to_remove:
-                del self.position_monitors[monitor_key]
-                logger.info(f"🗑️ Removed orphaned monitor: {monitor_key}")
+                if monitor_key in self.position_monitors:
+                    # Update indexes before removal
+                    self._remove_from_indexes(monitor_key, self.position_monitors[monitor_key])
+                    del self.position_monitors[monitor_key]
+                    logger.info(f"🗑️ Removed orphaned monitor: {monitor_key}")
 
             if monitors_to_remove:
                 logger.info(f"✅ Cleaned up {len(monitors_to_remove)} orphaned monitors")
@@ -6999,7 +7632,11 @@ All take profit targets have been achieved! 🎯"""
                     order_link_id=limit_order.get("order_link_id", None)
                 )
                 
-            logger.info(f"📝 Enhanced: Registered {len(order_details)} detailed limit orders for {symbol} {side} ({account_type})")
+            # Only log for significant limit order counts
+            if len(order_details) > 2:
+                logger.info(f"📝 Registered {len(order_details)} limit orders for {symbol} {side} ({account_type})")
+            else:
+                logger.debug(f"📝 Registered {len(order_details)} limit orders for {symbol} {side} ({account_type})")
             
         except Exception as e:
             logger.error(f"Error in enhanced limit order registration: {e}")
@@ -7023,6 +7660,88 @@ All take profit targets have been achieved! 🎯"""
             logger.info(f"🔄 Starting monitoring for limit order fill detection: {symbol} {side} ({account_type})")
             monitor_task = asyncio.create_task(self._run_monitor_loop(symbol, side, account_type))
             self.active_tasks[monitor_key] = monitor_task
+
+    async def _debug_mirror_phase_status(self, symbol: str, side: str) -> Dict:
+        """Debug method to analyze mirror phase synchronization issues"""
+        try:
+            main_key = f"{symbol}_{side}_main"
+            mirror_key = f"{symbol}_{side}_mirror"
+            
+            main_monitor = self.position_monitors.get(main_key)
+            mirror_monitor = self.position_monitors.get(mirror_key)
+            
+            debug_info = {
+                "symbol": symbol,
+                "side": side,
+                "main_exists": main_monitor is not None,
+                "mirror_exists": mirror_monitor is not None,
+                "main_phase": main_monitor.get("phase", "NOT_FOUND") if main_monitor else "NO_MONITOR",
+                "mirror_phase": mirror_monitor.get("phase", "NOT_FOUND") if mirror_monitor else "NO_MONITOR",
+                "main_tp_hit": (main_monitor.get("tp_hit", False) or main_monitor.get("tp1_hit", False)) if main_monitor else False,
+                "mirror_tp_hit": (mirror_monitor.get("tp_hit", False) or mirror_monitor.get("tp1_hit", False)) if mirror_monitor else False,
+                "main_sl_moved": main_monitor.get("sl_moved_to_be", False) if main_monitor else False,
+                "mirror_sl_moved": mirror_monitor.get("sl_moved_to_be", False) if mirror_monitor else False,
+            }
+            
+            logger.info(f"🔍 MIRROR DEBUG: {symbol} {side}")
+            logger.info(f"   Main Monitor: Exists={debug_info['main_exists']}, Phase={debug_info['main_phase']}, TP={debug_info['main_tp_hit']}")
+            logger.info(f"   Mirror Monitor: Exists={debug_info['mirror_exists']}, Phase={debug_info['mirror_phase']}, TP={debug_info['mirror_tp_hit']}")
+            
+            # Check for phase mismatch
+            if (debug_info['main_exists'] and debug_info['mirror_exists'] and 
+                debug_info['main_phase'] == "PROFIT_TAKING" and 
+                debug_info['mirror_phase'] != "PROFIT_TAKING"):
+                logger.error(f"🚨 PHASE MISMATCH DETECTED: Main={debug_info['main_phase']}, Mirror={debug_info['mirror_phase']}")
+                debug_info["phase_mismatch"] = True
+            else:
+                debug_info["phase_mismatch"] = False
+                
+            return debug_info
+            
+        except Exception as e:
+            logger.error(f"❌ Error in mirror phase debugging: {e}")
+            return {"error": str(e)}
+
+    async def _recover_stuck_mirror_phase(self, symbol: str, side: str) -> bool:
+        """Recovery method for stuck mirror phases"""
+        try:
+            logger.info(f"🔧 RECOVERY: Attempting to fix stuck mirror phase for {symbol} {side}")
+            
+            main_key = f"{symbol}_{side}_main" 
+            mirror_key = f"{symbol}_{side}_mirror"
+            
+            main_monitor = self.position_monitors.get(main_key)
+            mirror_monitor = self.position_monitors.get(mirror_key)
+            
+            if not main_monitor or not mirror_monitor:
+                logger.error(f"❌ RECOVERY FAILED: Missing monitors (Main={main_monitor is not None}, Mirror={mirror_monitor is not None})")
+                return False
+                
+            main_phase = main_monitor.get("phase", "BUILDING")
+            mirror_phase = mirror_monitor.get("phase", "BUILDING")
+            
+            # If main is in PROFIT_TAKING but mirror is not, force sync
+            if main_phase == "PROFIT_TAKING" and mirror_phase != "PROFIT_TAKING":
+                logger.info(f"🔧 FORCING mirror phase sync: {mirror_phase} → PROFIT_TAKING")
+                
+                # Use the proper transition method
+                await self._transition_to_profit_taking(mirror_monitor)
+                
+                # Verify success
+                final_phase = mirror_monitor.get("phase", "UNKNOWN")
+                if final_phase == "PROFIT_TAKING":
+                    logger.info(f"✅ RECOVERY SUCCESS: Mirror phase corrected to {final_phase}")
+                    return True
+                else:
+                    logger.error(f"❌ RECOVERY FAILED: Mirror phase still {final_phase}")
+                    return False
+            else:
+                logger.info(f"ℹ️ RECOVERY: No phase correction needed (Main={main_phase}, Mirror={mirror_phase})")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Error in mirror phase recovery: {e}")
+            return False
 
     async def _cancel_unfilled_limit_orders(self, monitor_data: Dict):
         """
@@ -7127,7 +7846,7 @@ All take profit targets have been achieved! 🎯"""
                         f"🧹 <b>Limit Orders Cleaned Up</b>\n"
                         f"━━━━━━━━━━━━━━━━━━━━\n"
                         f"📊 {symbol} {side}\n"
-                        f"🎯 TP1 hit - Phase: PROFIT_TAKING\n"
+                        f"🎯 TP hit - Phase: PROFIT_TAKING\n"
                         f"🧹 Cancelled: {cancelled_count} limit orders\n"
                         f"✅ Focus: Pure profit-taking mode"
                     )
@@ -7140,7 +7859,7 @@ All take profit targets have been achieved! 🎯"""
     async def _transition_to_profit_taking(self, monitor_data: Dict):
         """
         Transition position from BUILDING phase to PROFIT_TAKING phase
-        This happens when TP1 (85%) is hit
+        This happens when TP (85%) is hit
         ENHANCED: Added atomic locks to prevent race conditions
         """
         symbol = monitor_data["symbol"]
@@ -7153,24 +7872,49 @@ All take profit targets have been achieved! 🎯"""
             self.phase_transition_locks[monitor_key] = asyncio.Lock()
 
         async with self.phase_transition_locks[monitor_key]:
-            # Double-check phase after acquiring lock
-            if monitor_data.get("phase") == "BUILDING":
-                logger.info(f"🔄 Transitioning {symbol} {side} from BUILDING to PROFIT_TAKING phase")
+            # Get current phase
+            current_phase = monitor_data.get("phase", "BUILDING")
+            
+            # ENHANCED: Allow transition from multiple starting phases (BUILDING, MONITORING, ACTIVE)
+            # This fixes the mirror account issue where mirrors may start in MONITORING phase
+            valid_source_phases = ["BUILDING", "MONITORING", "ACTIVE"]
+            
+            if current_phase in valid_source_phases and current_phase != "PROFIT_TAKING":
+                logger.info(f"🔄 Transitioning {symbol} {side} ({account_type}) from {current_phase} to PROFIT_TAKING phase")
+                
+                # Mirror-specific logging for debugging
+                if account_type == "mirror":
+                    logger.info(f"🪞 MIRROR TRANSITION: {symbol} {side} → PROFIT_TAKING (was {current_phase})")
 
-                # Cancel unfilled limit orders if enabled
-                if CANCEL_LIMITS_ON_TP1:
+                # Cancel unfilled limit orders if enabled (mainly for BUILDING phase)
+                if CANCEL_LIMITS_ON_TP1 and current_phase == "BUILDING":  # Legacy constant name
                     await self._cancel_unfilled_limit_orders(monitor_data)
+                elif account_type == "mirror":
+                    logger.info(f"🪞 Mirror account: Skipping limit order cleanup (phase: {current_phase})")
                 else:
-                    logger.info(f"ℹ️ Limit order cleanup disabled (CANCEL_LIMITS_ON_TP1=false)")
+                    logger.info(f"ℹ️ Limit order cleanup disabled or not needed (phase: {current_phase})")
 
                 # Update phase atomically
                 monitor_data["phase"] = "PROFIT_TAKING"
                 monitor_data["phase_transition_time"] = time.time()
-                monitor_data["tp1_hit"] = True
+                monitor_data["tp_hit"] = True
+                monitor_data["tp1_hit"] = True  # Legacy compatibility
 
-                logger.info(f"✅ Phase transition complete: {symbol} {side} now in PROFIT_TAKING mode")
+                logger.info(f"✅ Phase transition complete: {symbol} {side} ({account_type}) now in PROFIT_TAKING mode")
+                
+                # Additional verification for mirror accounts
+                if account_type == "mirror":
+                    logger.info(f"🪞 MIRROR VERIFICATION: Phase={monitor_data.get('phase')}, TP_hit={monitor_data.get('tp_hit', False) or monitor_data.get('tp1_hit', False)}")
+                    
+            elif current_phase == "PROFIT_TAKING":
+                logger.debug(f"🔄 Phase transition skipped for {symbol} {side} ({account_type}) - already in PROFIT_TAKING phase")
+                # Ensure tp_hit flag is set even if already in PROFIT_TAKING
+                if not monitor_data.get("tp_hit", False) and not monitor_data.get("tp1_hit", False):
+                    monitor_data["tp_hit"] = True
+                    monitor_data["tp1_hit"] = True  # Legacy compatibility
+                    logger.info(f"✅ Updated tp_hit flag for {symbol} {side} ({account_type})")
             else:
-                logger.debug(f"🔄 Phase transition skipped for {symbol} {side} - already in {monitor_data.get('phase', 'UNKNOWN')} phase")
+                logger.warning(f"⚠️ Invalid phase transition for {symbol} {side} ({account_type}): {current_phase} → PROFIT_TAKING not allowed")
 
     async def _send_tp_fill_alert_enhanced(self, monitor_data: Dict, fill_percentage: float, tp_number: int):
         """Send enhanced alert when TP order is filled with specific TP number"""
@@ -7326,12 +8070,9 @@ All take profit targets have been achieved! 🎯"""
                 "account_type": account_type,
                 "filled_limits": len([tp for tp in tp_info if "filled" in str(tp)]),
                 "total_limits": 3,
-                "tp1_qty": tp_orders.get("1", {}).get("quantity", 0) if tp_orders else 0,
-                "tp2_qty": tp_orders.get("2", {}).get("quantity", 0) if tp_orders else 0,
-                "tp3_qty": tp_orders.get("3", {}).get("quantity", 0) if tp_orders else 0,
-                "tp4_qty": tp_orders.get("4", {}).get("quantity", 0) if tp_orders else 0,
+                "tp1_qty": tp_orders.get("1", {}).get("quantity", 0) if tp_orders else 0,  # Single TP approach only
                 "sl_qty": new_size,
-                "rebalance_reason": "Limit order filled - maintaining 85/5/5/5 distribution"
+                "rebalance_reason": "Limit order filled - single TP covers 100% of position"
             }
             
             message = format_conservative_rebalance_alert(
@@ -8069,36 +8810,16 @@ All take profit targets have been achieved! 🎯"""
                     if not tp_still_active:
                         closure_reason = "all_tps_filled"
 
-            # Send appropriate alert based on closure reason
-            if closure_reason == "sl_hit":
-                # SL hit alert
-                sl_price = monitor_data["sl_order"]["price"]
-                entry_price = monitor_data["entry_price"]
-
-                # Calculate loss
-                if side == "Buy":
-                    loss_pct = ((sl_price - entry_price) / entry_price) * 100
-                else:
-                    loss_pct = ((entry_price - sl_price) / entry_price) * 100
-
-                message = (
-                    f"🔴 <b>Stop Loss Hit!</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 {symbol} {side}\n"
-                    f"📍 Entry: {entry_price}\n"
-                    f"🛑 Stop: {sl_price}\n"
-                    f"📉 Loss: {abs(loss_pct):.2f}%\n"
-                    f"⏱️ Duration: {(time.time() - monitor_data['created_at'])/60:.1f} mins"
-                )
-
-                await send_trade_alert(chat_id, message, alert_type="sl_hit")
-                logger.info(f"🔴 Sent SL hit alert for {symbol} {side}")
+            # NOTE: Alerts are now sent BEFORE this method is called to ensure proper timing
+            # This method now focuses on statistics and cleanup only
             
+            if closure_reason == "sl_hit":
+                logger.info(f"🔴 SL hit detected for {symbol} {side} ({account_type}) - alert already sent")
             elif closure_reason == "all_tps_filled":
-                # All TPs filled alert
-                entry_price = monitor_data["entry_price"]
+                logger.info(f"🎯 All TPs filled for {symbol} {side} ({account_type}) - alert already sent")
                 
-                # Calculate average exit price from filled TPs
+                # Statistics tracking only
+                entry_price = monitor_data["entry_price"]
                 total_qty = Decimal("0")
                 total_value = Decimal("0")
                 tp_orders = self._ensure_tp_orders_dict(monitor_data)
@@ -8118,19 +8839,8 @@ All take profit targets have been achieved! 🎯"""
                 else:
                     profit_pct = ((entry_price - avg_exit_price) / entry_price) * 100
                 
-                message = (
-                    f"🎯 <b>All Take Profits Hit!</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 {symbol} {side}\n"
-                    f"📍 Entry: {entry_price}\n"
-                    f"🎯 Avg Exit: {avg_exit_price:.6f}\n"
-                    f"📈 Profit: {profit_pct:.2f}%\n"
-                    f"✅ All TP targets achieved!\n"
-                    f"⏱️ Duration: {(time.time() - monitor_data['created_at'])/60:.1f} mins"
-                )
-                
-                await send_trade_alert(chat_id, message, alert_type="tp_complete")
-                logger.info(f"🎯 Sent all TPs filled alert for {symbol} {side}")
+                # Statistics calculation only - alert already sent
+                logger.debug(f"📊 Calculating TP completion stats for {symbol} {side} ({account_type})")
 
             # Update statistics before cleanup (skip for mirror accounts to avoid double counting)
             if account_type != "mirror":
@@ -8603,7 +9313,7 @@ All take profit targets have been achieved! 🎯"""
         Args:
             monitor_data: Monitor data for the position
             position: Current position data from exchange
-            is_tp1_trigger: Whether this is triggered by TP1 (85%) fill
+            is_tp1_trigger: Whether this is triggered by TP (85%) fill
 
         Returns:
             bool: Success status
@@ -8614,7 +9324,7 @@ All take profit targets have been achieved! 🎯"""
 
             account_type = monitor_data.get("account_type", "main")
             logger.info(f"🎯 ENHANCED BREAKEVEN V2: Starting for {symbol} {side} ({account_type} account)")
-            logger.info(f"📍 Trigger: {'TP1 Fill' if is_tp1_trigger else 'Manual/Other'}")
+            logger.info(f"📍 Trigger: {'TP Fill' if is_tp1_trigger else 'Manual/Other'}")
 
             # Get current position data
             entry_price = Decimal(str(position.get("avgPrice", "0")))
@@ -8665,9 +9375,9 @@ All take profit targets have been achieved! 🎯"""
 
             # ENHANCED: After TP1, SL should cover remaining position only
             if is_tp1_trigger:
-                # After TP1 (85% filled), SL covers the remaining 15%
+                # After TP (85% filled), SL covers the remaining 15%
                 sl_quantity = current_size  # Use actual remaining position size
-                logger.info(f"📊 Post-TP1 SL quantity: {sl_quantity} (remaining position)")
+                logger.info(f"📊 Post-TP SL quantity: {sl_quantity} (remaining position)")
             else:
                 # Before TP1, maintain full position coverage
                 sl_quantity = self._calculate_full_position_sl_quantity(
@@ -8756,18 +9466,18 @@ All take profit targets have been achieved! 🎯"""
             logger.error(f"❌ Error in enhanced breakeven V2: {e}")
             return False
 
-    async def _handle_progressive_tp_fills(
+    async def _handle_take_profit_final_closure(
         self,
         monitor_data: Dict,
         fill_percentage: float,
         current_size: Decimal
     ):
         """
-        ENHANCED: Handle progressive TP fills (TP2, TP3, TP4) with automatic SL adjustments
+        TAKE PROFIT: Handle complete position closure when Take Profit target (85%) is reached
 
         Args:
             monitor_data: Monitor data for the position
-            fill_percentage: Current fill percentage
+            fill_percentage: Current fill percentage (should be >= 85%)
             current_size: Current remaining position size
         """
         try:
@@ -8776,79 +9486,47 @@ All take profit targets have been achieved! 🎯"""
             account_type = monitor_data.get("account_type", "main")
             monitor_key = f"{symbol}_{side}_{account_type}"
 
-            # Determine which TP level was hit based on cumulative percentages
-            # Conservative approach: TP1=85%, TP2=90%, TP3=95%, TP4=100%
-            if fill_percentage >= 90 and not monitor_data.get("tp2_processed", False):
-                tp_level = "TP2"
-                monitor_data["tp2_processed"] = True
-            elif fill_percentage >= 95 and not monitor_data.get("tp3_processed", False):
-                tp_level = "TP3"
-                monitor_data["tp3_processed"] = True
-            elif fill_percentage >= 99 and not monitor_data.get("tp4_processed", False):
-                tp_level = "TP4"
-                monitor_data["tp4_processed"] = True
-            else:
-                # No new TP level hit
-                return
+            logger.info(f"🎯 TAKE PROFIT FINAL CLOSURE: {monitor_key} - Take Profit target reached ({fill_percentage:.2f}%), closing 100% of position")
 
-            logger.info(f"🎯 PROGRESSIVE TP: {tp_level} hit for {monitor_key} ({fill_percentage:.2f}% filled)")
-
-            # Use atomic lock for progressive adjustments
+            # Use atomic lock for final closure
             if monitor_key not in self.breakeven_locks:
                 self.breakeven_locks[monitor_key] = asyncio.Lock()
 
             async with self.breakeven_locks[monitor_key]:
-                # Get current position data
-                positions = await get_position_info(symbol)
-                position = None
-                if positions:
-                    for pos in positions:
-                        if pos.get("side") == side:
-                            position = pos
-                            break
+                # Step 1: Cancel ALL remaining orders (any unfilled limits)
+                logger.info(f"🚫 Cancelling all remaining orders for {monitor_key}")
+                await self._emergency_cancel_all_orders(monitor_data["symbol"], monitor_data["side"], monitor_data)
 
-                if not position:
-                    logger.warning(f"No position found for progressive TP adjustment: {symbol} {side}")
-                    return
-
-                # Adjust SL quantity to match remaining position
-                success = await self._adjust_sl_quantity_progressive(
-                    monitor_data=monitor_data,
-                    current_size=current_size,
-                    tp_level=tp_level
-                )
-
-                if success:
-                    logger.info(f"✅ Progressive SL adjustment completed for {tp_level}")
-
-                    # Send progressive TP alert
-                    await self._send_progressive_tp_alert(monitor_data, tp_level, fill_percentage)
-
-                    # Sync with mirror account
-                    await self._sync_progressive_adjustment_with_mirror(monitor_data, tp_level)
+                # Step 2: Close remaining position with market order
+                if current_size > 0:
+                    logger.info(f"🔴 Closing remaining position: {current_size} {symbol.replace('USDT', '')}")
+                    success = await self._close_remaining_position_market_new(monitor_data, current_size)
+                    
+                    if success:
+                        logger.info(f"✅ Position successfully closed for {monitor_key}")
+                        
+                        # Step 3: Send final closure alert
+                        await self._send_take_profit_closure_alert_new(monitor_data, fill_percentage)
+                        
+                        # Step 4: Trigger mirror account closure if this is main account
+                        if account_type == "main":
+                            await self._trigger_mirror_closure_new(monitor_data)
+                        
+                        # Step 5: Mark monitor as completed and clean up
+                        await self._complete_position_closure_new(monitor_data)
+                        
+                    else:
+                        logger.error(f"❌ Failed to close remaining position for {monitor_key}")
                 else:
-                    logger.error(f"❌ Progressive SL adjustment failed for {tp_level}")
+                    logger.info(f"✅ No remaining position to close for {monitor_key}")
+                    await self._send_take_profit_closure_alert_new(monitor_data, fill_percentage)
+                    await self._complete_position_closure_new(monitor_data)
 
         except Exception as e:
-            logger.error(f"❌ Error in progressive TP fills handling: {e}")
+            logger.error(f"❌ Error in Take Profit final closure handling: {e}")
 
-    async def _adjust_sl_quantity_progressive(
-        self,
-        monitor_data: Dict,
-        current_size: Decimal,
-        tp_level: str
-    ) -> bool:
-        """
-        ENHANCED: Adjust SL quantity for progressive TP fills
-
-        Args:
-            monitor_data: Monitor data for the position
-            current_size: Current remaining position size
-            tp_level: TP level that was hit (TP2, TP3, TP4)
-
-        Returns:
-            bool: Success status
-        """
+    async def _close_remaining_position_market(self, monitor_data: Dict, remaining_size: Decimal) -> bool:
+        """Close remaining position with market order"""
         try:
             symbol = monitor_data["symbol"]
             side = monitor_data["side"]
@@ -8992,16 +9670,16 @@ All take profit targets have been achieved! 🎯"""
 🔧 Progressive management active
 
 🎉 <b>Progress:</b>
-• TP1 ✅ (Breakeven achieved)
+• TP ✅ (Breakeven achieved)
 • {tp_level} ✅ (Current fill)
-{"• Remaining TPs pending" if tp_level != "TP4" else "• All targets completed! 🏆"}
+• All targets completed! 🏆
 
 🔄 <b>System Status:</b>
 • Enhanced SL management: Active
 • Position protection: Maintained
 • Mirror sync: Completed
 
-{"🏆 Congratulations on completing all targets!" if tp_level == "TP4" else "🚀 Continuing to monitor remaining targets!"}"""
+🏆 Congratulations on completing all targets!"""
 
             await send_trade_alert(chat_id, message, f"progressive_tp_{tp_level.lower()}")
 
@@ -9262,6 +9940,10 @@ All take profit targets have been achieved! 🎯"""
                 except Exception as e:
                     logger.error(f"❌ Error checking mirror positions: {e}")
             
+            # CRITICAL: Clean up orphaned monitors after position sync
+            logger.info("🧹 Running orphaned monitor cleanup after position sync...")
+            await self.cleanup_orphaned_monitors()
+            
             logger.info(f"🔄 Position sync complete: {monitors_created} created, {monitors_skipped} skipped")
             
         except Exception as e:
@@ -9412,8 +10094,8 @@ All take profit targets have been achieved! 🎯"""
                     'sl_order': sl_order,
                     'filled_tps': [],
                     'cancelled_limits': False,
-                    'tp1_hit': False,
-                    'tp1_info': None,
+                    'tp_hit': False,
+                    'tp_info': None,
                     'sl_moved_to_be': False,
                     'sl_move_attempts': 0,
                     'created_at': time.time(),
@@ -9721,17 +10403,18 @@ All take profit targets have been achieved! 🎯"""
                     # Update monitor data
                     monitor_data['filled_tps'].append(tp_number)
                     
-                    # Handle TP1 special logic
-                    if tp_number == 1 and not monitor_data.get('tp1_hit'):
-                        monitor_data['tp1_hit'] = True
-                        monitor_data['tp1_info'] = {
+                    # Handle TP special logic
+                    if tp_number == 1 and not monitor_data.get('tp_hit') and not monitor_data.get('tp1_hit'):
+                        monitor_data['tp_hit'] = True
+                        monitor_data['tp1_hit'] = True  # Legacy compatibility
+                        monitor_data['tp_info'] = {
                             'filled_at': fill_data.get('filled_time', time.time()),
                             'filled_price': fill_data.get('avg_price'),
                             'filled_qty': fill_data.get('filled_qty')
                         }
                         
                         # Trigger breakeven and limit order cancellation
-                        await self._handle_tp1_fill_enhanced(monitor_data, client)
+                        await self._handle_tp_fill_enhanced(monitor_data, client)
                     
                     # Update remaining size
                     filled_qty = fill_data.get('filled_qty', Decimal('0'))
@@ -9758,25 +10441,25 @@ All take profit targets have been achieved! 🎯"""
         except Exception as e:
             logger.error(f"Error in enhanced monitoring for {monitor_key}: {e}")
 
-    async def _handle_tp1_fill_enhanced(self, monitor_data: Dict, client=None):
+    async def _handle_tp_fill_enhanced(self, monitor_data: Dict, client=None):
         """
-        Enhanced TP1 fill handling with comprehensive features:
+        Enhanced TP fill handling with comprehensive features:
         1. Move SL to breakeven with verification
         2. Cancel unfilled limit orders
         3. Send detailed alerts
         """
-        from config.settings import CANCEL_LIMITS_ON_TP1, VERIFY_BREAKEVEN_PLACEMENT
+        from config.settings import CANCEL_LIMITS_ON_TP, VERIFY_BREAKEVEN_PLACEMENT
         
         symbol = monitor_data['symbol']
         side = monitor_data['side']
         account_type = monitor_data.get('account_type', 'main')
         
-        logger.info(f"🎯 Handling TP1 fill for {symbol} {side} ({account_type})")
+        logger.info(f"🎯 Handling TP fill for {symbol} {side} ({account_type})")
         
         try:
             # 1. Move SL to breakeven
             if not monitor_data.get('sl_moved_to_be'):
-                logger.info("📍 Moving SL to breakeven after TP1...")
+                logger.info("📍 Moving SL to breakeven after TP...")
                 
                 # Use appropriate breakeven method based on settings
                 if BREAKEVEN_FAILSAFE_ENABLED:
@@ -9801,7 +10484,7 @@ All take profit targets have been achieved! 🎯"""
                     logger.error("❌ Failed to move SL to breakeven")
             
             # 2. Cancel unfilled limit orders
-            if CANCEL_LIMITS_ON_TP1 and not monitor_data.get('limit_orders_cancelled'):
+            if CANCEL_LIMITS_ON_TP1 and not monitor_data.get('limit_orders_cancelled'):  # Legacy constant name
                 logger.info("🚫 Cancelling unfilled limit orders...")
                 
                 try:
@@ -9821,12 +10504,12 @@ All take profit targets have been achieved! 🎯"""
                 monitor_data['phase_transition_time'] = time.time()
             
         except Exception as e:
-            logger.error(f"Error handling TP1 fill: {e}")
+            logger.error(f"Error handling TP fill: {e}")
 
     async def _adjust_sl_for_remaining_position(self, monitor_data: Dict, client=None):
         """
         Adjust SL quantity to match remaining position after any TP fill
-        No longer requires tp1_hit to be True
+        No longer requires tp_hit to be True
         """
         try:
             current_size = monitor_data.get('remaining_size', Decimal('0'))
@@ -10008,7 +10691,7 @@ All take profit targets have been achieved! 🎯"""
             # Check position PnL percentage
             pnl_percent = float(position.get('unrealisedPnlRatio', 0)) * 100
             
-            # Check if near TP1 trigger (within 0.5%)
+            # Check if near TP trigger (within 0.5%)
             if monitor_data.get('take_profits'):
                 tp1_price = float(monitor_data['take_profits'][0].get('price', 0))
                 current_price = float(position.get('markPrice', 0))
@@ -10019,15 +10702,15 @@ All take profit targets have been achieved! 🎯"""
                     else:
                         distance_to_tp1 = ((current_price - tp1_price) / tp1_price) * 100
                     
-                    # Critical zone - near TP1 trigger
+                    # Critical zone - near TP trigger
                     if 0 < distance_to_tp1 < 0.5:
-                        logger.debug(f"{symbol} near TP1 trigger ({distance_to_tp1:.2f}%) - using critical interval")
+                        logger.debug(f"{symbol} near TP trigger ({distance_to_tp1:.2f}%) - using critical interval")
                         return self.critical_position_interval
             
-            # Check if TP1 already hit (for breakeven monitoring)
-            tp1_hit = monitor_data.get('tp1_hit', False)
-            if tp1_hit and not monitor_data.get('sl_moved_to_breakeven', False):
-                logger.debug(f"{symbol} TP1 hit, monitoring for breakeven - using active interval")
+            # Check if TP already hit (for breakeven monitoring)
+            tp_hit = monitor_data.get('tp_hit', False) or monitor_data.get('tp1_hit', False)
+            if tp_hit and not monitor_data.get('sl_moved_to_breakeven', False):
+                logger.debug(f"{symbol} TP hit, monitoring for breakeven - using active interval")
                 return self.active_position_interval
             
             # Check if all TPs are filled
@@ -10126,6 +10809,162 @@ def get_enhanced_tp_sl_manager():
         except Exception as e:
             logger.error(f"❌ Error preparing for safe restart: {e}")
             return False
+
+    async def _close_remaining_position_market_new(self, monitor_data: Dict, remaining_size: Decimal) -> bool:
+        """Close remaining position with market order for Take Profit strategy"""
+        try:
+            symbol = monitor_data["symbol"]
+            side = monitor_data["side"]
+            account_type = monitor_data.get("account_type", "main")
+            
+            # Determine close side (opposite of original position)
+            close_side = "Sell" if side == "Buy" else "Buy"
+            
+            # Use appropriate client based on account type
+            from clients.bybit_client import bybit_client_1, bybit_client_2
+            client = bybit_client_2 if account_type == "mirror" else bybit_client_1
+            
+            # Place market order to close position
+            close_order = client.place_order(
+                category="linear",
+                symbol=symbol,
+                side=close_side,
+                orderType="Market",
+                qty=str(remaining_size),
+                reduceOnly=True,
+                timeInForce="GTC"
+            )
+            
+            if close_order and close_order.get("retCode") == 0:
+                logger.info(f"✅ Market close order placed: {remaining_size} {symbol} {close_side}")
+                return True
+            else:
+                logger.error(f"❌ Failed to place market close order: {close_order}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error placing market close order: {e}")
+            return False
+
+    async def _trigger_mirror_closure_new(self, monitor_data: Dict):
+        """Trigger mirror account closure when main account reaches Take Profit"""
+        try:
+            if not ENABLE_MIRROR_TRADING:
+                return
+                
+            symbol = monitor_data["symbol"]
+            side = monitor_data["side"]
+            mirror_monitor_key = f"{symbol}_{side}_mirror"
+            
+            # Check if mirror monitor exists and trigger its closure
+            import pickle
+            pkl_path = 'bybit_bot_dashboard_v4.1_enhanced.pkl'
+            
+            with open(pkl_path, 'rb') as f:
+                data = pickle.load(f)
+            
+            monitor_tasks = data.get('bot_data', {}).get('monitor_tasks', {})
+            if mirror_monitor_key in monitor_tasks:
+                mirror_monitor_data = monitor_tasks[mirror_monitor_key]
+                logger.info(f"🔄 Triggering mirror account closure for {mirror_monitor_key}")
+                
+                # Trigger mirror closure by setting a flag
+                mirror_monitor_data["take_profit_closure_triggered"] = True
+                mirror_monitor_data["closure_trigger_source"] = "main_account_take_profit"
+                
+                # Save the updated data
+                with open(pkl_path, 'wb') as f:
+                    pickle.dump(data, f)
+                    
+                logger.info(f"✅ Mirror closure trigger set for {mirror_monitor_key}")
+            else:
+                logger.warning(f"⚠️ No mirror monitor found for {mirror_monitor_key}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error triggering mirror closure: {e}")
+
+    async def _complete_position_closure_new(self, monitor_data: Dict):
+        """Complete position closure and cleanup monitor for Take Profit strategy"""
+        try:
+            symbol = monitor_data["symbol"]
+            side = monitor_data["side"]
+            account_type = monitor_data.get("account_type", "main")
+            monitor_key = f"{symbol}_{side}_{account_type}"
+            
+            # Mark position as fully closed
+            monitor_data["position_status"] = "FULLY_CLOSED"
+            monitor_data["closure_timestamp"] = time.time()
+            monitor_data["closure_reason"] = "TAKE_PROFIT_TARGET_REACHED"
+            
+            # Update statistics
+            await self._update_position_statistics(monitor_data)
+            
+            # Remove from active monitors and indexes
+            if monitor_key in self.position_monitors:
+                del self.position_monitors[monitor_key]
+            self._remove_from_indexes(monitor_key, monitor_data)
+            
+            logger.info(f"✅ Position closure completed for {monitor_key}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error completing position closure: {e}")
+
+    async def _send_take_profit_closure_alert_new(self, monitor_data: Dict, fill_percentage: float):
+        """Send Take Profit final closure alert"""
+        try:
+            chat_id = monitor_data.get("chat_id")
+            symbol = monitor_data["symbol"]
+            side = monitor_data["side"]
+            account_type = monitor_data.get("account_type", "main")
+            
+            # Check if mirror alerts are enabled for mirror accounts
+            if account_type == "mirror" and not ENABLE_MIRROR_ALERTS:
+                logger.debug(f"Mirror alerts disabled - skipping Take Profit closure alert for {symbol} {side} mirror position")
+                return
+            
+            # Try to find chat_id if not in monitor data
+            if not chat_id:
+                chat_id = await self._find_chat_id_for_position(symbol, side, account_type)
+                if not chat_id:
+                    logger.warning(f"Could not find chat_id for {symbol} {side} - skipping Take Profit closure alert")
+                    return
+
+            # Calculate profit information
+            entry_price = monitor_data.get("avg_entry_price", 0)
+            current_price = monitor_data.get("current_price", entry_price)
+            position_size = monitor_data.get("original_size", 0)
+            
+            # Determine account display
+            account_display = "🏦 MAIN" if account_type == "main" else "🪞 MIRROR"
+            
+            message = f"""🎯 <b>TAKE PROFIT TARGET REACHED - POSITION CLOSED!</b>
+━━━━━━━━━━━━━━━━━━━━━━
+📊 {symbol} {"📈" if side == "Buy" else "📉"} {side} │ {account_display}
+
+✅ <b>Final Results:</b>
+• Take Profit Achieved: {fill_percentage:.2f}%
+• Position: 100% CLOSED
+• Entry Price: ${entry_price:.6f}
+• Close Price: ${current_price:.6f}
+• Position Size: {position_size}
+
+🎉 <b>Trade Completed Successfully!</b>
+• All orders cancelled
+• Position fully closed
+• No further monitoring needed
+
+💡 <b>Strategy:</b> Take Profit Only
+• Target: 85% → 100% closure
+• Risk management: Complete
+{"• Mirror account: Synchronized" if account_type == "main" and ENABLE_MIRROR_TRADING else ""}
+
+🏆 <b>Congratulations on reaching your profit target!</b>"""
+
+            # Use the already imported send_trade_alert (alias for send_simple_alert)
+            await send_trade_alert(chat_id, message, f"take_profit_closure_{account_type}")
+
+        except Exception as e:
+            logger.error(f"Error sending Take Profit closure alert: {e}")
 
 # Global instance - use singleton pattern
 enhanced_tp_sl_manager = get_enhanced_tp_sl_manager()

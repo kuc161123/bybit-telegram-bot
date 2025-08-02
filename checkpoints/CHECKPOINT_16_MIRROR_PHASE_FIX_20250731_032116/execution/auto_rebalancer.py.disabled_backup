@@ -1,0 +1,537 @@
+#!/usr/bin/env python3
+"""
+Automatic rebalancing monitor that triggers rebalancing on specific events:
+- New positions opened (Fast approach)
+- Position merges (Conservative approach)
+- Limit orders filled
+"""
+
+import asyncio
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Set, Optional
+from decimal import Decimal
+import json
+
+from clients.bybit_helpers import get_all_positions, get_all_open_orders, api_call_with_retry
+from execution.mirror_trader import bybit_client_2, is_mirror_trading_enabled
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from rebalance_positions_smart import SmartPositionRebalancer
+from config.settings import PERSISTENCE_FILE
+from utils.alert_helpers import send_rebalancing_alert
+import pickle
+import os
+
+logger = logging.getLogger(__name__)
+
+# Rebalancing state tracking
+REBALANCE_STATE_KEY = "auto_rebalance_state"
+REBALANCE_CHECK_INTERVAL = 60  # Check every 60 seconds - reduced from 30 for better performance
+POSITION_HISTORY_TTL = 3600  # Remember positions for 1 hour
+
+
+class AutoRebalancer:
+    def __init__(self, application=None):
+        self.rebalancer = SmartPositionRebalancer(dry_run=False)  # Live mode
+        self.running = False
+        self.task = None
+        self.state = self._load_state()
+        self.application = application
+        
+    def _load_state(self) -> Dict:
+        """Load rebalancing state from persistence"""
+        try:
+            if os.path.exists(PERSISTENCE_FILE):
+                with open(PERSISTENCE_FILE, 'rb') as f:
+                    data = pickle.load(f)
+                    return data.get(REBALANCE_STATE_KEY, {
+                        'position_history': {},  # symbol_side -> {'size': x, 'timestamp': y, 'approach': z}
+                        'last_orders': {},       # symbol -> order count
+                        'last_check': None
+                    })
+        except Exception as e:
+            logger.error(f"Error loading rebalance state: {e}")
+        
+        return {
+            'position_history': {},
+            'last_orders': {},
+            'last_check': None
+        }
+    
+    def _save_state(self):
+        """Save rebalancing state to persistence"""
+        try:
+            # Load existing data
+            data = {}
+            if os.path.exists(PERSISTENCE_FILE):
+                try:
+                    with open(PERSISTENCE_FILE, 'rb') as f:
+                        data = pickle.load(f)
+                except Exception as e:
+                    logger.error(f"Error loading existing persistence data: {e}")
+                    data = {}
+            
+            # Update with our state
+            data[REBALANCE_STATE_KEY] = self.state
+            
+            # Save back
+            with open(PERSISTENCE_FILE, 'wb') as f:
+                pickle.dump(data, f)
+                
+        except Exception as e:
+            logger.error(f"Error saving rebalance state: {e}")
+    
+    def _clean_old_history(self):
+        """Remove old position history entries"""
+        current_time = datetime.now().timestamp()
+        cutoff_time = current_time - POSITION_HISTORY_TTL
+        
+        # Clean position history
+        old_keys = []
+        for key, data in self.state['position_history'].items():
+            if data.get('timestamp', 0) < cutoff_time:
+                old_keys.append(key)
+        
+        for key in old_keys:
+            del self.state['position_history'][key]
+    
+    async def _detect_position_changes(self, positions: List[Dict], orders: List[Dict]) -> List[Dict]:
+        """Detect position changes that require rebalancing"""
+        changes = []
+        current_time = datetime.now().timestamp()
+        
+        # Clean old history first
+        self._clean_old_history()
+        
+        # Track current positions with dual-approach support
+        current_positions = {}
+        for pos in positions:
+            if float(pos.get('size', 0)) > 0:
+                symbol = pos['symbol']
+                side = pos['side']
+                
+                # Detect approaches from orders (can have both Fast and Conservative)
+                position_orders = [
+                    o for o in orders 
+                    if o['symbol'] == symbol and 
+                       o.get('positionIdx', 0) == (1 if side == 'Buy' else 2)
+                ]
+                
+                # Separate orders by approach based on OrderLinkID patterns
+                fast_orders = []
+                conservative_orders = []
+                
+                for order in position_orders:
+                    order_link_id = order.get('orderLinkId', '')
+                    
+                    # Fast patterns
+                    if any(pattern in order_link_id for pattern in ['FAST_', '_FAST_', 'BOT_FAST_']):
+                        fast_orders.append(order)
+                    # Conservative patterns  
+                    elif any(pattern in order_link_id for pattern in ['CONS_', 'TP1_', 'TP2_', 'TP3_', 'TP4_', 'BOT_CONS_']):
+                        conservative_orders.append(order)
+                    # Legacy pattern detection for backward compatibility
+                    elif order.get('side') != side:  # TP order
+                        # Count TPs by checking if there are multiple with different prices
+                        tp_prices = set()
+                        for o in position_orders:
+                            if o.get('side') != side:
+                                tp_prices.add(o.get('price'))
+                        
+                        if len(tp_prices) > 1:
+                            conservative_orders.append(order)
+                        else:
+                            fast_orders.append(order)
+                
+                # Check for each approach separately
+                if fast_orders:
+                    fast_key = f"{symbol}_{side}_fast"
+                    fast_tp_orders = [o for o in fast_orders if o.get('side') != side]
+                    
+                    current_positions[fast_key] = {
+                        'position': pos,
+                        'size': float(pos['size']),
+                        'approach': 'Fast',
+                        'timestamp': current_time,
+                        'tp_count': len(fast_tp_orders),
+                        'orders': fast_orders
+                    }
+                
+                if conservative_orders:
+                    cons_key = f"{symbol}_{side}_conservative"
+                    cons_tp_orders = [o for o in conservative_orders if o.get('side') != side]
+                    
+                    current_positions[cons_key] = {
+                        'position': pos,
+                        'size': float(pos['size']),
+                        'approach': 'Conservative',
+                        'timestamp': current_time,
+                        'tp_count': len(cons_tp_orders),
+                        'orders': conservative_orders
+                    }
+        
+        # Check for new positions or size changes
+        for key, current_data in current_positions.items():
+            symbol = current_data['position']['symbol']
+            approach = current_data['approach']
+            
+            if key in self.state['position_history']:
+                old_data = self.state['position_history'][key]
+                size_diff = abs(current_data['size'] - old_data['size'])
+                
+                # Check for significant size change (merge or new trades)
+                if size_diff > 0.0001:  # Small tolerance for floating point
+                    if approach == "Conservative" and current_data['size'] > old_data['size']:
+                        # Size increased - likely a merge
+                        logger.info(f"Detected merge for {symbol} ({current_data['position']['side']}): "
+                                  f"{old_data['size']} -> {current_data['size']}")
+                        changes.append({
+                            'type': 'merge',
+                            'position': current_data['position'],
+                            'approach': approach,
+                            'old_size': old_data['size'],
+                            'new_size': current_data['size']
+                        })
+                    elif approach == "Fast":
+                        # Any size change in Fast approach triggers rebalance
+                        logger.info(f"Detected size change for {symbol} ({current_data['position']['side']}) "
+                                  f"with Fast approach: {old_data['size']} -> {current_data['size']}")
+                        changes.append({
+                            'type': 'size_change',
+                            'position': current_data['position'],
+                            'approach': approach,
+                            'old_size': old_data['size'],
+                            'new_size': current_data['size']
+                        })
+            else:
+                # New position
+                logger.info(f"Detected new position for {symbol} ({current_data['position']['side']}) "
+                          f"with {approach} approach")
+                changes.append({
+                    'type': 'new_position',
+                    'position': current_data['position'],
+                    'approach': approach,
+                    'size': current_data['size']
+                })
+        
+        # Check for filled limit orders (order count changes)
+        current_order_counts = {}
+        for order in orders:
+            symbol = order['symbol']
+            if symbol not in current_order_counts:
+                current_order_counts[symbol] = 0
+            current_order_counts[symbol] += 1
+        
+        for symbol, count in current_order_counts.items():
+            old_count = self.state['last_orders'].get(symbol, 0)
+            if old_count > 0 and count < old_count:
+                # Order count decreased - likely filled
+                logger.info(f"Detected possible filled orders for {symbol}: {old_count} -> {count}")
+                
+                # Find positions for this symbol
+                for key, current_data in current_positions.items():
+                    if current_data['position']['symbol'] == symbol:
+                        changes.append({
+                            'type': 'orders_filled',
+                            'position': current_data['position'],
+                            'approach': current_data['approach'],
+                            'old_order_count': old_count,
+                            'new_order_count': count
+                        })
+        
+        # Update state with dual-approach support
+        self.state['position_history'] = {
+            k: {
+                'size': v['size'], 
+                'timestamp': v['timestamp'], 
+                'approach': v['approach'],
+                'tp_count': v.get('tp_count', 0)
+            }
+            for k, v in current_positions.items()
+        }
+        self.state['last_orders'] = current_order_counts
+        self.state['last_check'] = current_time
+        self._save_state()
+        
+        return changes
+    
+    async def _rebalance_changed_positions(self, changes: List[Dict], orders: List[Dict], account: str):
+        """Rebalance positions that have changed"""
+        if not changes:
+            return
+            
+        logger.info(f"\n{'='*60}")
+        logger.info(f"AUTO-REBALANCING {len(changes)} positions in {account.upper()} account")
+        logger.info(f"{'='*60}")
+        
+        for change in changes:
+            position = change['position']
+            symbol = position['symbol']
+            side = position['side']
+            approach = change['approach']
+            trigger_type = change['type']
+            
+            logger.info(f"\nTriggered by: {trigger_type}")
+            logger.info(f"Symbol: {symbol}, Approach: {approach}")
+            
+            # Verify position against trade history for the specific approach
+            try:
+                from utils.trade_verifier import verify_position
+                
+                # Filter orders for this specific approach
+                approach_orders = change.get('orders', orders)
+                verification_result = await verify_position(symbol, side, position, approach_orders)
+                
+                if not verification_result.get("verified"):
+                    # For dual-approach positions, only warn if it's not a known dual setup
+                    all_position_tp_orders = [o for o in orders if o['symbol'] == symbol and o.get('side') != side]
+                    if len(all_position_tp_orders) == 5:  # 1 Fast + 4 Conservative = 5 total TPs
+                        logger.info(f"ℹ️ Detected dual-approach position (Fast + Conservative) for {symbol}")
+                        logger.info(f"   Verifying {approach} orders separately")
+                    else:
+                        # Only log minor discrepancies as info, not warning
+                        discrepancies = verification_result.get("discrepancies", [])
+                        has_serious_issue = any(d.get('type') in ['tp_count', 'sl_count'] for d in discrepancies)
+                        
+                        if has_serious_issue:
+                            logger.warning(f"⚠️ Position verification failed for {symbol} ({approach}):")
+                            for discrepancy in discrepancies:
+                                logger.warning(f"   - {discrepancy['message']}")
+                        else:
+                            logger.info(f"ℹ️ Minor discrepancies for {symbol} ({approach}):")
+                            for discrepancy in discrepancies:
+                                logger.info(f"   - {discrepancy['message']}")
+                    
+                    # Get original trigger prices for reference
+                    from utils.trade_logger import get_original_trigger_prices
+                    original_prices = await get_original_trigger_prices(symbol, side)
+                    if original_prices:
+                        logger.info(f"📋 Original trigger prices from trade history:")
+                        logger.info(f"   Entry: {original_prices.get('entry_price')}")
+                        logger.info(f"   TPs: {original_prices.get('tp_prices')}")
+                        logger.info(f"   SL: {original_prices.get('sl_price')}")
+                else:
+                    logger.info(f"✅ Position verified against trade history ({approach})")
+                    
+            except Exception as verify_error:
+                logger.error(f"Failed to verify position: {verify_error}")
+            
+            # Get instrument info
+            instrument_info = await self.rebalancer.get_instrument_info(symbol)
+            if not instrument_info:
+                logger.error(f"Failed to get instrument info for {symbol}")
+                continue
+            
+            # Track rebalancing details
+            rebalance_details = {
+                'position_size': str(position.get('size', 0)),
+                'orders_cancelled': 0,
+                'orders_created': 0
+            }
+            
+            # Store initial order count
+            initial_orders = len([o for o in orders if o['symbol'] == symbol])
+            
+            # Rebalance the position
+            try:
+                # Get rebalancing results
+                result = await self.rebalancer.rebalance_position_orders(
+                    position, orders, instrument_info, account
+                )
+                
+                if result.get("success"):
+                    logger.info(f"✅ Rebalancing completed for {symbol}")
+                    
+                    # Update rebalance details with actual results
+                    rebalance_details.update({
+                        'orders_cancelled': result.get('orders_cancelled', 0),
+                        'orders_created': result.get('orders_created', 0),
+                        'tp_distribution': result.get('tp_distribution', ''),
+                        'already_balanced': result.get('already_balanced', False)
+                    })
+                    
+                    # Log rebalancing to trade history
+                    if not result.get('already_balanced'):
+                        try:
+                            from utils.trade_logger import log_rebalance
+                            await log_rebalance(
+                                symbol=symbol,
+                                side=side,
+                                approach=approach,
+                                orders_cancelled=result.get('orders_cancelled', 0),
+                                orders_created=result.get('orders_created', 0),
+                                trigger_type=trigger_type,
+                                details=rebalance_details
+                            )
+                            logger.info(f"✅ Logged rebalancing to trade history")
+                        except Exception as log_error:
+                            logger.error(f"Failed to log rebalancing: {log_error}")
+                    
+                    # Send alert only for main account and if changes were made
+                    if account == "main" and self.application and not result.get('already_balanced'):
+                        await self._send_rebalancing_alert(
+                            symbol, side, approach, trigger_type, rebalance_details
+                        )
+                
+            except Exception as e:
+                logger.error(f"❌ Rebalancing failed for {symbol}: {e}")
+            
+            # Slightly longer delay between rebalancing operations to reduce load
+            await asyncio.sleep(2)
+    
+    async def _send_rebalancing_alert(self, symbol: str, side: str, approach: str, 
+                                     trigger_type: str, rebalance_details: Dict):
+        """Send rebalancing alert to relevant chat"""
+        try:
+            if not self.application:
+                return
+                
+            # Find chat data for this symbol
+            from main import find_chat_data_for_symbol
+            matching_chats = await find_chat_data_for_symbol(
+                self.application, symbol, side, approach
+            )
+            
+            if not matching_chats:
+                logger.debug(f"No matching chats found for {symbol} rebalancing alert")
+                return
+            
+            # Send alert to each matching chat
+            for chat_id, chat_data in matching_chats:
+                try:
+                    await send_rebalancing_alert(
+                        self.application.bot,
+                        chat_id,
+                        symbol,
+                        side,
+                        approach,
+                        trigger_type,
+                        rebalance_details
+                    )
+                    logger.info(f"Sent rebalancing alert to chat {chat_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send rebalancing alert to chat {chat_id}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error sending rebalancing alerts: {e}")
+    
+    async def _monitor_loop(self):
+        """Main monitoring loop"""
+        logger.info("🤖 Auto-rebalancer started")
+        
+        while self.running:
+            try:
+                # Check main account
+                logger.debug("Checking main account for rebalancing needs...")
+                positions, orders = await self.rebalancer.get_positions_and_orders("main")
+                changes = await self._detect_position_changes(positions, orders)
+                
+                if changes:
+                    await self._rebalance_changed_positions(changes, orders, "main")
+                
+                # Check mirror account if enabled
+                if is_mirror_trading_enabled():
+                    try:
+                        logger.debug("Checking mirror account for rebalancing needs...")
+                        positions_mirror, orders_mirror = await self.rebalancer.get_positions_and_orders("mirror")
+                        
+                        # Only process if we got valid data
+                        if positions_mirror is not None and orders_mirror is not None:
+                            changes_mirror = await self._detect_position_changes(positions_mirror, orders_mirror)
+                            
+                            if changes_mirror:
+                                await self._rebalance_changed_positions(changes_mirror, orders_mirror, "mirror")
+                        else:
+                            logger.debug("No valid mirror account data received, skipping")
+                            
+                    except Exception as mirror_error:
+                        logger.warning(f"Error checking mirror account for rebalancing: {mirror_error}")
+                        # Continue with main loop - don't let mirror errors stop the main account
+                
+            except Exception as e:
+                logger.error(f"Error in auto-rebalancer loop: {e}", exc_info=True)
+            
+            # Wait before next check
+            await asyncio.sleep(REBALANCE_CHECK_INTERVAL)
+        
+        logger.info("🛑 Auto-rebalancer stopped")
+    
+    async def start(self):
+        """Start the auto-rebalancer"""
+        if self.running:
+            logger.warning("Auto-rebalancer is already running")
+            return
+            
+        self.running = True
+        self.task = asyncio.create_task(self._monitor_loop())
+        logger.info("✅ Auto-rebalancer started successfully")
+    
+    async def stop(self):
+        """Stop the auto-rebalancer"""
+        if not self.running:
+            logger.warning("Auto-rebalancer is not running")
+            return
+            
+        self.running = False
+        if self.task:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+        
+        logger.info("✅ Auto-rebalancer stopped successfully")
+    
+    def is_running(self) -> bool:
+        """Check if auto-rebalancer is running"""
+        return self.running
+
+
+# Global instance
+auto_rebalancer = None
+
+
+async def start_auto_rebalancer(application=None):
+    """Start the global auto-rebalancer instance"""
+    global auto_rebalancer
+    if auto_rebalancer is None:
+        auto_rebalancer = AutoRebalancer(application)
+    await auto_rebalancer.start()
+
+
+async def stop_auto_rebalancer():
+    """Stop the global auto-rebalancer instance"""
+    await auto_rebalancer.stop()
+
+
+def is_auto_rebalancer_running() -> bool:
+    """Check if auto-rebalancer is running"""
+    return auto_rebalancer is not None and auto_rebalancer.is_running()
+
+
+# For testing
+async def main():
+    """Test the auto-rebalancer"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    rebalancer = AutoRebalancer()
+    
+    try:
+        await rebalancer.start()
+        
+        # Run for a while
+        await asyncio.sleep(300)  # 5 minutes
+        
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+    finally:
+        await rebalancer.stop()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

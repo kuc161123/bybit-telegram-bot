@@ -414,11 +414,10 @@ class TradeExecutor:
                     limit_prices.append(safe_decimal_conversion(price))
 
             tp_prices = []
-            for i in range(1, 5):
-                price_key = f"{TP1_PRICE}".replace("1", str(i))
-                price = chat_data.get(price_key)
-                if price:
-                    tp_prices.append(safe_decimal_conversion(price))
+            # Single Take Profit approach - only get TP price
+            price = chat_data.get(TP_PRICE)
+            if price:
+                tp_prices.append(safe_decimal_conversion(price))
 
             sl_price = safe_decimal_conversion(chat_data.get(SL_PRICE))
 
@@ -708,8 +707,8 @@ class TradeExecutor:
                     side=side,
                     position_size=final_sl_qty,  # Target position size
                     entry_price=avg_limit_price,
-                    tp_prices=tp_prices[:4],  # Use first 4 TP prices
-                    tp_percentages=[85, 5, 5, 5],  # Conservative distribution
+                    tp_prices=tp_prices[:1],  # Use single TP price
+                    tp_percentages=[100],  # Single complete exit
                     sl_price=sl_price,
                     chat_id=chat_id,
                     approach="CONSERVATIVE",
@@ -790,8 +789,8 @@ class TradeExecutor:
                                 side=side,
                                 position_size=mirror_final_sl_qty,
                                 entry_price=avg_limit_price,
-                                tp_prices=tp_prices[:4],  # First 4 TPs
-                                tp_percentages=[85, 5, 5, 5],
+                                tp_prices=tp_prices[:1],  # Single TP
+                                tp_percentages=[100],  # Single complete exit
                                 sl_price=sl_price,
                                 chat_id=chat_id,
                                 approach="CONSERVATIVE",
@@ -1023,12 +1022,15 @@ class TradeExecutor:
             final_sl_qty = value_adjusted_to_step(total_qty, qty_step)
             if side == "Buy":
                 risk_amount = (avg_entry - sl_price) * final_sl_qty
-                max_reward = (tp_prices[-1] - avg_entry) * final_sl_qty if tp_prices else 0
+                # FIXED: Use single Take Profit for R:R calculation (closes 100% of position)
+                max_reward = (tp_prices[0] - avg_entry) * final_sl_qty if tp_prices else 0
             else:
                 risk_amount = (sl_price - avg_entry) * final_sl_qty
-                max_reward = (avg_entry - tp_prices[-1]) * final_sl_qty if tp_prices else 0
+                # FIXED: Use single Take Profit for R:R calculation (closes 100% of position)
+                max_reward = (avg_entry - tp_prices[0]) * final_sl_qty if tp_prices else 0
 
-            risk_reward_ratio = max_reward / risk_amount if risk_amount > 0 else 0
+            # FIXED: Correct risk-reward ratio formula (risk/reward, not reward/risk)
+            risk_reward_ratio = abs(risk_amount) / abs(max_reward) if max_reward > 0 else 0
 
             # Calculate position value
             position_value = avg_entry * final_sl_qty
@@ -1176,19 +1178,14 @@ class TradeExecutor:
 
                 # Enhanced TP section with visual formatting and correct percentages
                 if len(tp_order_ids) > 0:
-                    message += f"\n🎯 <b>EXIT STRATEGY</b> (85/5/5/5 Distribution)\n"
+                    message += f"\n🎯 <b>EXIT STRATEGY</b> Single Take Profit (100% Exit)\n"
 
                     # Add TP details with enhanced formatting
                     for i, tp in enumerate(tp_details, 1):
                         pct_from_avg = ((tp['price'] - avg_entry) / avg_entry * 100 if side == "Buy" else (avg_entry - tp['price']) / avg_entry * 100) if avg_entry > 0 else 0
                         potential_profit = position_value * Decimal(tp['percentage']) / Decimal(100) * Decimal(pct_from_avg) / Decimal(100)
 
-                        if i == 1:
-                            message += f"├─ TP1: <code>${format_price(tp['price'])}</code> ({format_mobile_percentage(pct_from_avg)}) │ 85% exit │ ${potential_profit:.2f}\n"
-                        elif i == len(tp_details):
-                            message += f"└─ TP{i}: <code>${format_price(tp['price'])}</code> ({format_mobile_percentage(pct_from_avg)}) │ 5% runner\n"
-                        else:
-                            message += f"├─ TP{i}: <code>${format_price(tp['price'])}</code> ({format_mobile_percentage(pct_from_avg)}) │ 5% runner\n"
+                        message += f"└─ TP: <code>${format_price(tp['price'])}</code> ({format_mobile_percentage(pct_from_avg)}) │ 100% exit │ ${potential_profit:.2f}\n"
                 else:
                     message += f"\n⚠️ <b>Take Profit Orders:</b> SKIPPED (Stop order limit reached)\n"
                     message += f"   • TP levels configured but not placed due to Bybit limits\n"
@@ -1217,13 +1214,12 @@ class TradeExecutor:
                 message += f"   ➤ Averages entry across price range\n"
                 message += f"   ➤ Reduces timing risk\n\n"
 
-                # TP strategy with correct percentages
-                message += f"<b>🔹 Take Profit Distribution (85/5/5/5):</b>\n"
+                # Single TP strategy
+                message += f"<b>🔹 Take Profit Target (100%):</b>\n"
                 if len(tp_order_ids) > 0:
-                    tp1_profit = position_value * Decimal('0.85') * (((tp_prices[0] - avg_entry) / avg_entry) if side == "Buy" else ((avg_entry - tp_prices[0]) / avg_entry))
-                    message += f"   • TP1 (85%): Locks in ${abs(tp1_profit):.2f} profit\n"
-                    message += f"   • TP2-4 (5% each): Captures extended moves\n"
-                    message += f"   • After TP1: SL → Breakeven (risk-free)\n"
+                    tp_profit = position_value * Decimal('1.0') * (((tp_prices[0] - avg_entry) / avg_entry) if side == "Buy" else ((avg_entry - tp_prices[0]) / avg_entry))
+                    message += f"   • Take Profit (100%): Locks in ${abs(tp_profit):.2f} profit\n"
+                    message += f"   • Complete position closure at target\n"
                     message += f"   • Total potential: ${format_decimal_or_na(max_reward, 2)}\n"
                 else:
                     message += f"   • Orders configured but not placed\n"
@@ -1688,11 +1684,10 @@ class TradeExecutor:
 
             # Get all TP prices
             tp_prices = []
-            for i in range(1, 5):
-                price_key = f"{TP1_PRICE}".replace("1", str(i))
-                price = chat_data.get(price_key)
-                if price:
-                    tp_prices.append(safe_decimal_conversion(price))
+            # Single Take Profit approach - only get TP price
+            price = chat_data.get(TP_PRICE)
+            if price:
+                tp_prices.append(safe_decimal_conversion(price))
 
             sl_price = safe_decimal_conversion(chat_data.get(SL_PRICE))
 
@@ -2147,12 +2142,15 @@ class TradeExecutor:
             avg_entry = avg_price if market_result else current_price
             if side == "Buy":
                 risk_amount = (avg_entry - sl_price) * final_sl_qty
-                max_reward = (tp_prices[-1] - avg_entry) * final_sl_qty if tp_prices else 0
+                # FIXED: Use single Take Profit for R:R calculation (closes 100% of position)
+                max_reward = (tp_prices[0] - avg_entry) * final_sl_qty if tp_prices else 0
             else:
                 risk_amount = (sl_price - avg_entry) * final_sl_qty
-                max_reward = (avg_entry - tp_prices[-1]) * final_sl_qty if tp_prices else 0
+                # FIXED: Use single Take Profit for R:R calculation (closes 100% of position)
+                max_reward = (avg_entry - tp_prices[0]) * final_sl_qty if tp_prices else 0
 
-            risk_reward_ratio = max_reward / risk_amount if risk_amount > 0 else 0
+            # FIXED: Correct risk-reward ratio formula (risk/reward, not reward/risk)
+            risk_reward_ratio = abs(risk_amount) / abs(max_reward) if max_reward > 0 else 0
 
             # Calculate position value
             position_value = avg_entry * final_sl_qty
@@ -2980,10 +2978,7 @@ class TradeExecutor:
             # TP merge logic
             logical_breakdown += f"• <b>Take Profit Selection:</b>\n"
             for i, tp in enumerate(merged_params.get('take_profits', []), 1):
-                if i == 1:
-                    logical_breakdown += f"  - TP1 @ ${format_price(tp['price'])}: 85% exit (primary)\n"
-                else:
-                    logical_breakdown += f"  - TP{i} @ ${format_price(tp['price'])}: 5% exit (runner)\n"
+                logical_breakdown += f"  - TP @ ${format_price(tp['price'])}: 100% exit (complete)\n"
             logical_breakdown += f"  - Aggressive TP selection for max profit\n"
             logical_breakdown += f"  - Applied to full merged position\n"
 
@@ -3004,7 +2999,7 @@ class TradeExecutor:
             # Risk management logic
             logical_breakdown += f"• <b>Risk/Reward Strategy:</b>\n"
             logical_breakdown += f"  - Conservative SL + Aggressive TP\n"
-            logical_breakdown += f"  - Gradual profit taking (85/5/5/5)\n"
+            logical_breakdown += f"  - Single Take Profit (100% exit)\n"
             logical_breakdown += f"  - Risk: ${format_decimal_or_na(risk_amount, 2)}\n"
             logical_breakdown += f"  - Potential: ${format_decimal_or_na(max_reward, 2)}\n"
 
@@ -3045,7 +3040,7 @@ class TradeExecutor:
                     message += f"• TP: Same selection logic as main\n"
                     message += f"• SL: Same conservative approach\n"
                     message += f"• Size: Matched main position\n"
-                    message += "• Multiple TP levels preserved (85/5/5/5%)\n"
+                    message += "• Single Take Profit strategy (100% exit)\n"
 
                     if mirror_results["errors"]:
                         message += f"\n⚠️ Mirror errors:\n"
@@ -3162,8 +3157,15 @@ async def execute_trade_logic(application, chat_id: int, chat_data: dict) -> dic
     
     # PERFORMANCE OPTIMIZATION: Enable execution mode during trade placement
     if ENHANCED_TP_SL_AVAILABLE:
-        enhanced_tp_sl_manager.enable_execution_mode()
-        logger.info("🚀 Enabled execution mode for optimized API calls")
+        # Check if extreme performance mode should be used
+        from config.settings import ENABLE_EXTREME_PERFORMANCE_MODE
+        
+        if ENABLE_EXTREME_PERFORMANCE_MODE:
+            enhanced_tp_sl_manager.enable_extreme_execution_mode()
+            logger.warning("🔥🔥 Enabled EXTREME execution mode for maximum speed")
+        else:
+            enhanced_tp_sl_manager.enable_execution_mode()
+            logger.info("🚀 Enabled execution mode for optimized API calls")
         
         # Also enable execution mode for limit order tracker
         try:
@@ -3171,6 +3173,14 @@ async def execute_trade_logic(application, chat_id: int, chat_data: dict) -> dic
             limit_order_tracker.enable_execution_mode()
         except Exception as e:
             logger.debug(f"Could not enable execution mode for limit order tracker: {e}")
+        
+        # Enable execution mode for API batch processor
+        try:
+            from utils.api_batch_processor import get_batch_processor
+            batch_processor = get_batch_processor()
+            batch_processor.enable_execution_mode()
+        except Exception as e:
+            logger.debug(f"Could not enable execution mode for API batch processor: {e}")
     
     try:
         result = await trade_executor.execute_trade(application, chat_id, chat_data)
@@ -3178,8 +3188,14 @@ async def execute_trade_logic(application, chat_id: int, chat_data: dict) -> dic
     finally:
         # Always disable execution mode after trade completion
         if ENHANCED_TP_SL_AVAILABLE:
-            enhanced_tp_sl_manager.disable_execution_mode()
-            logger.info("🏁 Disabled execution mode after trade completion")
+            from config.settings import ENABLE_EXTREME_PERFORMANCE_MODE
+            
+            if ENABLE_EXTREME_PERFORMANCE_MODE:
+                enhanced_tp_sl_manager.disable_extreme_execution_mode()
+                logger.warning("🔥🔥 Disabled EXTREME execution mode after trade completion")
+            else:
+                enhanced_tp_sl_manager.disable_execution_mode()
+                logger.info("🏁 Disabled execution mode after trade completion")
             
             # Also disable execution mode for limit order tracker
             try:
@@ -3187,6 +3203,14 @@ async def execute_trade_logic(application, chat_id: int, chat_data: dict) -> dic
                 limit_order_tracker.disable_execution_mode()
             except Exception as e:
                 logger.debug(f"Could not disable execution mode for limit order tracker: {e}")
+            
+            # Disable execution mode for API batch processor
+            try:
+                from utils.api_batch_processor import get_batch_processor
+                batch_processor = get_batch_processor()
+                batch_processor.disable_execution_mode()
+            except Exception as e:
+                logger.debug(f"Could not disable execution mode for API batch processor: {e}")
 
 # Convenience functions for backward compatibility
 async def execute_trade(application, chat_id: int, chat_data: dict) -> dict:
@@ -3194,8 +3218,15 @@ async def execute_trade(application, chat_id: int, chat_data: dict) -> dict:
     
     # PERFORMANCE OPTIMIZATION: Enable execution mode during trade placement
     if ENHANCED_TP_SL_AVAILABLE:
-        enhanced_tp_sl_manager.enable_execution_mode()
-        logger.info("🚀 Enabled execution mode for optimized API calls")
+        # Check if extreme performance mode should be used
+        from config.settings import ENABLE_EXTREME_PERFORMANCE_MODE
+        
+        if ENABLE_EXTREME_PERFORMANCE_MODE:
+            enhanced_tp_sl_manager.enable_extreme_execution_mode()
+            logger.warning("🔥🔥 Enabled EXTREME execution mode for maximum speed")
+        else:
+            enhanced_tp_sl_manager.enable_execution_mode()
+            logger.info("🚀 Enabled execution mode for optimized API calls")
         
         # Also enable execution mode for limit order tracker
         try:
@@ -3203,6 +3234,14 @@ async def execute_trade(application, chat_id: int, chat_data: dict) -> dict:
             limit_order_tracker.enable_execution_mode()
         except Exception as e:
             logger.debug(f"Could not enable execution mode for limit order tracker: {e}")
+        
+        # Enable execution mode for API batch processor
+        try:
+            from utils.api_batch_processor import get_batch_processor
+            batch_processor = get_batch_processor()
+            batch_processor.enable_execution_mode()
+        except Exception as e:
+            logger.debug(f"Could not enable execution mode for API batch processor: {e}")
     
     try:
         result = await trade_executor.execute_trade(application, chat_id, chat_data)
@@ -3210,8 +3249,14 @@ async def execute_trade(application, chat_id: int, chat_data: dict) -> dict:
     finally:
         # Always disable execution mode after trade completion
         if ENHANCED_TP_SL_AVAILABLE:
-            enhanced_tp_sl_manager.disable_execution_mode()
-            logger.info("🏁 Disabled execution mode after trade completion")
+            from config.settings import ENABLE_EXTREME_PERFORMANCE_MODE
+            
+            if ENABLE_EXTREME_PERFORMANCE_MODE:
+                enhanced_tp_sl_manager.disable_extreme_execution_mode()
+                logger.warning("🔥🔥 Disabled EXTREME execution mode after trade completion")
+            else:
+                enhanced_tp_sl_manager.disable_execution_mode()
+                logger.info("🏁 Disabled execution mode after trade completion")
             
             # Also disable execution mode for limit order tracker
             try:
@@ -3219,6 +3264,14 @@ async def execute_trade(application, chat_id: int, chat_data: dict) -> dict:
                 limit_order_tracker.disable_execution_mode()
             except Exception as e:
                 logger.debug(f"Could not disable execution mode for limit order tracker: {e}")
+            
+            # Disable execution mode for API batch processor
+            try:
+                from utils.api_batch_processor import get_batch_processor
+                batch_processor = get_batch_processor()
+                batch_processor.disable_execution_mode()
+            except Exception as e:
+                logger.debug(f"Could not disable execution mode for API batch processor: {e}")
 
 # Export all public functions
 __all__ = ['TradeExecutor', 'execute_trade', 'execute_trade_logic', 'trade_executor']

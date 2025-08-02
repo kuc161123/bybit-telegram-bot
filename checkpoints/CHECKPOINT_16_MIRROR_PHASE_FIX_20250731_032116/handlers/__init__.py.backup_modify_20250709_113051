@@ -1,0 +1,718 @@
+#!/usr/bin/env python3
+"""
+Handler registration and setup for the trading bot - ENHANCED WITH CONSERVATIVE APPROACH.
+ADDED: Support for dual trading approaches (Fast Market vs Conservative Limits)
+ENHANCED: New conversation states and callback handlers for approach selection
+ADDED: Position mode management commands (hedge mode, one-way mode)
+FIXED: Proper async task scheduling for background tasks
+"""
+import logging
+from telegram import Update
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ConversationHandler, filters, ContextTypes
+)
+from telegram.constants import ParseMode
+
+# Import existing handlers
+from .commands import (
+    dashboard_command, error_handler, help_command,
+    hedge_mode_command, one_way_mode_command, check_mode_command
+)
+from .alert_handlers import (
+    alerts_command, handle_alerts_callback, handle_alert_text_input, test_report_command
+)
+from .conversation import (
+    start_conversation, symbol_handler, side_handler,
+    primary_entry_handler, limit_entries_handler, take_profits_handler,
+    stop_loss_handler, leverage_handler, margin_handler,
+    confirmation_handler, cancel_handler,
+    handle_side_callback, handle_execute_trade,
+    handle_leverage_callback, handle_margin_callback,
+    # ENHANCED: Conservative approach handlers
+    approach_selection_handler, handle_approach_callback,
+    # NEW: GGShot screenshot handlers
+    screenshot_upload_handler, handle_ggshot_callbacks,
+    # NEW: Back button handler
+    handle_back_callback,
+    # NEW: GGShot edit handlers
+    ggshot_edit_value_handler,
+    # NEW: Dual margin handlers
+    handle_margin_fast_callback, handle_margin_conservative_callback,
+    margin_fast_handler, margin_conservative_handler,
+    # NEW: Streamlined GGShot flow handlers
+    handle_ggshot_limit_1_input, handle_ggshot_limit_2_input, handle_ggshot_limit_3_input,
+    handle_ggshot_tp_1_input, handle_ggshot_tp_2_input, handle_ggshot_tp_3_input, handle_ggshot_tp_4_input
+)
+
+# Import position close handlers
+from .position_close_handler import (
+    close_position_handler, confirm_close_handler, cancel_close_handler
+)
+
+logger = logging.getLogger(__name__)
+
+# ENHANCED: Conversation states with GGShot screenshot strategy and dual margin selection
+SYMBOL, SIDE, APPROACH_SELECTION, SCREENSHOT_UPLOAD, PRIMARY_ENTRY, LIMIT_ENTRIES, TAKE_PROFITS, STOP_LOSS, LEVERAGE, MARGIN, CONFIRMATION, GGSHOT_EDIT_VALUES, MARGIN_FAST, MARGIN_CONSERVATIVE = range(14)
+
+# Additional states for streamlined GGShot flow
+GGSHOT_LIMIT_FLOW_1, GGSHOT_LIMIT_FLOW_2, GGSHOT_LIMIT_FLOW_3 = range(14, 17)
+GGSHOT_TP_FLOW_1, GGSHOT_TP_FLOW_2, GGSHOT_TP_FLOW_3, GGSHOT_TP_FLOW_4 = range(17, 21)
+
+def setup_enhanced_conversation_handlers(app):
+    """Setup enhanced conversation handlers for dual approach trading"""
+    try:
+        # Define enhanced conversation handler with approach selection
+        conv_handler = ConversationHandler(
+            entry_points=[
+                # Multiple entry points for better UX
+                CallbackQueryHandler(start_conversation, pattern="^start_conversation$"),
+                CallbackQueryHandler(start_conversation, pattern="^manual_setup$"),
+                CallbackQueryHandler(start_conversation, pattern="^new_trade$"),
+                CommandHandler("trade", start_conversation),
+                CommandHandler("manual", start_conversation),
+            ],
+            states={
+                SYMBOL: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, symbol_handler)
+                ],
+                SIDE: [
+                    CallbackQueryHandler(handle_side_callback, pattern="^conv_side:"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, side_handler)
+                ],
+                # ENHANCED: APPROACH_SELECTION state
+                APPROACH_SELECTION: [
+                    CallbackQueryHandler(handle_approach_callback, pattern="^conv_approach:"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, approach_selection_handler)
+                ],
+                # NEW: SCREENSHOT_UPLOAD state for GGShot approach
+                SCREENSHOT_UPLOAD: [
+                    MessageHandler(filters.PHOTO, screenshot_upload_handler),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, screenshot_upload_handler),
+                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_")
+                ],
+                PRIMARY_ENTRY: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, primary_entry_handler)
+                ],
+                # ENHANCED: LIMIT_ENTRIES state for conservative approach
+                LIMIT_ENTRIES: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, limit_entries_handler)
+                ],
+                TAKE_PROFITS: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, take_profits_handler)
+                ],
+                STOP_LOSS: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, stop_loss_handler)
+                ],
+                LEVERAGE: [
+                    CallbackQueryHandler(handle_leverage_callback, pattern="^conv_leverage:"),
+                    CallbackQueryHandler(handle_back_callback, pattern="^conv_back:"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, leverage_handler)
+                ],
+                MARGIN: [
+                    CallbackQueryHandler(handle_margin_callback, pattern="^conv_margin:"),
+                    CallbackQueryHandler(handle_margin_callback, pattern="^conv_margin_pct:"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, margin_handler)
+                ],
+                # NEW: Dual margin selection for GGShot both approaches
+                MARGIN_FAST: [
+                    CallbackQueryHandler(handle_margin_fast_callback, pattern="^conv_margin_fast:"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, margin_fast_handler)
+                ],
+                MARGIN_CONSERVATIVE: [
+                    CallbackQueryHandler(handle_margin_conservative_callback, pattern="^conv_margin_cons:"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, margin_conservative_handler)
+                ],
+                CONFIRMATION: [
+                    CallbackQueryHandler(handle_execute_trade, pattern="^confirm_execute_trade$"),
+                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, confirmation_handler)
+                ],
+                # NEW: GGSHOT_EDIT_VALUES state for editing extracted values
+                GGSHOT_EDIT_VALUES: [
+                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, ggshot_edit_value_handler)
+                ],
+                # NEW: Streamlined GGShot limit flow states
+                GGSHOT_LIMIT_FLOW_1: [
+                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_limit_1_input)
+                ],
+                GGSHOT_LIMIT_FLOW_2: [
+                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_limit_2_input)
+                ],
+                GGSHOT_LIMIT_FLOW_3: [
+                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_limit_3_input)
+                ],
+                # NEW: Streamlined GGShot TP flow states
+                GGSHOT_TP_FLOW_1: [
+                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_tp_1_input)
+                ],
+                GGSHOT_TP_FLOW_2: [
+                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_tp_2_input)
+                ],
+                GGSHOT_TP_FLOW_3: [
+                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_tp_3_input)
+                ],
+                GGSHOT_TP_FLOW_4: [
+                    CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_tp_4_input)
+                ]
+            },
+            fallbacks=[
+                CallbackQueryHandler(handle_back_callback, pattern="^conv_back:"),
+                CallbackQueryHandler(cancel_handler, pattern="^cancel_conversation$"),
+                CallbackQueryHandler(cancel_handler, pattern="^cancel$"),
+                CommandHandler("cancel", cancel_handler),
+                CommandHandler("dashboard", dashboard_command)
+            ],
+            allow_reentry=True,
+            per_message=False
+        )
+
+        app.add_handler(conv_handler)
+        logger.info("✅ Enhanced dual approach conversation handlers loaded!")
+        logger.info("🎯 Fast Market and Conservative Limits approaches enabled")
+        logger.info("📊 Support for 3 limit orders + 4 take profits active")
+
+    except Exception as e:
+        logger.error(f"❌ Error loading enhanced conversation handlers: {e}")
+
+def setup_callback_handlers(app):
+    """Setup enhanced callback query handlers"""
+    try:
+        from .callbacks_enhanced import handle_dashboard_callbacks
+        from .callbacks import (
+            handle_trading_callbacks,
+            handle_settings_callbacks, handle_stats_callbacks,
+            handle_position_callbacks
+        )
+
+        # Import all missing callback handlers
+        from .missing_callbacks import (
+            # Performance Analytics
+            perf_daily_pnl, perf_weekly_pnl, perf_monthly_pnl,
+            perf_win_rate, perf_profit_factor, perf_sharpe,
+            download_performance_report,
+            # Risk Analytics
+            risk_var, risk_drawdown, risk_stress_test,
+            risk_correlation, risk_beta, risk_liquidity,
+            set_risk_limits,
+            # Time Analysis
+            time_hourly, time_daily, time_weekly,
+            time_best_hours, time_patterns, time_seasonality,
+            # Settings
+            trade_settings, notification_settings,
+            display_settings, api_settings,
+            # Position Management
+            refresh_positions, set_hedge_mode, set_one_way_mode,
+            # Help Menu
+            show_user_guide, show_trading_tips,
+            show_faq, contact_support,
+            # Analytics
+            performance_metrics, suggest_rebalance,
+            # Market Intelligence
+            volume_analysis, sentiment_analysis,
+            trend_analysis, momentum_analysis,
+            # Performance
+            win_streaks, trade_analysis
+        )
+
+        # Import position and stats handlers
+        from .position_stats_handlers import list_positions, show_statistics, show_settings, show_help
+
+        # Dashboard callbacks
+        app.add_handler(CallbackQueryHandler(handle_dashboard_callbacks, pattern="^refresh_dashboard$"))
+        app.add_handler(CallbackQueryHandler(handle_dashboard_callbacks, pattern="^view_positions$"))
+        app.add_handler(CallbackQueryHandler(list_positions, pattern="^list_positions$"))
+        app.add_handler(CallbackQueryHandler(show_statistics, pattern="^show_statistics$"))
+        app.add_handler(CallbackQueryHandler(show_settings, pattern="^show_settings$"))
+        app.add_handler(CallbackQueryHandler(show_help, pattern="^show_help$"))
+        app.add_handler(CallbackQueryHandler(handle_dashboard_callbacks, pattern="^view_stats$"))
+        app.add_handler(CallbackQueryHandler(handle_dashboard_callbacks, pattern="^back_to_dashboard$"))
+
+        # Position close handlers
+        app.add_handler(close_position_handler)
+        app.add_handler(confirm_close_handler)
+        app.add_handler(cancel_close_handler)
+
+        # Enhanced trading callbacks
+        app.add_handler(CallbackQueryHandler(handle_trading_callbacks, pattern="^execute_trade$"))
+        app.add_handler(CallbackQueryHandler(handle_trading_callbacks, pattern="^cancel_trade$"))
+        app.add_handler(CallbackQueryHandler(handle_trading_callbacks, pattern="^modify_trade$"))
+        app.add_handler(CallbackQueryHandler(handle_trading_callbacks, pattern="^confirm_execute$"))
+        app.add_handler(CallbackQueryHandler(handle_execute_trade, pattern="^confirm_execute_trade$"))
+        app.add_handler(CallbackQueryHandler(handle_trading_callbacks, pattern="^start_conversation$"))
+
+        # NEW: Approach selection callbacks
+        app.add_handler(CallbackQueryHandler(handle_approach_callback, pattern="^conv_approach:"))
+
+        # NEW: Missing conversation callbacks
+        app.add_handler(CallbackQueryHandler(handle_side_callback, pattern="^conv_side:"))
+        app.add_handler(CallbackQueryHandler(handle_leverage_callback, pattern="^conv_leverage:"))
+        app.add_handler(CallbackQueryHandler(handle_margin_callback, pattern="^conv_margin_pct:"))
+        app.add_handler(CallbackQueryHandler(handle_trading_callbacks, pattern="^start_conversation$"))
+
+        # Settings callbacks
+        app.add_handler(CallbackQueryHandler(handle_settings_callbacks, pattern="^set_"))
+        app.add_handler(CallbackQueryHandler(handle_settings_callbacks, pattern="^save_"))
+
+        # Stats callbacks
+        app.add_handler(CallbackQueryHandler(handle_stats_callbacks, pattern="^detailed_stats$"))
+        app.add_handler(CallbackQueryHandler(handle_stats_callbacks, pattern="^performance_chart$"))
+        app.add_handler(CallbackQueryHandler(handle_stats_callbacks, pattern="^fast_approach_stats$"))
+        app.add_handler(CallbackQueryHandler(handle_stats_callbacks, pattern="^conservative_approach_stats$"))
+        app.add_handler(CallbackQueryHandler(handle_stats_callbacks, pattern="^export_stats$"))
+        app.add_handler(CallbackQueryHandler(handle_stats_callbacks, pattern="^reset_stats$"))
+        app.add_handler(CallbackQueryHandler(handle_stats_callbacks, pattern="^export_"))
+        app.add_handler(CallbackQueryHandler(handle_stats_callbacks, pattern="^confirm_reset_stats$"))
+
+        # AI Insights callback
+        try:
+            from .ai_insights_handler import show_ai_insights
+            app.add_handler(CallbackQueryHandler(show_ai_insights, pattern="^ai_insights$"))
+            logger.info("✅ AI Insights handler loaded!")
+        except Exception as e:
+            logger.warning(f"AI Insights handler not loaded: {e}")
+
+        # Analytics Dashboard callback
+        try:
+            from .commands import dashboard_command
+            async def handle_analytics_dashboard(update, context):
+                """Handle analytics dashboard callback"""
+                query = update.callback_query
+                await query.answer()
+                # Reuse the dashboard command logic
+                await dashboard_command(update, context)
+
+            app.add_handler(CallbackQueryHandler(handle_analytics_dashboard, pattern="^analytics_dashboard$"))
+            logger.info("✅ Analytics Dashboard callback loaded!")
+        except Exception as e:
+            logger.warning(f"Analytics Dashboard callback not loaded: {e}")
+
+        # Delete Message callback
+        async def handle_delete_message(update, context):
+            """Handle delete message callback"""
+            query = update.callback_query
+            await query.answer()
+            try:
+                await query.message.delete()
+            except Exception as e:
+                logger.warning(f"Could not delete message: {e}")
+                await query.edit_message_text("❌ Message closed")
+
+        app.add_handler(CallbackQueryHandler(handle_delete_message, pattern="^delete_message$"))
+        logger.info("✅ Delete Message callback loaded!")
+
+        # Predictive Signals callback
+        try:
+            from .predictive_signals_handler import show_predictive_signals
+            app.add_handler(CallbackQueryHandler(show_predictive_signals, pattern="^predictive_signals$"))
+            logger.info("✅ Predictive Signals handler loaded!")
+        except Exception as e:
+            logger.warning(f"Predictive Signals handler not loaded: {e}")
+
+        # Analytics callbacks - NEW
+        try:
+            from .analytics_callbacks_new import analytics_handlers
+            for handler in analytics_handlers:
+                app.add_handler(handler)
+            logger.info("✅ Analytics dashboard handlers loaded!")
+        except Exception as e:
+            logger.warning(f"Analytics handlers not loaded: {e}")
+
+        # Position management callbacks
+        app.add_handler(CallbackQueryHandler(handle_position_callbacks, pattern="^close_position"))
+        app.add_handler(CallbackQueryHandler(handle_position_callbacks, pattern="^modify_position"))
+
+        # Symbol and side selection callbacks
+        app.add_handler(CallbackQueryHandler(handle_trading_callbacks, pattern="^select_symbol_"))
+        app.add_handler(CallbackQueryHandler(handle_trading_callbacks, pattern="^select_side_"))
+        app.add_handler(CallbackQueryHandler(handle_trading_callbacks, pattern="^quick_trade_"))
+
+        # ENHANCED: Conservative approach specific callbacks
+        app.add_handler(CallbackQueryHandler(handle_trading_callbacks, pattern="^conservative_"))
+        app.add_handler(CallbackQueryHandler(handle_trading_callbacks, pattern="^fast_"))
+
+        # NEW: Position mode management callbacks
+        app.add_handler(CallbackQueryHandler(handle_position_mode_callbacks, pattern="^enable_hedge_mode$"))
+        app.add_handler(CallbackQueryHandler(handle_position_mode_callbacks, pattern="^enable_one_way_mode$"))
+        app.add_handler(CallbackQueryHandler(handle_position_mode_callbacks, pattern="^check_position_mode$"))
+
+        # Performance Analytics callbacks
+        app.add_handler(CallbackQueryHandler(perf_daily_pnl, pattern="^perf_daily_pnl$"))
+        app.add_handler(CallbackQueryHandler(perf_weekly_pnl, pattern="^perf_weekly_pnl$"))
+        app.add_handler(CallbackQueryHandler(perf_monthly_pnl, pattern="^perf_monthly_pnl$"))
+        app.add_handler(CallbackQueryHandler(perf_win_rate, pattern="^perf_win_rate$"))
+        app.add_handler(CallbackQueryHandler(perf_profit_factor, pattern="^perf_profit_factor$"))
+        app.add_handler(CallbackQueryHandler(perf_sharpe, pattern="^perf_sharpe$"))
+        app.add_handler(CallbackQueryHandler(download_performance_report, pattern="^download_performance_report$"))
+
+        # Risk Analytics callbacks
+        app.add_handler(CallbackQueryHandler(risk_var, pattern="^risk_var$"))
+        app.add_handler(CallbackQueryHandler(risk_drawdown, pattern="^risk_drawdown$"))
+        app.add_handler(CallbackQueryHandler(risk_stress_test, pattern="^risk_stress_test$"))
+        app.add_handler(CallbackQueryHandler(risk_correlation, pattern="^risk_correlation$"))
+        app.add_handler(CallbackQueryHandler(risk_beta, pattern="^risk_beta$"))
+        app.add_handler(CallbackQueryHandler(risk_liquidity, pattern="^risk_liquidity$"))
+        app.add_handler(CallbackQueryHandler(set_risk_limits, pattern="^set_risk_limits$"))
+
+        # Time Analysis callbacks
+        app.add_handler(CallbackQueryHandler(time_hourly, pattern="^time_hourly$"))
+        app.add_handler(CallbackQueryHandler(time_daily, pattern="^time_daily$"))
+        app.add_handler(CallbackQueryHandler(time_weekly, pattern="^time_weekly$"))
+        app.add_handler(CallbackQueryHandler(time_best_hours, pattern="^time_best_hours$"))
+        app.add_handler(CallbackQueryHandler(time_patterns, pattern="^time_patterns$"))
+        app.add_handler(CallbackQueryHandler(time_seasonality, pattern="^time_seasonality$"))
+
+        # Settings callbacks
+        app.add_handler(CallbackQueryHandler(trade_settings, pattern="^trade_settings$"))
+        app.add_handler(CallbackQueryHandler(notification_settings, pattern="^notification_settings$"))
+        app.add_handler(CallbackQueryHandler(display_settings, pattern="^display_settings$"))
+        app.add_handler(CallbackQueryHandler(api_settings, pattern="^api_settings$"))
+
+        # Position Management callbacks
+        app.add_handler(CallbackQueryHandler(refresh_positions, pattern="^refresh_positions$"))
+        app.add_handler(CallbackQueryHandler(set_hedge_mode, pattern="^set_hedge_mode$"))
+        app.add_handler(CallbackQueryHandler(set_one_way_mode, pattern="^set_one_way_mode$"))
+
+        # Help Menu callbacks
+        app.add_handler(CallbackQueryHandler(show_user_guide, pattern="^show_user_guide$"))
+        app.add_handler(CallbackQueryHandler(show_trading_tips, pattern="^show_trading_tips$"))
+        app.add_handler(CallbackQueryHandler(show_faq, pattern="^show_faq$"))
+        app.add_handler(CallbackQueryHandler(contact_support, pattern="^contact_support$"))
+
+        # Analytics Menu callbacks
+        app.add_handler(CallbackQueryHandler(performance_metrics, pattern="^performance_metrics$"))
+        app.add_handler(CallbackQueryHandler(suggest_rebalance, pattern="^suggest_rebalance$"))
+
+        # Market Intelligence callbacks
+        app.add_handler(CallbackQueryHandler(volume_analysis, pattern="^volume_analysis$"))
+        app.add_handler(CallbackQueryHandler(sentiment_analysis, pattern="^sentiment_analysis$"))
+        app.add_handler(CallbackQueryHandler(trend_analysis, pattern="^trend_analysis$"))
+        app.add_handler(CallbackQueryHandler(momentum_analysis, pattern="^momentum_analysis$"))
+
+        # Performance Menu callbacks
+        app.add_handler(CallbackQueryHandler(win_streaks, pattern="^win_streaks$"))
+        app.add_handler(CallbackQueryHandler(trade_analysis, pattern="^trade_analysis$"))
+
+        logger.info("✅ Enhanced callback handlers loaded!")
+        logger.info("📊 Conservative approach callbacks active")
+        logger.info("🎯 Position mode management callbacks registered")
+        logger.info("✅ All dashboard button callbacks registered")
+
+    except Exception as e:
+        logger.error(f"❌ Error loading enhanced callback handlers: {e}")
+
+async def handle_position_mode_callbacks(update, context):
+    """Handle position mode related callback queries"""
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        if query.data == "enable_hedge_mode":
+            # Simulate hedge mode command
+            context.args = []
+            await hedge_mode_command(update, context)
+        elif query.data == "enable_one_way_mode":
+            # Simulate one-way mode command
+            context.args = []
+            await one_way_mode_command(update, context)
+        elif query.data == "check_position_mode":
+            # Simulate check mode command
+            context.args = []
+            await check_mode_command(update, context)
+    except Exception as e:
+        logger.error(f"Error handling position mode callback: {e}")
+        await query.edit_message_text(
+            f"❌ Error handling position mode action: {str(e)}",
+            parse_mode=ParseMode.HTML
+        )
+
+def setup_monitoring_handlers(app):
+    """FIXED: Setup enhanced monitoring and automation handlers with proper async scheduling"""
+    try:
+        from .monitoring import setup_position_monitoring, setup_automated_tasks
+
+        # These functions will schedule tasks properly within their own async context
+        setup_position_monitoring(app)
+        setup_automated_tasks(app)
+
+        logger.info("✅ Enhanced monitoring handlers loaded!")
+        logger.info("🛡️ Conservative approach monitoring support enabled")
+
+    except Exception as e:
+        logger.error(f"❌ Error loading enhanced monitoring handlers: {e}")
+
+def setup_ai_handlers(app):
+    """Setup AI-related handlers with conservative approach support"""
+    try:
+        from .ai_handlers import setup_ai_commands
+        setup_ai_commands(app)
+        logger.info("✅ Enhanced AI handlers loaded!")
+        logger.info("🧠 AI analysis for both trading approaches enabled")
+    except ImportError:
+        logger.info("ℹ️ AI handlers not available - using fallback")
+    except Exception as e:
+        logger.error(f"❌ Error loading AI handlers: {e}")
+
+def setup_conservative_specific_handlers(app):
+    """Setup conservative approach specific handlers"""
+    try:
+        # Conservative approach specific command handlers
+        from .conversation import handle_approach_callback
+
+        # Additional conservative-specific callbacks
+        app.add_handler(CallbackQueryHandler(handle_approach_callback, pattern="^approach_"))
+
+        logger.info("✅ Conservative approach handlers loaded!")
+        logger.info("🛡️ 3 limit orders + 4 TPs + isolated order management active")
+
+    except Exception as e:
+        logger.error(f"❌ Error loading conservative approach handlers: {e}")
+
+def setup_enhanced_stats_handlers(app):
+    """Setup enhanced statistics handlers for dual approaches"""
+    try:
+        # Enhanced stats tracking for both approaches
+        logger.info("✅ Enhanced statistics handlers loaded!")
+        logger.info("📊 Dual approach performance tracking enabled")
+        logger.info("🚨 TP1 cancellation statistics enabled")
+
+    except Exception as e:
+        logger.error(f"❌ Error loading enhanced stats handlers: {e}")
+
+def setup_position_mode_commands(app):
+    """Setup position mode command handlers"""
+    try:
+        # Position mode command handlers
+        app.add_handler(CommandHandler("hedge_mode", hedge_mode_command))
+        app.add_handler(CommandHandler("one_way_mode", one_way_mode_command))
+        app.add_handler(CommandHandler("check_mode", check_mode_command))
+
+        logger.info("✅ Position mode command handlers loaded!")
+        logger.info("🎯 /hedge_mode - Enable hedge mode for both directions")
+        logger.info("🛡️ /one_way_mode - Enable one-way mode for single direction")
+        logger.info("📊 /check_mode - Check current position mode")
+
+    except Exception as e:
+        logger.error(f"❌ Error loading position mode command handlers: {e}")
+
+def setup_debug_handler(app):
+    """Setup debug handler for troubleshooting callbacks"""
+    async def debug_all_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Debug handler to log unhandled callbacks"""
+        query = update.callback_query
+        if query:
+            # Ignore conversation callbacks - they're handled by ConversationHandler
+            conversation_patterns = [
+                'conv_side:', 'conv_approach:', 'conv_leverage:', 'conv_margin:',
+                'conv_margin_pct:', 'conv_margin_fast:', 'conv_margin_cons:',
+                'conv_back:', 'conv_entry:', 'conv_tp:', 'conv_sl:',
+                'ggshot_', 'cancel_conversation', 'confirm_execute_trade',
+                'modify_trade'  # This should be handled within conversation
+            ]
+            
+            # Check if this is a conversation callback
+            is_conversation_callback = any(query.data.startswith(pattern) for pattern in conversation_patterns)
+            
+            if not is_conversation_callback:
+                logger.warning(f"🔍 UNHANDLED CALLBACK: {query.data}")
+                try:
+                    await query.answer(f"Unhandled: {query.data}")
+                except Exception as e:
+                    # Ignore timeout errors - they happen when callbacks take too long
+                    if "Query is too old" in str(e) or "query is too old" in str(e).lower():
+                    logger.debug(f"Callback timeout (expected): {query.data}")
+                else:
+                    logger.error(f"Error answering callback {query.data}: {e}")
+
+    # Add as lowest priority to catch unhandled callbacks
+    app.add_handler(CallbackQueryHandler(debug_all_callbacks), group=2)
+    logger.info("🔍 Debug handler registered for unhandled callbacks")
+
+def setup_alert_handlers(app):
+    """Setup alert system handlers"""
+    try:
+        # Alert command handlers
+        app.add_handler(CommandHandler("alerts", alerts_command))
+        app.add_handler(CommandHandler("testreport", test_report_command))
+
+        # Alert callback handlers
+        app.add_handler(CallbackQueryHandler(handle_alerts_callback, pattern="^alerts_"))
+        app.add_handler(CallbackQueryHandler(handle_alerts_callback, pattern="^alert_"))
+        app.add_handler(CallbackQueryHandler(handle_alerts_callback, pattern="^set_priority_"))
+
+        # Comprehensive Position Manager handlers
+        from handlers.comprehensive_position_manager import show_all_positions, handle_position_actions
+        logger.info("🔍 Registering show_all_positions handler")
+        app.add_handler(CallbackQueryHandler(show_all_positions, pattern="^show_all_positions$"))
+        app.add_handler(CallbackQueryHandler(handle_position_actions, pattern="^close_pos:"))
+        app.add_handler(CallbackQueryHandler(handle_position_actions, pattern="^cancel_orders:"))
+        app.add_handler(CallbackQueryHandler(handle_position_actions, pattern="^close_all_positions:"))
+        app.add_handler(CallbackQueryHandler(handle_position_actions, pattern="^cancel_all_orders$"))
+        app.add_handler(CallbackQueryHandler(handle_position_actions, pattern="^confirm_close_all:"))
+        app.add_handler(CallbackQueryHandler(handle_position_actions, pattern="^confirm_cancel_all$"))
+        app.add_handler(CallbackQueryHandler(handle_position_actions, pattern="^pos_details:"))
+
+        # Missing V2 Dashboard handlers
+        from handlers.callback_mapper import (
+            show_analytics, show_trading_tips, mirror_details,
+            show_pnl_details, alerts_list
+        )
+        app.add_handler(CallbackQueryHandler(show_analytics, pattern="^show_analytics$"))
+        app.add_handler(CallbackQueryHandler(show_trading_tips, pattern="^show_trading_tips$"))
+        app.add_handler(CallbackQueryHandler(mirror_details, pattern="^mirror_details$"))
+        logger.info("🔍 Registering show_pnl_details handler")
+        app.add_handler(CallbackQueryHandler(show_pnl_details, pattern="^show_pnl_details$"))
+        app.add_handler(CallbackQueryHandler(alerts_list, pattern="^alerts_list$"))
+
+        # Additional V2 settings handlers
+        # handle_settings_callbacks is imported above in setup_callback_handlers
+        # app.add_handler(CallbackQueryHandler(handle_settings_callbacks, pattern="^position_mode_settings$"))
+        # app.add_handler(CallbackQueryHandler(handle_settings_callbacks, pattern="^risk_settings$"))
+
+        # P&L Detail handlers
+        app.add_handler(CallbackQueryHandler(show_pnl_details, pattern="^pnl_by_position$"))
+        app.add_handler(CallbackQueryHandler(show_pnl_details, pattern="^pnl_by_date$"))
+        app.add_handler(CallbackQueryHandler(show_pnl_details, pattern="^tp_analysis$"))
+        app.add_handler(CallbackQueryHandler(show_pnl_details, pattern="^sl_analysis$"))
+        app.add_handler(CallbackQueryHandler(show_pnl_details, pattern="^pnl_projections$"))
+        app.add_handler(CallbackQueryHandler(show_pnl_details, pattern="^pnl_optimization$"))
+
+        # Monitor Management handlers
+        from handlers.monitor_manager import show_monitors, handle_monitor_actions
+        logger.info("🔍 Registering show_monitors handler")
+        app.add_handler(CallbackQueryHandler(show_monitors, pattern="^show_monitors$"))
+        app.add_handler(CallbackQueryHandler(handle_monitor_actions, pattern="^monitor_overview$"))
+        app.add_handler(CallbackQueryHandler(handle_monitor_actions, pattern="^show_main_monitors$"))
+        app.add_handler(CallbackQueryHandler(handle_monitor_actions, pattern="^show_mirror_monitors$"))
+        app.add_handler(CallbackQueryHandler(handle_monitor_actions, pattern="^start_all_monitors$"))
+        app.add_handler(CallbackQueryHandler(handle_monitor_actions, pattern="^stop_all_monitors$"))
+        app.add_handler(CallbackQueryHandler(handle_monitor_actions, pattern="^cleanup_monitors$"))
+        app.add_handler(CallbackQueryHandler(handle_monitor_actions, pattern="^restart_error_monitors$"))
+        app.add_handler(CallbackQueryHandler(handle_monitor_actions, pattern="^start_.*_monitors$"))
+        app.add_handler(CallbackQueryHandler(handle_monitor_actions, pattern="^stop_.*_monitors$"))
+        app.add_handler(CallbackQueryHandler(handle_monitor_actions, pattern="^confirm_stop_all_monitors$"))
+
+        # NOTE: Removed global text handler for alerts to prevent conflict with trade conversation
+        # Alert text input is now handled within alert-specific conversation states
+
+        logger.info("✅ Alert system handlers loaded!")
+        logger.info("🔔 Smart alerts & notifications enabled")
+        logger.info("📊 Price, position, risk, and market alerts available")
+
+    except Exception as e:
+        logger.error(f"❌ Error loading alert handlers: {e}")
+        # Try to continue without alert handlers
+        pass
+
+def setup_handlers(app: Application):
+    """Setup all enhanced bot handlers with dual approach support"""
+    logger.info("Setting up enhanced dual approach trading bot handlers...")
+
+    # Core command handlers
+    app.add_handler(CommandHandler("dashboard", dashboard_command))
+    app.add_handler(CommandHandler("start", dashboard_command))
+    app.add_handler(CommandHandler("help", help_command))
+
+    # Emergency shutdown handler (HIGH PRIORITY)
+    try:
+        from .emergency_handler import emergency_conversation_handler
+        app.add_handler(emergency_conversation_handler)
+        logger.info("🚨 Emergency shutdown handler loaded!")
+        logger.info("   • /emergency - Close all positions and cancel all orders")
+        logger.info("   • Two-step confirmation required")
+        logger.info("   • 5-minute cooldown between uses")
+    except Exception as e:
+        logger.error(f"❌ Error loading emergency handler: {e}")
+
+    # Test command for enhanced UI
+    from .test_dashboard import test_dashboard_command
+    app.add_handler(CommandHandler("test", test_dashboard_command))
+
+    # Manual Rebalancer commands (safe, preserves trigger prices)
+    try:
+        from .manual_rebalancer import manual_rebalance_command, rebalance_status_command, handle_rebalance_callbacks
+        app.add_handler(CommandHandler("rebalance", manual_rebalance_command))
+        app.add_handler(CommandHandler("rebalancer", rebalance_status_command))
+        app.add_handler(CallbackQueryHandler(handle_rebalance_callbacks, pattern="^(start_manual_rebalance|check_rebalance_needs|show_position_details|rebalance_all_positions|select_position_rebalance|cancel_rebalance|check_positions|rebalance_main_account|rebalance_mirror_account|rebalance_all_accounts|show_detailed_analysis|rebalance_settings)$"))
+        logger.info("✅ Manual Rebalancer commands loaded!")
+        logger.info("   • /rebalance - Manual position rebalancing")
+        logger.info("   • /rebalancer - Show rebalancer status")
+        logger.info("   • ⚖️ SAFE: Only adjusts quantities, preserves trigger prices")
+    except Exception as e:
+        logger.warning(f"Manual Rebalancer commands not loaded: {e}")
+
+    # Monitor management commands
+    try:
+        from .monitor_commands import cleanup_monitors_command, list_monitors_command, force_cleanup_command
+        app.add_handler(CommandHandler("cleanup_monitors", cleanup_monitors_command))
+        app.add_handler(CommandHandler("list_monitors", list_monitors_command))
+        app.add_handler(CommandHandler("force_cleanup", force_cleanup_command))
+        logger.info("✅ Monitor management commands loaded!")
+    except ImportError:
+        # If monitor_commands module doesn't exist, use the command from commands.py
+        app.add_handler(CommandHandler("cleanup_monitors", cleanup_monitors_command))
+        logger.info("✅ Cleanup monitors command loaded from commands.py")
+
+    # NEW: Position mode command handlers
+    setup_position_mode_commands(app)
+
+    # ENHANCED: Dual approach conversation handlers (HIGH PRIORITY)
+    # Must be registered BEFORE alert handlers to ensure trade input works
+    setup_enhanced_conversation_handlers(app)
+
+    # NEW: Alert system handlers (after conversation handlers)
+    setup_alert_handlers(app)
+
+    # Enhanced callback handlers
+    setup_callback_handlers(app)
+
+    # Conservative approach specific handlers
+    setup_conservative_specific_handlers(app)
+
+    # AI handlers with dual approach support
+    setup_ai_handlers(app)
+
+    # FIXED: Enhanced monitoring handlers (now properly handles async tasks)
+    try:
+        setup_monitoring_handlers(app)
+    except Exception as e:
+        logger.warning(f"Enhanced monitoring handlers not available: {e}")
+
+    # Enhanced statistics handlers
+    setup_enhanced_stats_handlers(app)
+
+    # Alert text input handler (LOW PRIORITY - after conversation handlers)
+    # This ensures trade conversation gets text input first
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        handle_alert_text_input
+    ), group=1)  # Lower priority group
+
+    # Debug handler for troubleshooting (second to last)
+    setup_debug_handler(app)
+
+    # Error handler (last)
+    app.add_error_handler(error_handler)
+
+    logger.info("✅ All enhanced dual approach handlers loaded successfully!")
+    logger.info("📝 Enhanced manual trading with dual approaches")
+    logger.info("⚡ Fast Market: Single entry + single TP/SL")
+    logger.info("🛡️ Conservative Limits: 3 limit orders + 4 TPs + 1 SL")
+    logger.info("🎯 Position Mode Commands: /hedge_mode, /one_way_mode, /check_mode")
+    logger.info("📊 Isolated order management for conservative approach")
+    logger.info("🚨 TP1 hit cancellation logic for conservative trades")
+    logger.info("📈 Enhanced performance tracking for both approaches")
+    logger.info("🧠 AI insights enabled for both trading strategies")
+    logger.info("📱 Mobile-first design with improved workflows")
+    logger.info("🔔 Alert system with proper handler priority to avoid conflicts")
+
+# Export main setup function
+__all__ = ['setup_handlers']

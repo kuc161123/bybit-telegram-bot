@@ -559,28 +559,7 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 val = safe_decimal_convert(params["tp1_price"], "tp1_price")
                 if val:
                     internal_params[TP1_PRICE] = val
-            if "tp2_price" in params and strategy_type == "conservative":
-                val = safe_decimal_convert(params["tp2_price"], "tp2_price")
-                if val:
-                    internal_params[TP2_PRICE] = val
-            if "tp3_price" in params and strategy_type == "conservative":
-                val = safe_decimal_convert(params["tp3_price"], "tp3_price")
-                if val:
-                    internal_params[TP3_PRICE] = val
-            if "tp4_price" in params and strategy_type == "conservative":
-                val = safe_decimal_convert(params["tp4_price"], "tp4_price")
-                if val:
-                    internal_params[TP4_PRICE] = val
-                elif strategy_type == "conservative" and TP3_PRICE in internal_params:
-                    # Calculate TP4 if missing in conservative mode
-                    tp3 = internal_params[TP3_PRICE]
-                    entry = internal_params.get(PRIMARY_ENTRY_PRICE)
-                    if tp3 and entry:
-                        # Calculate TP4 as TP3 + 50% of (TP3 - Entry) distance
-                        distance = tp3 - entry
-                        calculated_tp4 = tp3 + (distance * Decimal("0.5"))
-                        internal_params[TP4_PRICE] = calculated_tp4
-                        logger.info(f"Calculated missing TP4: {calculated_tp4} based on TP3: {tp3}")
+            # Single TP approach - no TP2-4 needed for conservative strategy
 
             # Stop loss
             if "sl_price" in params:
@@ -610,10 +589,7 @@ ENHANCED ANALYSIS REQUIREMENTS:
                 logger.error(f"Missing critical parameters: {', '.join(missing_critical)}")
                 return self._error_result(f"Failed to extract required parameters: {', '.join(missing_critical)}")
 
-            # For conservative strategy, ensure we have all required TPs
-            if strategy_type == "conservative":
-                if TP4_PRICE not in internal_params:
-                    logger.warning("TP4 was missing and calculated automatically")
+            # For conservative strategy, single TP approach - no additional TPs needed
 
             # ENHANCED: Validate extracted parameters
             from utils.ggshot_validator import validate_ggshot_parameters
@@ -692,10 +668,7 @@ ENHANCED ANALYSIS REQUIREMENTS:
                     LIMIT_ENTRY_1_PRICE: Decimal("64800"),
                     LIMIT_ENTRY_2_PRICE: Decimal("64600"),
                     LIMIT_ENTRY_3_PRICE: Decimal("64400"),
-                    TP1_PRICE: Decimal("66500"),
-                    TP2_PRICE: Decimal("67000"),
-                    TP3_PRICE: Decimal("67500"),
-                    TP4_PRICE: Decimal("68000"),
+                    TP1_PRICE: Decimal("66500"),  # Single TP approach only
                     SL_PRICE: Decimal("63000"),
                     "leverage": 10,
                     "margin_amount": Decimal("100")
@@ -1132,13 +1105,7 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
 
             # Add TPs
             if tps:
-                internal_params[TP1_PRICE] = tps[0]
-                if len(tps) > 1 and strategy_type == "conservative":
-                    internal_params[TP2_PRICE] = tps[1]
-                if len(tps) > 2:
-                    internal_params[TP3_PRICE] = tps[2]
-                if len(tps) > 3:
-                    internal_params[TP4_PRICE] = tps[3]
+                internal_params[TP1_PRICE] = tps[0]  # Single TP approach only
 
             # Validate we have minimum requirements
             if PRIMARY_ENTRY_PRICE not in internal_params or TP1_PRICE not in internal_params:
@@ -1175,9 +1142,7 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
         scores = {}
 
         # 1. Field Completeness (40%)
-        required_fields = [PRIMARY_ENTRY_PRICE, TP1_PRICE, SL_PRICE]
-        if strategy == "conservative":
-            required_fields.extend([TP2_PRICE, TP3_PRICE, TP4_PRICE])
+        required_fields = [PRIMARY_ENTRY_PRICE, TP1_PRICE, SL_PRICE]  # Single TP approach only
 
         present_fields = sum(1 for field in required_fields if field in params)
         field_completeness = present_fields / len(required_fields)
@@ -1236,21 +1201,7 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
                     logic_score *= 0.3
                     logger.warning(f"Sell TP1 ({tp1}) >= entry ({entry})")
 
-        # Check TP ordering for conservative
-        if strategy == "conservative":
-            tps = [params.get(tp) for tp in [TP1_PRICE, TP2_PRICE, TP3_PRICE, TP4_PRICE]
-                   if tp in params]
-            if len(tps) >= 2:
-                if side == "Buy":
-                    # TPs should be ascending
-                    if not all(tps[i] <= tps[i+1] for i in range(len(tps)-1)):
-                        logic_score *= 0.7
-                        logger.warning("Buy TPs not in ascending order")
-                else:  # Sell
-                    # TPs should be descending
-                    if not all(tps[i] >= tps[i+1] for i in range(len(tps)-1)):
-                        logic_score *= 0.7
-                        logger.warning("Sell TPs not in descending order")
+        # Single TP approach - no ordering check needed since there's only one TP
 
         scores["logical_consistency"] = logic_score * 0.3
 
@@ -1339,8 +1290,7 @@ Include ANY number you see, even partial ones. Focus on price-like numbers (with
         if strategy == "conservative":
             if LIMIT_ENTRY_1_PRICE not in params:
                 missing.append("limit_entries")
-            if TP4_PRICE not in params:
-                missing.append("tp4")
+            # Single TP approach - no TP4 requirement
 
         return missing
 

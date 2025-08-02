@@ -38,8 +38,8 @@ class AlertType(Enum):
     TRADE_TP_HIT = "trade_tp_hit"
     TRADE_SL_HIT = "trade_sl_hit"
     TRADE_LIMIT_FILLED = "trade_limit_filled"
-    TRADE_TP1_EARLY_HIT = "trade_tp1_early_hit"
-    TRADE_TP1_WITH_FILLS = "trade_tp1_with_fills"
+    TRADE_TP_EARLY_HIT = "trade_tp_early_hit"
+    TRADE_TP_WITH_FILLS = "trade_tp_with_fills"
 
 class AlertPriority(Enum):
     """Alert priority levels"""
@@ -174,17 +174,17 @@ ALERT_CONFIGS = {
         "requires_value": False,
         "priority": AlertPriority.MEDIUM
     },
-    AlertType.TRADE_TP1_EARLY_HIT: {
-        "name": "TP1 Early Hit",
-        "description": "Alert when TP1 hits before any limits fill",
+    AlertType.TRADE_TP_EARLY_HIT: {
+        "name": "TP Early Hit",
+        "description": "Alert when TP hits before any limits fill",
         "emoji": "🚨",
         "requires_symbol": True,
         "requires_value": False,
         "priority": AlertPriority.HIGH
     },
-    AlertType.TRADE_TP1_WITH_FILLS: {
-        "name": "TP1 Hit With Fills",
-        "description": "Alert when TP1 hits after some limits filled",
+    AlertType.TRADE_TP_WITH_FILLS: {
+        "name": "TP Hit With Fills",
+        "description": "Alert when TP hits after some limits filled",
         "emoji": "🎯",
         "requires_symbol": True,
         "requires_value": False,

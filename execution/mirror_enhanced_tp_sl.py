@@ -111,8 +111,9 @@ class MirrorEnhancedTPSLManager:
                 "sl_order": None,
                 "filled_tps": [],
                 "cancelled_limits": False,
-                "tp1_hit": False,
-                "tp1_info": None,
+                "tp_hit": False,
+                "tp1_hit": False,  # Legacy compatibility
+                "tp_info": None,
                 "sl_moved_to_be": False,
                 "sl_move_attempts": 0,
                 "created_at": time.time(),

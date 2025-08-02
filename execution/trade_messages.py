@@ -61,7 +61,8 @@ def format_conservative_approach_message(result: Dict[str, Any]) -> str:
     max_reward = Decimal(str(result.get("max_reward", 0)))
 
     # Calculate metrics
-    rr_ratio = abs(max_reward / risk_amount) if risk_amount != 0 else 0
+    # FIXED: Correct risk-reward ratio formula (risk/reward, not reward/risk)
+    rr_ratio = abs(risk_amount / max_reward) if max_reward != 0 else 0
     risk_pct = (risk_amount / (margin_amount * 10) * 100) if margin_amount > 0 else 3.0
     kelly_criterion = 8.2  # Would be calculated
     win_probability = 73
@@ -138,7 +139,7 @@ def format_conservative_approach_message(result: Dict[str, Any]) -> str:
 ├─ Stop Loss: <b>${format_decimal_or_na(sl_price)}</b> (-{sl_distance:.1f}%)
 ├─ Max Risk: <b>-${format_decimal_or_na(abs(risk_amount), 2)}</b> ({risk_pct:.1f}% of account)
 ├─ Risk per Limit: <b>-${format_decimal_or_na(abs(risk_amount) / 3, 2)}</b>
-└─ Risk/Reward: <b>1:{rr_ratio:.2f}</b> 🔥 {'(Excellent)' if rr_ratio >= 3 else '(Good)' if rr_ratio >= 2 else '(Fair)'}
+└─ Risk/Reward: <b>1:{(1/rr_ratio):.2f}</b> 🔥 {'(Excellent)' if (1/rr_ratio) >= 3 else '(Good)' if (1/rr_ratio) >= 2 else '(Fair)'}
 
 📊 <b>ADVANCED METRICS</b>
 ├─ Breakeven: <b>${format_decimal_or_na(avg_entry * Decimal("0.9988") if side == "Buy" else avg_entry * Decimal("1.0012"))}</b> (incl. fees)
@@ -168,9 +169,9 @@ def format_conservative_approach_message(result: Dict[str, Any]) -> str:
 🔔 <b>ENHANCED MONITORING ACTIVE</b>
 ├─ Direct Order Checks: <b>Enabled</b> (2s intervals)
 ├─ Multi-Method Detection: <b>Active</b>
-├─ TP1 Hit → Cancel remaining limits
+├─ TP Hit → Cancel remaining limits
 ├─ SL Auto-Adjustment: <b>Active</b> (after any TP)
-├─ Breakeven Movement: <b>Ready</b> (after TP1)
+├─ Breakeven Movement: <b>Ready</b> (after TP)
 ├─ Real-time P&L tracking: <b>Active</b>
 ├─ Smart Alerts: <b>Configured</b>
 └─ Protection: Orphan cleanup enabled
@@ -348,7 +349,7 @@ def format_ggshot_approach_message(result: Dict[str, Any]) -> str:
 "Strong {'bearish' if side == 'Sell' else 'bullish'} setup with institutional
 {'selling' if side == 'Sell' else 'buying'} pressure detected. Pattern validity
 increases if BTC holds {'above' if side == 'Buy' else 'below'} $104k.
-Consider partial profits at TP1 given
+Consider partial profits at TP given
 market volatility index at 7.2/10"
 
 🔔 <b>ENHANCED AI MONITORING ACTIVE</b>
@@ -357,7 +358,7 @@ market volatility index at 7.2/10"
 ├─ AI re-evaluation every 15 min
 ├─ Dynamic TP adjustment enabled
 ├─ SL Auto-Adjustment: <b>Active</b> (after any TP)
-├─ Breakeven Movement: <b>Ready</b> (after TP1)
+├─ Breakeven Movement: <b>Ready</b> (after TP)
 ├─ Correlation alerts: <b>Active</b>
 └─ News sentiment tracking: <b>ON</b>
 

@@ -1,0 +1,52 @@
+# Google Cloud Run configuration
+runtime: python311
+
+env_variables:
+  # Performance settings
+  PYTHONUNBUFFERED: 1
+  LOG_LEVEL: INFO
+  
+  # Core bot configuration (set these in Cloud Console)
+  # TELEGRAM_TOKEN: "your_token_here"
+  # BYBIT_API_KEY: "your_api_key_here"
+  # BYBIT_API_SECRET: "your_api_secret_here"
+  
+  # Enhanced features
+  ENABLE_ENHANCED_TP_SL: true
+  CANCEL_LIMITS_ON_TP1: true
+  DYNAMIC_FEE_CALCULATION: true
+  BREAKEVEN_FAILSAFE_ENABLED: true
+  ENABLE_ENHANCED_MARKET_ANALYSIS: true
+  
+  # Performance optimizations
+  HTTP_MAX_CONNECTIONS: 600
+  HTTP_MAX_CONNECTIONS_PER_HOST: 150
+  ENABLE_CIRCUIT_BREAKER: true
+  ENABLE_PERIODIC_MONITOR_CLEANUP: true
+
+# Resource configuration
+automatic_scaling:
+  min_instances: 1
+  max_instances: 1
+  target_cpu_utilization: 0.8
+
+resources:
+  cpu: 1
+  memory_gb: 1
+  disk_size_gb: 10
+
+# Health check
+readiness_check:
+  path: "/health"
+  check_interval_sec: 30
+  timeout_sec: 10
+  failure_threshold: 3
+  success_threshold: 1
+  app_start_timeout_sec: 300
+
+liveness_check:
+  path: "/health"
+  check_interval_sec: 30
+  timeout_sec: 10
+  failure_threshold: 3
+  success_threshold: 1

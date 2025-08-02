@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deploy Bybit Telegram Bot</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 40px;
+        }
+        .deploy-option {
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+        .deploy-option:hover {
+            border-color: #5b67d8;
+            box-shadow: 0 4px 12px rgba(91, 103, 216, 0.15);
+        }
+        .deploy-option h3 {
+            margin: 0 0 8px 0;
+            color: #333;
+        }
+        .deploy-option p {
+            margin: 0 0 16px 0;
+            color: #666;
+            font-size: 14px;
+        }
+        .deploy-btn {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            transition: transform 0.2s ease;
+        }
+        .deploy-btn:hover {
+            transform: translateY(-2px);
+        }
+        .price {
+            float: right;
+            background: #f7fafc;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #4a5568;
+        }
+        .requirements {
+            background: #f8f9fa;
+            border-left: 4px solid #28a745;
+            padding: 20px;
+            margin: 30px 0;
+            border-radius: 0 8px 8px 0;
+        }
+        .requirements h4 {
+            margin: 0 0 12px 0;
+            color: #28a745;
+        }
+        .requirements ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+        .requirements li {
+            margin-bottom: 8px;
+            color: #495057;
+        }
+        .warning {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 6px;
+            padding: 16px;
+            margin: 20px 0;
+        }
+        .warning strong {
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Deploy Your Bybit Trading Bot</h1>
+        <p class="subtitle">One-click deployment to get your bot running online in minutes</p>
+
+        <div class="requirements">
+            <h4>📋 What You'll Need (Required):</h4>
+            <ul>
+                <li><strong>Telegram Bot Token</strong> - Get from @BotFather on Telegram</li>
+                <li><strong>Bybit API Key & Secret</strong> - Create at bybit.com/app/user/api-management</li>
+                <li><strong>OpenAI API Key</strong> - Optional but recommended for AI features</li>
+            </ul>
+        </div>
+
+        <div class="warning">
+            <strong>🔒 Security Note:</strong> Your API keys will be securely stored in the cloud platform's environment variables. Never share these keys publicly.
+        </div>
+
+        <div class="deploy-option">
+            <h3>Railway <span class="price">$5/month</span></h3>
+            <p>Easiest deployment with automatic GitHub integration. Perfect for beginners.</p>
+            <a href="https://railway.app/template/bybit-telegram-bot?referralCode=claude" class="deploy-btn">
+                Deploy to Railway
+            </a>
+        </div>
+
+        <div class="deploy-option">
+            <h3>Render <span class="price">$7/month</span></h3>
+            <p>Most reliable platform with excellent uptime and health monitoring.</p>
+            <a href="https://render.com/deploy?repo=https://github.com/YOUR_USERNAME/bybit-telegram-bot" class="deploy-btn">
+                Deploy to Render
+            </a>
+        </div>
+
+        <div class="deploy-option">
+            <h3>Heroku <span class="price">$7/month</span></h3>
+            <p>Industry standard platform with robust infrastructure and scaling options.</p>
+            <a href="https://heroku.com/deploy?template=https://github.com/YOUR_USERNAME/bybit-telegram-bot" class="deploy-btn">
+                Deploy to Heroku
+            </a>
+        </div>
+
+        <div class="deploy-option">
+            <h3>Google Cloud Run <span class="price">Pay-per-use</span></h3>
+            <p>Enterprise-grade serverless platform that scales automatically ($5-15/month typical).</p>
+            <a href="https://console.cloud.google.com/cloudshell/editor?shellonly=true&cloudshell_git_repo=https://github.com/YOUR_USERNAME/bybit-telegram-bot" class="deploy-btn">
+                Deploy to Google Cloud
+            </a>
+        </div>
+
+        <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e1e5e9; text-align: center; color: #666;">
+            <p><strong>After deployment:</strong> Your bot will be online 24/7. Message it on Telegram with /start to begin trading!</p>
+            <p>💡 <strong>Tip:</strong> Start with testnet (USE_TESTNET=true) to practice before live trading.</p>
+        </div>
+    </div>
+
+    <script>
+        // Update links when user puts in their GitHub repo
+        function updateDeployLinks() {
+            const repoInput = document.getElementById('github-repo');
+            if (repoInput && repoInput.value) {
+                const repo = repoInput.value;
+                document.querySelectorAll('.deploy-btn').forEach(btn => {
+                    if (btn.href.includes('YOUR_USERNAME')) {
+                        btn.href = btn.href.replace('YOUR_USERNAME/bybit-telegram-bot', repo);
+                    }
+                });
+            }
+        }
+    </script>
+</body>
+</html>

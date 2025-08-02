@@ -15,12 +15,15 @@ A sophisticated Telegram trading bot for Bybit exchange featuring:
 
 ## Key Technical Details
 
-### Mirror Trading Behavior
+### Mirror Trading Behavior (Verified January 2025)
 - Mirror positions use **percentage-based sizing** (same % of balance as main)
 - Not fixed 50% ratio - proportional to each account's available balance
 - Example: 2% on main = 2% on mirror (results in different absolute sizes)
 - Mirror account typically uses ~33% of main position size in practice
-- When TP4 or SL hits, mirror positions are automatically cleaned up
+- When TP1 or SL hits, mirror positions are automatically cleaned up
+- **Complete Functional Parity**: Mirror accounts use identical TP rebalancing logic to main accounts
+- **Independent Operation**: Mirror accounts operate with separate monitors and API calls
+- **Account-Aware Processing**: All systems properly differentiate between main and mirror operations
 
 ### API Parameter Requirements
 - Bybit API requires `settleCoin="USDT"` for position queries without specific symbol
@@ -31,48 +34,50 @@ A sophisticated Telegram trading bot for Bybit exchange featuring:
 - **Mirror Account Order Placement**: Requires parameter conversion from snake_case to camelCase and `category="linear"` parameter
 
 ### Order Management Behavior
-- When TP1 (85%) hits: Unfilled limit orders are cancelled if `CANCEL_LIMITS_ON_TP1=true`
-- When TP4 (final TP) or SL hits: ALL remaining orders are cancelled and position closes 100%
+- When TP1 (85%) hits: Position closes 100% and all orders are cancelled
+- When TP1 or SL hits: ALL remaining orders are cancelled and position closes 100%
 - SL orders cover full position including unfilled limit orders
 - Mirror account SL orders automatically sync prices from main account
 - Orphaned order cleanup runs periodically for both main and mirror accounts
 
-### TP Distribution (Conservative Approach Only)
-- **TP1**: 85% of position (triggers SL to breakeven, cancels limits if enabled)
-- **TP2**: 5% of position (cumulative 90%)
-- **TP3**: 5% of position (cumulative 95%)
-- **TP4**: 5% of position (cumulative 100%)
+### Take Profit Strategy (Single Target Approach)
+- **Take Profit**: 85% position fill threshold → 100% position closure
+- **Simplified Exit**: Single profit target - complete closure when reached
+- **Risk Management**: Comprehensive position closure ensures profit capture
+- **Building Phase**: Maintains dynamic TP adjustments during limit fills
 - Fast approach has been completely removed from the codebase
 
-### Complete TP/SL Rebalancing Behavior
+### Complete TP1-Only Behavior
 
-#### When TP1 Hits (85% of position):
-1. **SL Moves to Breakeven**:
-   - Calculates breakeven price including fees (0.06%) and safety margin (0.02%)
-   - Cancels existing SL order and places new one at breakeven price
-   - SL quantity is adjusted to match remaining position (15% after TP1)
+#### When TP1 Target is Reached (85% position fill):
+1. **Complete Position Closure**:
+   - Cancels ALL remaining orders (TP2/3/4 + any unfilled limits)
+   - Closes 100% of remaining position via market order
+   - No breakeven movement - position fully exits
 
-2. **Quantity Adjustments**:
-   - SL quantity: Adjusted from 100% to remaining 15% of position
-   - Remaining TPs: DO NOT rebalance - they stay at original sizes (5% each)
+2. **Order Management**:
+   - Emergency cancellation of all active orders
+   - Market order placement for remaining position closure
+   - Complete cleanup of monitoring systems
 
-3. **Limit Order Cancellation**:
-   - All unfilled limit orders are cancelled (if `CANCEL_LIMITS_ON_TP1=true`)
-   - Phase transitions from BUILDING/MONITORING to PROFIT_TAKING
+3. **Phase Transition**:
+   - Direct transition from BUILDING/MONITORING to POSITION_CLOSED
+   - No PROFIT_TAKING phase - immediate closure
 
-#### For Subsequent TP Hits (TP2, TP3, TP4):
-1. **SL Quantity Adjustment Only**:
-   - When TP2 hits: SL quantity → remaining 10%
-   - When TP3 hits: SL quantity → remaining 5%
-   - When TP4 hits: Position fully closed, all orders cancelled
+4. **Mirror Account Synchronization**:
+   - Main account TP1 triggers mirror account closure
+   - Both accounts close simultaneously
+   - Independent alert streams for each account
 
-2. **No TP Rebalancing**:
-   - Remaining TPs keep their original quantities
-   - This is by design for the conservative approach
+#### Building Phase (Unchanged):
+- **Limit Fills**: Continue to trigger full TP/SL rebalancing (increases position)
+- **Dynamic Adjustments**: TP levels adjust as position builds through limit fills
+- **Mirror Sync**: Both accounts maintain identical building behavior
 
 #### Important Note:
-- **Limit Fills**: Trigger full TP/SL rebalancing (increases position)
-- **TP Hits**: Only trigger SL quantity adjustment (decreases position)
+- **TP1-Only Strategy**: Simplified exit removes progressive TP complexity
+- **Risk Management**: Complete closure ensures profit capture at target
+- **Building Preserved**: Maintains excellent limit fill → TP rebalancing logic
 
 ## Development Commands
 
@@ -133,6 +138,18 @@ python scripts/fixes/verify_position_closure_completeness.py # Verify clean clos
 python scripts/fixes/monitor_tp1_events.py                 # Real-time TP1 monitoring
 ```
 
+#### Mirror Account Testing and Verification (January 2025)
+```bash
+# Comprehensive mirror account analysis
+python test_building_phase_protection.py      # Test BUILDING phase protection
+python test_proper_phase_transitions.py       # Test TP1 detection via order fills
+python test_rebalancing_tp1_interaction.py    # Test rebalancing without phase interference
+
+# Mirror account specific diagnostics
+python scripts/fixes/verify_mirror_tp_rebalancing.py  # Verify mirror TP rebalancing works
+python check_mirror_account_functionality.py          # Full mirror account test suite
+```
+
 #### Order Protection Management
 ```bash
 python scripts/fixes/disable_external_order_protection.py  # Disable protection at runtime
@@ -188,7 +205,7 @@ User Command → Telegram Handler → Trading Execution → Bybit API
 ## Critical Implementation Details
 
 ### Position Closure Guarantees
-When TP4 or SL hits, the system ensures 100% closure by:
+When TP1 or SL hits, the system ensures 100% closure by:
 1. Calling `_emergency_cancel_all_orders()` to cancel ALL orders
 2. Calling `_ensure_position_fully_closed()` to close any remaining size
 3. Triggering mirror account cleanup if main position closes
@@ -197,17 +214,16 @@ When TP4 or SL hits, the system ensures 100% closure by:
 ### Comprehensive Alert System
 The enhanced alert system provides notifications for all trading events:
 1. **Limit Order Fills**: Shows which order filled (e.g., "Limit 2/3 filled at $0.12345")
-2. **TP Alerts**: All TP levels (TP1-TP4) with profit calculations and remaining targets
+2. **TP Alert**: TP1 closure alert with complete position closure confirmation
 3. **TP Rebalancing**: Alerts when TPs are adjusted after limit fills
-4. **Breakeven Movement**: Notifies when SL moves to breakeven after TP1
-5. **Position Closure**: Final summary with total P&L and closure details
-6. **Stop Loss Hits**: Risk management alerts with detailed context
-7. **Chat ID Resolution**: Uses `_find_chat_id_for_position()` to ensure alerts reach the right user
-8. **Account Identification**: All alerts clearly marked as MAIN or MIRROR account
-9. **Detection Confidence**: Shows "Enhanced (2s intervals)" with High confidence
-10. **Mirror Independence**: Separate alert streams for main and mirror accounts
-11. **Retry Logic**: 5 attempts with exponential backoff for delivery reliability
-12. **Fallback Support**: Uses `DEFAULT_ALERT_CHAT_ID` if primary chat unavailable
+4. **Position Closure**: Complete closure notification with total P&L and closure details
+5. **Stop Loss Hits**: Risk management alerts with detailed context
+6. **Chat ID Resolution**: Uses `_find_chat_id_for_position()` to ensure alerts reach the right user
+7. **Account Identification**: All alerts clearly marked as MAIN or MIRROR account
+8. **Detection Confidence**: Shows "Enhanced (2s intervals)" with High confidence
+9. **Mirror Independence**: Separate alert streams for main and mirror accounts
+10. **Retry Logic**: 5 attempts with exponential backoff for delivery reliability
+11. **Fallback Support**: Uses `DEFAULT_ALERT_CHAT_ID` if primary chat unavailable
 
 ### Import Error Prevention
 The codebase uses direct pickle access in `enhanced_tp_sl_manager.py` to avoid circular imports:
@@ -224,12 +240,18 @@ with open('bybit_bot_dashboard_v4.1_enhanced.pkl', 'rb') as f:
 - Runtime disable available via `scripts/fixes/disable_external_order_protection.py`
 - When disabled, orphaned order cleanup works for all orders
 
-### Monitor Phase Management
+### Monitor Phase Management (Enhanced January 2025)
 Monitors transition through phases based on position state:
 - **BUILDING**: Initial phase, position being established
 - **MONITORING**: Active monitoring, no TPs hit yet
 - **PROFIT_TAKING**: TP1 has been hit (85%+ filled)
 - **POSITION_CLOSED**: All TPs hit or position manually closed
+
+#### Critical Phase Protection (January 2025 Fix)
+- **BUILDING Phase Protection**: Implemented comprehensive protection against false TP1 detection during position building
+- **Position Reduction Safeguard**: Position reductions during BUILDING/MONITORING phases are protected from triggering TP1 logic
+- **Fallback TP Detection**: Enhanced fallback logic now includes phase-aware checks to prevent premature TP detection
+- **Mirror Account Synchronization**: Both main and mirror accounts use identical phase protection logic
 
 ### Monitor Loading and Persistence
 - **Startup**: Bot loads monitors from `bybit_bot_dashboard_v4.1_enhanced.pkl`
@@ -238,6 +260,7 @@ Monitors transition through phases based on position state:
 - **Background Loop**: `enhanced_tp_sl_monitoring_loop()` runs every 5 seconds
 - **Position Sync**: Automatically syncs monitors with actual positions every 60 seconds
 - **Orphaned Cleanup**: Removes monitors for positions that no longer exist
+- **Periodic Cleanup**: Automated background cleanup every 10 minutes (configurable)
 - **Signal Files**: Uses `.reload_enhanced_monitors.signal` to trigger monitor reload
 - **Force Load**: `.force_load_all_monitors` signal preserves all monitors without position sync
 
@@ -320,6 +343,10 @@ POSITION_MONITOR_INTERVAL=12    # Monitor check interval (optimized)
 ENABLE_CIRCUIT_BREAKER=true     # Automatic failure protection
 CIRCUIT_BREAKER_FAILURE_THRESHOLD=5 # Failure count before activation
 CIRCUIT_BREAKER_RECOVERY_TIMEOUT=60 # Recovery time in seconds
+
+# Monitor Cleanup (2025 Enhancement)
+ENABLE_PERIODIC_MONITOR_CLEANUP=true    # Automatic cleanup of stale monitors
+MONITOR_CLEANUP_INTERVAL_SECONDS=600    # Cleanup frequency (10 minutes)
 ```
 
 ## Common Troubleshooting
@@ -442,13 +469,14 @@ python -c "from utils.performance_monitor import optimize_bot_performance; impor
 - **Progressive API Batching**: 60% reduction in API calls through intelligent request grouping
 - **Research-based Optimizations**: External research findings applied for high-frequency trading performance
 
-#### Comprehensive TP Rebalancing Fix (Critical Mirror Account Resolution)
+#### Comprehensive TP Rebalancing Fix (Critical Mirror Account Resolution - January 2025)
 - **Stale Order Validation**: New `_validate_and_refresh_tp_orders()` method validates TP orders against exchange before processing
 - **Unique OrderLinkID Generation**: `_generate_unique_order_link_id()` with timestamp + random suffix prevents duplicate conflicts
 - **Mirror TP Recovery**: `_attempt_tp_order_recovery()` automatically reconstructs missing mirror TP orders from exchange data
 - **Enhanced Error Handling**: Smart recognition of "order not exists" errors as successful cancellations (ErrCode 110001 handling)
 - **Root Cause Resolution**: Fixed mirror account "No TP orders found" and "No orderId in result" errors completely
 - **SKIPPED Status Alerts**: New alert type for failed rebalancing with detailed error context and recovery attempts
+- **Mirror Account Verification**: Comprehensive analysis confirms mirror account TP rebalancing works identically to main account
 
 #### Monitor System Enhancements
 - **TP Detection Fix**: Corrected monitor states to properly detect TP fills based on position size changes

@@ -124,10 +124,8 @@ class ComprehensivePositionManager:
 
             # Check if order is TP/SL based on OrderLinkId first (for Enhanced TP/SL system)
             is_enhanced_tp_sl = ('_TP' in order_link_id.upper() or
-                                'TP1' in order_link_id.upper() or
-                                'TP2' in order_link_id.upper() or
-                                'TP3' in order_link_id.upper() or
-                                'TP4' in order_link_id.upper() or
+                                'TP' in order_link_id.upper() or
+                                any(f'TP{i}' in order_link_id.upper() for i in range(1, 5)) or  # Legacy TP1-4 support
                                 '_SL' in order_link_id.upper() or
                                 'SL' in order_link_id.upper())
 
@@ -163,10 +161,8 @@ class ComprehensivePositionManager:
                 # Enhanced classification for Enhanced TP/SL orders
                 # Priority 1: Order Link ID detection (most reliable)
                 if ('_TP' in order_link_id.upper() or
-                    'TP1' in order_link_id.upper() or
-                    'TP2' in order_link_id.upper() or
-                    'TP3' in order_link_id.upper() or
-                    'TP4' in order_link_id.upper()):
+                    'TP' in order_link_id.upper() or
+                    any(f'TP{i}' in order_link_id.upper() for i in range(1, 5))):  # Legacy TP1-4 support
                     classified['take_profits'].append(order)
                 elif ('_SL' in order_link_id.upper() or
                       'SL' in order_link_id.upper()):

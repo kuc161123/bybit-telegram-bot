@@ -89,8 +89,11 @@ if DEFAULT_ALERT_CHAT_ID:
 CONVERSATION_TIMEOUT_SECONDS = 300
 
 # --- TRADING PARAMETERS ---
-MONITOR_TP1_INTERVAL_SECONDS = 30
-AUTO_MOVE_SL_TO_BE_AFTER_TP1 = True
+MONITOR_TP_INTERVAL_SECONDS = 30
+AUTO_MOVE_SL_TO_BE_AFTER_TP = True
+# Legacy aliases for backward compatibility
+MONITOR_TP1_INTERVAL_SECONDS = MONITOR_TP_INTERVAL_SECONDS  
+AUTO_MOVE_SL_TO_BE_AFTER_TP1 = AUTO_MOVE_SL_TO_BE_AFTER_TP
 
 # --- ENHANCED API RETRY AND TIMEOUT CONFIGURATION ---
 API_RETRY_MAX_ATTEMPTS = int(os.getenv("API_RETRY_MAX_ATTEMPTS", "5"))  # Increased retries
@@ -115,6 +118,9 @@ ORDER_CLEANUP_STARTUP_DELAY = int(os.getenv("ORDER_CLEANUP_STARTUP_DELAY", "30")
 
 # --- ENHANCED MONITORING SETTINGS ---
 POSITION_MONITOR_INTERVAL = int(os.getenv("POSITION_MONITOR_INTERVAL", "12"))  # Increased for better performance
+# Monitor cleanup settings
+MONITOR_CLEANUP_INTERVAL_SECONDS = int(os.getenv("MONITOR_CLEANUP_INTERVAL_SECONDS", "600"))  # 10 minutes
+ENABLE_PERIODIC_MONITOR_CLEANUP = os.getenv("ENABLE_PERIODIC_MONITOR_CLEANUP", "true").lower() == "true"
 POSITION_MONITOR_LOG_INTERVAL = int(os.getenv("POSITION_MONITOR_LOG_INTERVAL", "30"))  # Increased to reduce log spam
 
 # --- ENHANCED RATE LIMITING SETTINGS ---
@@ -134,6 +140,104 @@ CACHE_MAX_SIZE = int(os.getenv("CACHE_MAX_SIZE", "1000"))  # Maximum cache entri
 MEMORY_CLEANUP_INTERVAL = int(os.getenv("MEMORY_CLEANUP_INTERVAL", "3600"))  # 1 hour
 MAX_CONCURRENT_MONITORS = int(os.getenv("MAX_CONCURRENT_MONITORS", "50"))  # Monitor limit
 
+# --- ENHANCED PERFORMANCE OPTIMIZATION SETTINGS (2025) ---
+# Conservative performance optimizations that don't affect trading logic
+PERFORMANCE_CLEANUP_ENABLED = os.getenv("PERFORMANCE_CLEANUP_ENABLED", "true").lower() == "true"
+PERFORMANCE_CLEANUP_INTERVAL = int(os.getenv("PERFORMANCE_CLEANUP_INTERVAL", "1800"))  # 30 minutes
+STABLE_POSITION_CACHE_TTL = int(os.getenv("STABLE_POSITION_CACHE_TTL", "30"))  # 30 seconds for stable positions
+STABLE_POSITION_THRESHOLD = int(os.getenv("STABLE_POSITION_THRESHOLD", "300"))  # 5 minutes of no activity
+HISTORICAL_DATA_CLEANUP_DAYS = int(os.getenv("HISTORICAL_DATA_CLEANUP_DAYS", "7"))  # Keep 7 days of history
+MEMORY_CLEANUP_DURING_LOW_ACTIVITY = os.getenv("MEMORY_CLEANUP_DURING_LOW_ACTIVITY", "true").lower() == "true"
+
+# --- EXECUTION SPEED OPTIMIZATION (2025) ---
+# Conservative trade execution speed improvements - can be disabled for rollback
+ENABLE_EXECUTION_SPEED_OPTIMIZATION = os.getenv("ENABLE_EXECUTION_SPEED_OPTIMIZATION", "true").lower() == "true"
+EXECUTION_MODE_MONITORING_INTERVAL = int(os.getenv("EXECUTION_MODE_MONITORING_INTERVAL", "30"))  # Monitoring interval during execution (seconds)
+EXECUTION_MODE_TIMEOUT = int(os.getenv("EXECUTION_MODE_TIMEOUT", "120"))  # Auto-disable execution mode after timeout (seconds)
+EXECUTION_MODE_API_CONCURRENCY = int(os.getenv("EXECUTION_MODE_API_CONCURRENCY", "20"))  # Increased API concurrency during execution
+
+# --- ULTRA-HIGH PERFORMANCE MONITORING (100+ Trades) ---
+# Aggressive performance settings for large-scale trading - completely safe
+ENABLE_ULTRA_PERFORMANCE_MODE = os.getenv("ENABLE_ULTRA_PERFORMANCE_MODE", "false").lower() == "true"
+HIGH_POSITION_COUNT_THRESHOLD = int(os.getenv("HIGH_POSITION_COUNT_THRESHOLD", "25"))  # When to start scaling intervals
+ULTRA_HIGH_POSITION_THRESHOLD = int(os.getenv("ULTRA_HIGH_POSITION_THRESHOLD", "100"))  # When to use ultra-aggressive intervals
+EXTREME_POSITION_THRESHOLD = int(os.getenv("EXTREME_POSITION_THRESHOLD", "400"))  # When to use extreme measures
+
+# Dynamic monitoring intervals (seconds)
+CRITICAL_POSITION_INTERVAL = int(os.getenv("CRITICAL_POSITION_INTERVAL", "1"))  # Within 1% of TP/SL
+URGENT_POSITION_INTERVAL = int(os.getenv("URGENT_POSITION_INTERVAL", "3"))     # Within 3% of TP/SL  
+ACTIVE_POSITION_INTERVAL = int(os.getenv("ACTIVE_POSITION_INTERVAL", "10"))    # Profit-taking phase
+BUILDING_POSITION_INTERVAL = int(os.getenv("BUILDING_POSITION_INTERVAL", "20")) # Entry phase
+STABLE_POSITION_INTERVAL = int(os.getenv("STABLE_POSITION_INTERVAL", "60"))    # No activity >10min
+DORMANT_POSITION_INTERVAL = int(os.getenv("DORMANT_POSITION_INTERVAL", "180")) # No activity >30min
+
+# Urgency detection thresholds
+CRITICAL_DISTANCE_PERCENT = float(os.getenv("CRITICAL_DISTANCE_PERCENT", "1.0"))  # 1% from TP/SL
+URGENT_DISTANCE_PERCENT = float(os.getenv("URGENT_DISTANCE_PERCENT", "3.0"))     # 3% from TP/SL
+STABLE_POSITION_THRESHOLD_MINUTES = int(os.getenv("STABLE_POSITION_THRESHOLD_MINUTES", "10"))  # 10 min no activity
+DORMANT_POSITION_THRESHOLD_MINUTES = int(os.getenv("DORMANT_POSITION_THRESHOLD_MINUTES", "30")) # 30 min no activity
+
+# Safety overrides - these always take precedence
+FORCE_CRITICAL_MONITORING = os.getenv("FORCE_CRITICAL_MONITORING", "true").lower() == "true"  # Always monitor critical positions at 1s
+EMERGENCY_OVERRIDE_ENABLED = os.getenv("EMERGENCY_OVERRIDE_ENABLED", "true").lower() == "true"  # Emergency SL detection overrides
+
+# --- EXTREME PERFORMANCE MODE (400+ Trades) ---
+# Ultra-aggressive settings for massive scale trading - maximum safety maintained
+ENABLE_EXTREME_PERFORMANCE_MODE = os.getenv("ENABLE_EXTREME_PERFORMANCE_MODE", "false").lower() == "true"
+
+# Extreme monitoring intervals for 400+ positions (seconds)
+EXTREME_CRITICAL_INTERVAL = int(os.getenv("EXTREME_CRITICAL_INTERVAL", "2"))     # Even critical positions can be 2s at extreme scale
+EXTREME_URGENT_INTERVAL = int(os.getenv("EXTREME_URGENT_INTERVAL", "5"))        # Urgent positions: 5s
+EXTREME_ACTIVE_INTERVAL = int(os.getenv("EXTREME_ACTIVE_INTERVAL", "20"))       # Active positions: 20s  
+EXTREME_BUILDING_INTERVAL = int(os.getenv("EXTREME_BUILDING_INTERVAL", "60"))   # Building positions: 1 minute
+EXTREME_STABLE_INTERVAL = int(os.getenv("EXTREME_STABLE_INTERVAL", "300"))      # Stable positions: 5 minutes
+EXTREME_DORMANT_INTERVAL = int(os.getenv("EXTREME_DORMANT_INTERVAL", "900"))    # Dormant positions: 15 minutes
+
+# Execution mode enhancements for extreme scale
+EXTREME_EXECUTION_PAUSE_MONITORING = os.getenv("EXTREME_EXECUTION_PAUSE_MONITORING", "true").lower() == "true"  # Pause ALL non-critical monitoring during execution
+EXTREME_EXECUTION_API_CONCURRENCY = int(os.getenv("EXTREME_EXECUTION_API_CONCURRENCY", "50"))  # Max concurrent API calls during execution
+EXTREME_EXECUTION_TIMEOUT = int(os.getenv("EXTREME_EXECUTION_TIMEOUT", "180"))  # 3 minute timeout for extreme operations
+
+# Batch processing for extreme scale
+EXTREME_BATCH_SIZE = int(os.getenv("EXTREME_BATCH_SIZE", "50"))  # Process positions in batches of 50
+EXTREME_BATCH_INTERVAL = float(os.getenv("EXTREME_BATCH_INTERVAL", "0.1"))  # 100ms between batches
+
+# --- LONG-TERM STABILITY & RELIABILITY (Weeks+ Runtime) ---
+# Enterprise-grade reliability features for extended operation without restart
+ENABLE_LONG_TERM_STABILITY = os.getenv("ENABLE_LONG_TERM_STABILITY", "true").lower() == "true"
+
+# Memory management and leak prevention
+MEMORY_CLEANUP_INTERVAL = int(os.getenv("MEMORY_CLEANUP_INTERVAL", "3600"))  # 1 hour
+AGGRESSIVE_MEMORY_CLEANUP = os.getenv("AGGRESSIVE_MEMORY_CLEANUP", "true").lower() == "true"
+MEMORY_USAGE_THRESHOLD_MB = int(os.getenv("MEMORY_USAGE_THRESHOLD_MB", "1024"))  # 1GB threshold
+FORCE_GARBAGE_COLLECTION = os.getenv("FORCE_GARBAGE_COLLECTION", "true").lower() == "true"
+
+# Connection pool health management
+CONNECTION_POOL_REFRESH_INTERVAL = int(os.getenv("CONNECTION_POOL_REFRESH_INTERVAL", "7200"))  # 2 hours
+CONNECTION_HEALTH_CHECK_INTERVAL = int(os.getenv("CONNECTION_HEALTH_CHECK_INTERVAL", "600"))  # 10 minutes
+STALE_CONNECTION_TIMEOUT = int(os.getenv("STALE_CONNECTION_TIMEOUT", "1800"))  # 30 minutes
+
+# Cache health and cleanup
+CACHE_HEALTH_CHECK_INTERVAL = int(os.getenv("CACHE_HEALTH_CHECK_INTERVAL", "1800"))  # 30 minutes
+CACHE_MAX_AGE_HOURS = int(os.getenv("CACHE_MAX_AGE_HOURS", "24"))  # Remove entries older than 24 hours
+CACHE_SIZE_LIMIT_MB = int(os.getenv("CACHE_SIZE_LIMIT_MB", "256"))  # 256MB cache size limit
+
+# Data integrity and cleanup
+ORPHANED_DATA_CLEANUP_INTERVAL = int(os.getenv("ORPHANED_DATA_CLEANUP_INTERVAL", "10800"))  # 3 hours
+PICKLE_INTEGRITY_CHECK_INTERVAL = int(os.getenv("PICKLE_INTEGRITY_CHECK_INTERVAL", "1800"))  # 30 minutes
+BACKUP_RETENTION_DAYS = int(os.getenv("BACKUP_RETENTION_DAYS", "7"))  # Keep backups for 7 days
+
+# System health monitoring
+SYSTEM_HEALTH_CHECK_INTERVAL = int(os.getenv("SYSTEM_HEALTH_CHECK_INTERVAL", "300"))  # 5 minutes
+AUTO_RECOVERY_ENABLED = os.getenv("AUTO_RECOVERY_ENABLED", "true").lower() == "true"
+HEALTH_ALERT_THRESHOLD = float(os.getenv("HEALTH_ALERT_THRESHOLD", "0.8"))  # Alert at 80% resource usage
+
+# Log management
+LOG_ROTATION_ENABLED = os.getenv("LOG_ROTATION_ENABLED", "true").lower() == "true"
+LOG_MAX_SIZE_MB = int(os.getenv("LOG_MAX_SIZE_MB", "100"))  # 100MB per log file
+LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "10"))  # Keep 10 backup files
+LOG_CLEANUP_INTERVAL = int(os.getenv("LOG_CLEANUP_INTERVAL", "86400"))  # Daily log cleanup
+
 # --- ENHANCED ERROR HANDLING ---
 ENABLE_CIRCUIT_BREAKER = os.getenv("ENABLE_CIRCUIT_BREAKER", "true").lower() == "true"
 CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "5"))
@@ -141,7 +245,9 @@ CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(os.getenv("CIRCUIT_BREAKER_RECOVERY_TIMEO
 
 # --- ENHANCED TP/SL SYSTEM ---
 ENABLE_ENHANCED_TP_SL = os.getenv("ENABLE_ENHANCED_TP_SL", "true").lower() == "true"  # Enable new TP/SL system (default: true - using enhanced system)
-CANCEL_LIMITS_ON_TP1 = os.getenv("CANCEL_LIMITS_ON_TP1", "true").lower() == "true"  # Cancel unfilled limit orders when TP1 (85%) hits (default: true)
+CANCEL_LIMITS_ON_TP = os.getenv("CANCEL_LIMITS_ON_TP", "true").lower() == "true"  # Cancel unfilled limit orders when TP hits (default: true)
+# Legacy alias for backward compatibility
+CANCEL_LIMITS_ON_TP1 = CANCEL_LIMITS_ON_TP
 
 # Enhanced Breakeven and Safety Settings
 DYNAMIC_FEE_CALCULATION = os.getenv("DYNAMIC_FEE_CALCULATION", "true").lower() == "true"  # Use dynamic fee rates instead of fixed 0.06%
@@ -214,14 +320,37 @@ def validate_config():
     logging.info(f"   Cache Default TTL: {CACHE_DEFAULT_TTL}s")
     logging.info(f"   Max Cache Size: {CACHE_MAX_SIZE}")
     logging.info(f"   Max Concurrent Monitors: {MAX_CONCURRENT_MONITORS}")
+    
+    logging.info(f"⚡ Execution Speed Optimization:")
+    logging.info(f"   Enabled: {ENABLE_EXECUTION_SPEED_OPTIMIZATION}")
+    if ENABLE_EXECUTION_SPEED_OPTIMIZATION:
+        logging.info(f"   Execution Monitoring Interval: {EXECUTION_MODE_MONITORING_INTERVAL}s")
+        logging.info(f"   Execution Timeout: {EXECUTION_MODE_TIMEOUT}s")
+        logging.info(f"   Execution API Concurrency: {EXECUTION_MODE_API_CONCURRENCY}")
+    
+    logging.info(f"🔥 Ultra-High Performance Mode (100+ Trades):")
+    logging.info(f"   Enabled: {ENABLE_ULTRA_PERFORMANCE_MODE}")
+    if ENABLE_ULTRA_PERFORMANCE_MODE:
+        logging.info(f"   High Position Threshold: {HIGH_POSITION_COUNT_THRESHOLD} positions")
+        logging.info(f"   Ultra-High Position Threshold: {ULTRA_HIGH_POSITION_THRESHOLD} positions")
+        logging.info(f"   Dynamic Intervals: CRITICAL({CRITICAL_POSITION_INTERVAL}s) → DORMANT({DORMANT_POSITION_INTERVAL}s)")
+        logging.info(f"   Safety: Critical positions never exceed 2s, Emergency overrides enabled")
+    
+    logging.info(f"🏭 Long-Term Stability (Weeks+ Runtime):")
+    logging.info(f"   Enabled: {ENABLE_LONG_TERM_STABILITY}")
+    if ENABLE_LONG_TERM_STABILITY:
+        logging.info(f"   Memory Management: {MEMORY_CLEANUP_INTERVAL/3600:.1f}h intervals, {MEMORY_USAGE_THRESHOLD_MB}MB threshold")
+        logging.info(f"   Connection Health: {CONNECTION_HEALTH_CHECK_INTERVAL/60:.1f}min checks, {CONNECTION_POOL_REFRESH_INTERVAL/3600:.1f}h refresh")
+        logging.info(f"   Data Integrity: {ORPHANED_DATA_CLEANUP_INTERVAL/3600:.1f}h cleanup, {BACKUP_RETENTION_DAYS} day retention")
+        logging.info(f"   System Health: {SYSTEM_HEALTH_CHECK_INTERVAL/60:.1f}min monitoring, Auto-recovery enabled")
 
 # --- Enhanced Logging & Config ---
 def setup_logging():
-    """Setup enhanced logging configuration with better performance"""
+    """Setup enhanced logging configuration with cleaner output"""
 
-    # Create formatters
+    # Create formatters - simplified for cleaner logs
     detailed_formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        "%(asctime)s - %(levelname)s - %(message)s"  # Removed module name for cleaner output
     )
 
     simple_formatter = logging.Formatter(
@@ -245,10 +374,15 @@ def setup_logging():
     # File handler with detailed format and rotation
     try:
         from logging.handlers import RotatingFileHandler
+        from config.settings import LOG_MAX_SIZE_MB, LOG_BACKUP_COUNT
+        
+        max_bytes = LOG_MAX_SIZE_MB * 1024 * 1024 if 'LOG_MAX_SIZE_MB' in globals() else 100*1024*1024
+        backup_count = LOG_BACKUP_COUNT if 'LOG_BACKUP_COUNT' in globals() else 5
+        
         file_handler = RotatingFileHandler(
             'trading_bot.log',
-            maxBytes=100*1024*1024,  # 100MB max size
-            backupCount=5,  # Keep 5 backup files
+            maxBytes=max_bytes,
+            backupCount=backup_count,
             encoding='utf-8'
         )
         file_handler.setLevel(logging.DEBUG)
@@ -282,7 +416,7 @@ def setup_logging():
 
     for logger_name in noisy_loggers:
         logger = logging.getLogger(logger_name)
-        logger.setLevel(logging.WARNING)
+        logger.setLevel(logging.ERROR)  # Reduced from WARNING to ERROR for cleaner logs
 
     # Keep important loggers at INFO level
     important_loggers = [
@@ -298,13 +432,13 @@ def setup_logging():
         logger = logging.getLogger(logger_name)
         logger.setLevel(logging.INFO)
 
-    # Log enhanced configuration
+    # Log essential configuration only - reduced verbosity
     logging.info("✅ Enhanced logging configuration applied")
-    logging.info(f"📊 Performance Settings:")
-    logging.info(f"   Timeout: Bybit={BYBIT_TIMEOUT_SECONDS}s, API={API_DEFAULT_TIMEOUT}s")
-    logging.info(f"   HTTP Connections: Pool={HTTP_MAX_CONNECTIONS}, PerHost={HTTP_MAX_CONNECTIONS_PER_HOST}")
-    logging.info(f"   Connection Pool: Size={CONNECTION_POOL_SIZE}, MaxSize={CONNECTION_POOL_MAXSIZE}")
-    logging.info(f"   Rate Limiting: {API_RATE_LIMIT_CALLS_PER_SECOND} calls/sec")
+    logging.debug(f"📊 Performance Settings:")
+    logging.debug(f"   Timeout: Bybit={BYBIT_TIMEOUT_SECONDS}s, API={API_DEFAULT_TIMEOUT}s")
+    logging.debug(f"   HTTP Connections: Pool={HTTP_MAX_CONNECTIONS}, PerHost={HTTP_MAX_CONNECTIONS_PER_HOST}")
+    logging.debug(f"   Connection Pool: Size={CONNECTION_POOL_SIZE}, MaxSize={CONNECTION_POOL_MAXSIZE}")
+    logging.debug(f"   Rate Limiting: {API_RATE_LIMIT_CALLS_PER_SECOND} calls/sec")
 # --- Enhanced Market Analysis Configuration ---
 # Enable enhanced market status with real-time technical analysis
 ENABLE_ENHANCED_MARKET_ANALYSIS = os.getenv("ENABLE_ENHANCED_MARKET_ANALYSIS", "true").lower() == "true"
@@ -338,18 +472,18 @@ MARKET_STATUS_STRUCTURE_ANALYSIS = os.getenv("MARKET_STATUS_STRUCTURE_ANALYSIS",
 SUPPORT_RESISTANCE_LOOKBACK = int(os.getenv("SUPPORT_RESISTANCE_LOOKBACK", "100"))  # Number of candles to analyze
 SUPPORT_RESISTANCE_SENSITIVITY = float(os.getenv("SUPPORT_RESISTANCE_SENSITIVITY", "0.02"))  # 2% sensitivity
 
-# Enhanced market analysis logging
+# Enhanced market analysis logging - reduced verbosity
 if ENABLE_ENHANCED_MARKET_ANALYSIS:
-    logging.info("🔍 Enhanced Market Analysis Configuration:")
-    logging.info(f"   Market Data Cache TTL: {MARKET_DATA_CACHE_TTL}s")
-    logging.info(f"   Analysis Timeout: {MARKET_ANALYSIS_TIMEOUT}s")
-    logging.info(f"   Social Sentiment: {'Enabled' if ENABLE_SOCIAL_SENTIMENT_INTEGRATION else 'Disabled'}")
-    logging.info(f"   Min Confidence Threshold: {MARKET_ANALYSIS_MIN_CONFIDENCE}%")
-    logging.info(f"   Min Data Quality: {MARKET_DATA_MIN_QUALITY}%")
-    logging.info(f"   Regime Detection: {'Enabled' if REGIME_DETECTION_ENABLED else 'Disabled'}")
-    logging.info(f"   Primary Symbols: {', '.join(PRIMARY_MARKET_SYMBOLS[:3])}{'...' if len(PRIMARY_MARKET_SYMBOLS) > 3 else ''}")
+    logging.info("🔍 Enhanced Market Analysis enabled")
+    logging.debug(f"   Market Data Cache TTL: {MARKET_DATA_CACHE_TTL}s")
+    logging.debug(f"   Analysis Timeout: {MARKET_ANALYSIS_TIMEOUT}s")
+    logging.debug(f"   Social Sentiment: {'Enabled' if ENABLE_SOCIAL_SENTIMENT_INTEGRATION else 'Disabled'}")
+    logging.debug(f"   Min Confidence Threshold: {MARKET_ANALYSIS_MIN_CONFIDENCE}%")
+    logging.debug(f"   Min Data Quality: {MARKET_DATA_MIN_QUALITY}%")
+    logging.debug(f"   Regime Detection: {'Enabled' if REGIME_DETECTION_ENABLED else 'Disabled'}")
+    logging.debug(f"   Primary Symbols: {', '.join(PRIMARY_MARKET_SYMBOLS[:3])}{'...' if len(PRIMARY_MARKET_SYMBOLS) > 3 else ''}")
 
-    logging.info(f"   Circuit Breaker: {'Enabled' if ENABLE_CIRCUIT_BREAKER else 'Disabled'}")
+    logging.debug(f"   Circuit Breaker: {'Enabled' if ENABLE_CIRCUIT_BREAKER else 'Disabled'}")
 
 def get_environment_info() -> dict:
     """Get comprehensive environment information for debugging"""

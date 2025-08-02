@@ -65,15 +65,15 @@ Health: {mirror.health_emoji} {mirror.health_score:.0f}%"""
             return f"""<b>💡 POTENTIAL P&L ANALYSIS</b>
 
 <b>📍 MAIN</b> | <b>🪞 MIRROR</b>
-🎯 TP1: +${format_number(main.tp1_profit)} | +${format_number(mirror.tp1_profit)}
+🎯 TP: +${format_number(main.tp_profit)} | +${format_number(mirror.tp_profit)}
 💯 Full TP: +${format_number(main.all_tp_profit)} | +${format_number(mirror.all_tp_profit)}
 🛑 All SL: -${format_number(main.all_sl_loss)} | -${format_number(mirror.all_sl_loss)}
 📊 R:R: 1:{main.risk_reward_ratio:.1f} | 1:{mirror.risk_reward_ratio:.1f}"""
         else:
             # Single account P&L
             return f"""<b>💡 POTENTIAL P&L ANALYSIS</b>
-🎯 TP1 Orders ({main.tp1_coverage:.0f}%): <b>+${format_number(main.tp1_profit)}</b>
-💯 Full Positions @ TP1: +${format_number(main.tp1_full_profit)}
+🎯 TP Orders ({main.tp_coverage:.0f}%): <b>+${format_number(main.tp_profit)}</b>
+💯 Full Positions @ TP: +${format_number(main.tp_full_profit)}
 🚀 If All TPs Hit: +${format_number(main.all_tp_profit)}
 🛑 If All SL Hit: -${format_number(main.all_sl_loss)}
 📊 Risk:Reward = <b>1:{main.risk_reward_ratio:.1f}</b>"""

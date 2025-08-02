@@ -1,0 +1,605 @@
+{
+  "CYBERUSDT_Buy_main": {
+    "symbol": "CYBERUSDT",
+    "side": "Buy",
+    "entry_price": "1.676",
+    "position_size": "317.6",
+    "current_size": "105.8",
+    "remaining_size": "211.6",
+    "last_known_size": "105.8",
+    "initial_fill_processed": true,
+    "tp_orders": {
+      "f429ead8-8225-489f-81a7-efcea26dd26b": {
+        "order_id": "f429ead8-8225-489f-81a7-efcea26dd26b",
+        "order_link_id": "BOT_CONS_CYBERUSDT_TP1_164224",
+        "price": "1.814",
+        "quantity": "89.9",
+        "original_quantity": "89.9",
+        "percentage": 85,
+        "tp_number": 1,
+        "account": "main"
+      },
+      "283c7cad-9e44-45e1-ba10-ee1fec3fdc21": {
+        "order_id": "283c7cad-9e44-45e1-ba10-ee1fec3fdc21",
+        "order_link_id": "BOT_CONS_CYBERUSDT_TP2_164225",
+        "price": "1.874",
+        "quantity": "5.2",
+        "original_quantity": "5.2",
+        "percentage": 5,
+        "tp_number": 2,
+        "account": "main"
+      },
+      "b74515ca-6e13-431d-b707-98ed94b7e982": {
+        "order_id": "b74515ca-6e13-431d-b707-98ed94b7e982",
+        "order_link_id": "BOT_CONS_CYBERUSDT_TP3_164225",
+        "price": "1.880",
+        "quantity": "5.2",
+        "original_quantity": "5.2",
+        "percentage": 5,
+        "tp_number": 3,
+        "account": "main"
+      },
+      "dc96656b-a12d-40ed-9d93-ed2ae89125c5": {
+        "order_id": "dc96656b-a12d-40ed-9d93-ed2ae89125c5",
+        "order_link_id": "BOT_CONS_CYBERUSDT_TP4_164227",
+        "price": "1.978",
+        "quantity": "5.2",
+        "original_quantity": "5.2",
+        "percentage": 5,
+        "tp_number": 4,
+        "account": "main"
+      }
+    },
+    "sl_order": {
+      "order_id": "71137116-3545-4639-8b8d-f22653d3f3dc",
+      "order_link_id": "BOT_CONS_CYBERUSDT_SL_164227",
+      "price": "1.599",
+      "quantity": "317.6",
+      "original_quantity": "317.6",
+      "covers_full_position": true,
+      "target_position_size": "317.6",
+      "account": "main"
+    },
+    "filled_tps": [],
+    "approach": "conservative",
+    "chat_id": 5634913742,
+    "created_at": 1753710149.641854,
+    "last_check": 1753726755.009856,
+    "sl_moved_to_be": false,
+    "limit_orders": [
+      {
+        "order_id": "1ea3c39a-bd25-4e28-9a31-f1fc964862e8",
+        "registered_at": 1753710153.332793,
+        "status": "ACTIVE",
+        "price": "1.641",
+        "quantity": "105.8",
+        "filled_qty": "0",
+        "order_link_id": "BOT_CONS_adcb6fea_LIMIT3",
+        "side": "Buy",
+        "order_type": "Limit",
+        "avg_fill_price": ""
+      }
+    ],
+    "limit_orders_filled": 0,
+    "phase": "BUILDING",
+    "tp1_hit": false,
+    "phase_transition_time": null,
+    "total_tp_filled": "0",
+    "cleanup_completed": false,
+    "bot_instance": null,
+    "account_type": "main",
+    "final_tp_order_id": "dc96656b-a12d-40ed-9d93-ed2ae89125c5",
+    "sl_hit": false,
+    "all_tps_filled": false,
+    "limit_orders_active": 1,
+    "limit_order_update_time": 1753726754.596525
+  },
+  "CYBERUSDT_Buy_mirror": {
+    "symbol": "CYBERUSDT",
+    "side": "Buy",
+    "position_size": "249.3",
+    "remaining_size": "166.2",
+    "entry_price": "1.676",
+    "avg_price": "1.676",
+    "approach": "conservative",
+    "tp_orders": {
+      "9fb95d69-050a-48e3-9de9-8a4012d4606a": {
+        "order_id": "9fb95d69-050a-48e3-9de9-8a4012d4606a",
+        "order_link_id": "MIR_TP4_CYBERUSDT_1753710163059",
+        "price": "1.814",
+        "quantity": "70.6",
+        "tp_level": 4,
+        "tp_number": 1,
+        "percentage": 85
+      },
+      "01118bb2-7ebf-4087-b6b9-33891c461d96": {
+        "order_id": "01118bb2-7ebf-4087-b6b9-33891c461d96",
+        "order_link_id": "MIR_TP4_CYBERUSDT_1753710164128",
+        "price": "1.874",
+        "quantity": "4.1",
+        "tp_level": 4,
+        "tp_number": 2,
+        "percentage": 5
+      },
+      "83b19375-d42b-485f-8535-3328dae1cf90": {
+        "order_id": "83b19375-d42b-485f-8535-3328dae1cf90",
+        "order_link_id": "MIR_TP4_CYBERUSDT_1753710165210",
+        "price": "1.880",
+        "quantity": "4.1",
+        "tp_level": 4,
+        "tp_number": 3,
+        "percentage": 5
+      },
+      "5a8d73d7-a545-4917-9186-546cbc8918c7": {
+        "order_id": "5a8d73d7-a545-4917-9186-546cbc8918c7",
+        "order_link_id": "MIR_TP4_CYBERUSDT_1753710166287",
+        "price": "1.978",
+        "quantity": "4.1",
+        "tp_level": 4,
+        "tp_number": 4,
+        "percentage": 5
+      }
+    },
+    "sl_order": {
+      "order_id": "f0276a68-1d6a-4e84-b69a-1d32f6079649",
+      "order_link_id": "MIR_SL_CYBERUSDT_1753710168224",
+      "price": "1.599",
+      "quantity": "249.3",
+      "original_quantity": "249.3",
+      "covers_full_position": true,
+      "target_position_size": "249.3",
+      "account": "mirror"
+    },
+    "filled_tps": [],
+    "cancelled_limits": false,
+    "tp1_hit": false,
+    "tp1_info": null,
+    "sl_moved_to_be": false,
+    "sl_move_attempts": 0,
+    "created_at": 1753710153.3343098,
+    "last_check": 1753726785.959269,
+    "limit_orders": [
+      {
+        "order_id": "a99819ca-9ea6-4fc4-a656-3eca4e63930d",
+        "registered_at": 1753710177.717972,
+        "status": "ACTIVE",
+        "price": "1.641",
+        "quantity": "83.1",
+        "filled_qty": "0",
+        "order_link_id": "BOT_CONS_adcb6fea_LIMIT3_MIRROR_141974",
+        "side": "Buy",
+        "order_type": "Limit",
+        "avg_fill_price": ""
+      }
+    ],
+    "limit_orders_cancelled": false,
+    "phase": "MONITORING",
+    "chat_id": 5634913742,
+    "account_type": "mirror",
+    "has_mirror": true,
+    "target_size": "249.3",
+    "limit_orders_filled": 0,
+    "limit_orders_active": 1,
+    "limit_order_update_time": 1753726784.8707242
+  },
+  "ZROUSDT_Sell_main": {
+    "symbol": "ZROUSDT",
+    "side": "Sell",
+    "entry_price": "2.033933333333333333333333333",
+    "position_size": "254.6",
+    "current_size": "84.8",
+    "remaining_size": "84.8",
+    "last_known_size": "84.8",
+    "initial_fill_processed": true,
+    "tp_orders": {
+      "463099a4-4fa6-4c8e-9d23-58f2d55f1dbb": {
+        "order_id": "463099a4-4fa6-4c8e-9d23-58f2d55f1dbb",
+        "order_link_id": "BOT_CONS_ZROUSDT_TP1_170318",
+        "price": "1.8690",
+        "quantity": "72.0",
+        "original_quantity": "72.0",
+        "percentage": 85,
+        "tp_number": 1,
+        "account": "main"
+      },
+      "627b9a9b-fd12-4878-af57-2261224cfcc0": {
+        "order_id": "627b9a9b-fd12-4878-af57-2261224cfcc0",
+        "order_link_id": "BOT_CONS_ZROUSDT_TP2_170319",
+        "price": "1.7727",
+        "quantity": "4.2",
+        "original_quantity": "4.2",
+        "percentage": 5,
+        "tp_number": 2,
+        "account": "main"
+      },
+      "404750c9-7744-4739-9c59-2c615e012ddd": {
+        "order_id": "404750c9-7744-4739-9c59-2c615e012ddd",
+        "order_link_id": "BOT_CONS_ZROUSDT_TP3_170319",
+        "price": "1.6764",
+        "quantity": "4.2",
+        "original_quantity": "4.2",
+        "percentage": 5,
+        "tp_number": 3,
+        "account": "main"
+      },
+      "98df0171-2904-499c-b280-e5b3876ed605": {
+        "order_id": "98df0171-2904-499c-b280-e5b3876ed605",
+        "order_link_id": "BOT_CONS_ZROUSDT_TP4_170320",
+        "price": "1.3874",
+        "quantity": "4.2",
+        "original_quantity": "4.2",
+        "percentage": 5,
+        "tp_number": 4,
+        "account": "main"
+      }
+    },
+    "sl_order": {
+      "order_id": "ce42ad4e-a9eb-422f-9234-270c27fad7fd",
+      "order_link_id": "BOT_CONS_ZROUSDT_SL_170321",
+      "price": "2.2220",
+      "quantity": "254.6",
+      "original_quantity": "254.6",
+      "covers_full_position": true,
+      "target_position_size": "254.6",
+      "account": "main"
+    },
+    "filled_tps": [],
+    "approach": "conservative",
+    "chat_id": 5634913742,
+    "created_at": 1753711403.1331892,
+    "last_check": 1753726764.902755,
+    "sl_moved_to_be": false,
+    "limit_orders": [
+      {
+        "order_id": "d12e60a8-2460-407c-8862-be0ff3b68c37",
+        "registered_at": 1753711405.821955,
+        "status": "ACTIVE",
+        "price": "2.0414",
+        "quantity": "84.8",
+        "filled_qty": "0",
+        "avg_fill_price": "",
+        "order_link_id": "BOT_CONS_d3c1656e_LIMIT2"
+      },
+      {
+        "order_id": "8dede0ae-a190-4784-8560-b2ecf90134af",
+        "registered_at": 1753711405.822669,
+        "status": "ACTIVE",
+        "price": "2.0946",
+        "quantity": "84.8",
+        "filled_qty": "0",
+        "avg_fill_price": "",
+        "order_link_id": "BOT_CONS_d3c1656e_LIMIT3"
+      }
+    ],
+    "limit_orders_filled": 0,
+    "phase": "BUILDING",
+    "tp1_hit": false,
+    "phase_transition_time": null,
+    "total_tp_filled": "0",
+    "cleanup_completed": false,
+    "bot_instance": null,
+    "account_type": "main",
+    "final_tp_order_id": "98df0171-2904-499c-b280-e5b3876ed605",
+    "sl_hit": false,
+    "all_tps_filled": false,
+    "limit_orders_active": 2,
+    "limit_order_update_time": 1753726764.528824
+  },
+  "ZROUSDT_Sell_mirror": {
+    "symbol": "ZROUSDT",
+    "side": "Sell",
+    "position_size": "200.1",
+    "remaining_size": "66.7",
+    "entry_price": "2.033933333333333333333333333",
+    "avg_price": "2.033933333333333333333333333",
+    "approach": "conservative",
+    "tp_orders": {
+      "fd20536f-1b9c-42ab-8be6-fe2d1c094ed8": {
+        "order_id": "fd20536f-1b9c-42ab-8be6-fe2d1c094ed8",
+        "order_link_id": "MIR_TP4_ZROUSDT_1753711414248",
+        "price": "1.8690",
+        "quantity": "56.6",
+        "tp_level": 4,
+        "tp_number": 1,
+        "percentage": 85
+      },
+      "a8a9aee3-de12-4973-8bcc-031fea06864f": {
+        "order_id": "a8a9aee3-de12-4973-8bcc-031fea06864f",
+        "order_link_id": "MIR_TP4_ZROUSDT_1753711415344",
+        "price": "1.7727",
+        "quantity": "3.3",
+        "tp_level": 4,
+        "tp_number": 2,
+        "percentage": 5
+      },
+      "837bd27e-d476-467e-85eb-618487b78830": {
+        "order_id": "837bd27e-d476-467e-85eb-618487b78830",
+        "order_link_id": "MIR_TP4_ZROUSDT_1753711415728",
+        "price": "1.6764",
+        "quantity": "3.3",
+        "tp_level": 4,
+        "tp_number": 3,
+        "percentage": 5
+      },
+      "5ec9113f-eb9c-407a-a3eb-826fe8d8782f": {
+        "order_id": "5ec9113f-eb9c-407a-a3eb-826fe8d8782f",
+        "order_link_id": "MIR_TP4_ZROUSDT_1753711416138",
+        "price": "1.3874",
+        "quantity": "3.3",
+        "tp_level": 4,
+        "tp_number": 4,
+        "percentage": 5
+      }
+    },
+    "sl_order": {
+      "order_id": "9a116a65-378f-4e44-9555-7d34d63c5b7f",
+      "order_link_id": "MIR_SL_ZROUSDT_1753711419019",
+      "price": "2.2220",
+      "quantity": "200.1",
+      "original_quantity": "200.1",
+      "covers_full_position": true,
+      "target_position_size": "200.1",
+      "account": "mirror"
+    },
+    "filled_tps": [],
+    "cancelled_limits": false,
+    "tp1_hit": false,
+    "tp1_info": null,
+    "sl_moved_to_be": false,
+    "sl_move_attempts": 0,
+    "created_at": 1753711405.825068,
+    "last_check": 1753726783.7663832,
+    "limit_orders": [
+      {
+        "order_id": "9afcc99d-46ec-46eb-890e-491b1cfa7b80",
+        "registered_at": 1753711426.138112,
+        "status": "ACTIVE",
+        "price": "2.0414",
+        "quantity": "66.7",
+        "filled_qty": "0",
+        "order_link_id": "BOT_CONS_d3c1656e_LIMIT2_MIRROR_395773",
+        "side": "Sell",
+        "order_type": "Limit",
+        "avg_fill_price": ""
+      },
+      {
+        "order_id": "2996590f-652c-484e-9160-247e196285d7",
+        "registered_at": 1753711426.138342,
+        "status": "ACTIVE",
+        "price": "2.0946",
+        "quantity": "66.7",
+        "filled_qty": "0",
+        "order_link_id": "BOT_CONS_d3c1656e_LIMIT3_MIRROR_396534",
+        "side": "Sell",
+        "order_type": "Limit",
+        "avg_fill_price": ""
+      }
+    ],
+    "limit_orders_cancelled": false,
+    "phase": "MONITORING",
+    "chat_id": 5634913742,
+    "account_type": "mirror",
+    "has_mirror": true,
+    "target_size": "200.1",
+    "limit_orders_filled": 0,
+    "limit_orders_active": 2,
+    "limit_order_update_time": 1753726783.359458
+  },
+  "NTRNUSDT_Sell_main": {
+    "symbol": "NTRNUSDT",
+    "side": "Sell",
+    "entry_price": "0.1035333333333333333333333333",
+    "position_size": "7554",
+    "current_size": "2518",
+    "remaining_size": "2518",
+    "last_known_size": "2518",
+    "initial_fill_processed": true,
+    "tp_orders": {
+      "5e1af2e7-8f6c-4f3b-86b9-0deec7d93c22": {
+        "order_id": "5e1af2e7-8f6c-4f3b-86b9-0deec7d93c22",
+        "order_link_id": "BOT_CONS_NTRNUSDT_TP1_210242",
+        "price": "0.0965",
+        "quantity": "2140",
+        "original_quantity": "2140",
+        "percentage": 85,
+        "tp_number": 1,
+        "account": "main"
+      },
+      "f2295ec6-2814-4607-b149-51b5b134faac": {
+        "order_id": "f2295ec6-2814-4607-b149-51b5b134faac",
+        "order_link_id": "BOT_CONS_NTRNUSDT_TP2_210243",
+        "price": "0.0917",
+        "quantity": "125",
+        "original_quantity": "125",
+        "percentage": 5,
+        "tp_number": 2,
+        "account": "main"
+      },
+      "6921fa68-a018-4732-ac49-82e36803b927": {
+        "order_id": "6921fa68-a018-4732-ac49-82e36803b927",
+        "order_link_id": "BOT_CONS_NTRNUSDT_TP3_210244",
+        "price": "0.0868",
+        "quantity": "125",
+        "original_quantity": "125",
+        "percentage": 5,
+        "tp_number": 3,
+        "account": "main"
+      },
+      "7db71a4b-b24a-4bfa-869f-d9c0d7cc5467": {
+        "order_id": "7db71a4b-b24a-4bfa-869f-d9c0d7cc5467",
+        "order_link_id": "BOT_CONS_NTRNUSDT_TP4_210245",
+        "price": "0.0722",
+        "quantity": "125",
+        "original_quantity": "125",
+        "percentage": 5,
+        "tp_number": 4,
+        "account": "main"
+      }
+    },
+    "sl_order": {
+      "order_id": "57ff0425-ca72-427a-81c3-33366263cf5d",
+      "order_link_id": "BOT_CONS_NTRNUSDT_SL_210246",
+      "price": "0.1116",
+      "quantity": "7554",
+      "original_quantity": "7554",
+      "covers_full_position": true,
+      "target_position_size": "7554",
+      "account": "main"
+    },
+    "filled_tps": [],
+    "approach": "conservative",
+    "chat_id": 5634913742,
+    "created_at": 1753725771.56028,
+    "last_check": 1753726754.602518,
+    "sl_moved_to_be": false,
+    "limit_orders": [
+      {
+        "order_id": "905aef7f-a448-4e68-9eb3-84a59b2311cf",
+        "registered_at": 1753725774.632256,
+        "status": "ACTIVE",
+        "price": "0.1035",
+        "quantity": "2518",
+        "filled_qty": "0",
+        "avg_fill_price": "",
+        "order_link_id": "BOT_CONS_d0b6af91_LIMIT2"
+      },
+      {
+        "order_id": "b95ea3e1-1476-46e9-ad4f-344bca396821",
+        "registered_at": 1753725774.632515,
+        "status": "ACTIVE",
+        "price": "0.1059",
+        "quantity": "2518",
+        "filled_qty": "0",
+        "avg_fill_price": "",
+        "order_link_id": "BOT_CONS_d0b6af91_LIMIT3"
+      }
+    ],
+    "limit_orders_filled": 0,
+    "phase": "BUILDING",
+    "tp1_hit": false,
+    "phase_transition_time": null,
+    "total_tp_filled": "0",
+    "cleanup_completed": false,
+    "bot_instance": null,
+    "account_type": "main",
+    "final_tp_order_id": "7db71a4b-b24a-4bfa-869f-d9c0d7cc5467",
+    "sl_hit": false,
+    "all_tps_filled": false,
+    "limit_orders_active": 2,
+    "limit_order_update_time": 1753726750.880681
+  },
+  "NTRNUSDT_Sell": {
+    "symbol": "NTRNUSDT",
+    "side": "Sell",
+    "chat_id": 5634913742,
+    "approach": "conservative",
+    "account_type": "mirror",
+    "dashboard_key": "5634913742_NTRNUSDT_conservative_mirror",
+    "entry_price": 0,
+    "position_size": 0,
+    "stop_loss": 0,
+    "take_profits": [],
+    "created_at": 1753725788.197967,
+    "system_type": "enhanced_tp_sl"
+  },
+  "NTRNUSDT_Sell_mirror": {
+    "symbol": "NTRNUSDT",
+    "side": "Sell",
+    "position_size": "5937",
+    "remaining_size": "1979",
+    "entry_price": "0.1035333333333333333333333333",
+    "avg_price": "0.1035333333333333333333333333",
+    "approach": "conservative",
+    "tp_orders": {
+      "ed48a767-99aa-4564-bdc5-6615c455f0c9": {
+        "order_id": "ed48a767-99aa-4564-bdc5-6615c455f0c9",
+        "order_link_id": "MIR_TP4_NTRNUSDT_1753725783895",
+        "price": "0.0965",
+        "quantity": "1682",
+        "tp_level": 4,
+        "tp_number": 1,
+        "percentage": 85
+      },
+      "77266c47-220f-497c-9fe9-9283226a0751": {
+        "order_id": "77266c47-220f-497c-9fe9-9283226a0751",
+        "order_link_id": "MIR_TP4_NTRNUSDT_1753725784262",
+        "price": "0.0917",
+        "quantity": "98",
+        "tp_level": 4,
+        "tp_number": 2,
+        "percentage": 5
+      },
+      "38bc2fa2-1426-42aa-a9b2-832d6654d677": {
+        "order_id": "38bc2fa2-1426-42aa-a9b2-832d6654d677",
+        "order_link_id": "MIR_TP4_NTRNUSDT_1753725784637",
+        "price": "0.0868",
+        "quantity": "98",
+        "tp_level": 4,
+        "tp_number": 3,
+        "percentage": 5
+      },
+      "0990fab2-b502-43ef-8a5e-5f23f5d65983": {
+        "order_id": "0990fab2-b502-43ef-8a5e-5f23f5d65983",
+        "order_link_id": "MIR_TP4_NTRNUSDT_1753725786050",
+        "price": "0.0722",
+        "quantity": "98",
+        "tp_level": 4,
+        "tp_number": 4,
+        "percentage": 5
+      }
+    },
+    "sl_order": {
+      "order_id": "9eec06c9-6a1c-4309-b1dc-7d2c22586e49",
+      "order_link_id": "MIR_SL_NTRNUSDT_1753725786782",
+      "price": "0.1116",
+      "quantity": "5937",
+      "original_quantity": "5937",
+      "covers_full_position": true,
+      "target_position_size": "5937",
+      "account": "mirror"
+    },
+    "filled_tps": [],
+    "cancelled_limits": false,
+    "tp1_hit": false,
+    "tp1_info": null,
+    "sl_moved_to_be": false,
+    "sl_move_attempts": 0,
+    "created_at": 1753725774.6346729,
+    "last_check": 1753726768.460215,
+    "limit_orders": [
+      {
+        "order_id": "26ffbb46-9ceb-4eaa-b32b-0192f92b7550",
+        "registered_at": 1753725795.7872121,
+        "status": "ACTIVE",
+        "price": "0.1035",
+        "quantity": "1979",
+        "filled_qty": "0",
+        "order_link_id": "BOT_CONS_d0b6af91_LIMIT2_MIRROR_759522",
+        "side": "Sell",
+        "order_type": "Limit",
+        "avg_fill_price": ""
+      },
+      {
+        "order_id": "4407b434-da4d-4c6e-862e-4b1d39066dd6",
+        "registered_at": 1753725795.7874382,
+        "status": "ACTIVE",
+        "price": "0.1059",
+        "quantity": "1979",
+        "filled_qty": "0",
+        "order_link_id": "BOT_CONS_d0b6af91_LIMIT3_MIRROR_760966",
+        "side": "Sell",
+        "order_type": "Limit",
+        "avg_fill_price": ""
+      }
+    ],
+    "limit_orders_cancelled": false,
+    "phase": "MONITORING",
+    "chat_id": 5634913742,
+    "account_type": "mirror",
+    "has_mirror": true,
+    "target_size": "5937",
+    "limit_orders_filled": 0,
+    "limit_orders_active": 2,
+    "limit_order_update_time": 1753726768.0874581
+  }
+}

@@ -606,7 +606,7 @@ async def cancel_remaining_conservative_limits_only(chat_data: dict, symbol: str
                 await send_trade_alert(
                     bot=ctx_app.bot,
                     chat_id=chat_id,
-                    alert_type="tp1_with_fills",
+                    alert_type="tp_with_fills",
                     symbol=symbol,
                     side=side,
                     approach=approach,
@@ -704,7 +704,7 @@ async def cancel_conservative_orders_on_tp1_hit(chat_data: dict, symbol: str, ct
                 await send_trade_alert(
                     bot=ctx_app.bot,
                     chat_id=chat_id,
-                    alert_type="tp1_early_hit",
+                    alert_type="tp_early_hit",
                     symbol=symbol,
                     side=side,
                     approach=approach,
@@ -3509,7 +3509,7 @@ async def cancel_conservative_orders_on_tp1_hit(chat_data: dict, symbol: str, ct
                 await send_trade_alert(
                     bot=ctx_app.bot,
                     chat_id=chat_id,
-                    alert_type="tp1_early_hit",
+                    alert_type="tp_early_hit",
                     symbol=symbol,
                     side=side,
                     approach=approach,
@@ -3574,7 +3574,7 @@ async def cancel_remaining_conservative_limits_only(chat_data: dict, symbol: str
                 await send_trade_alert(
                     bot=ctx_app.bot,
                     chat_id=chat_id,
-                    alert_type="tp1_with_fills",
+                    alert_type="tp_with_fills",
                     symbol=symbol,
                     side=side,
                     approach=approach,

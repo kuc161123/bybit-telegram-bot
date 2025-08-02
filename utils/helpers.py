@@ -36,10 +36,8 @@ def get_field_emoji_and_name(field_key: str) -> str:
         PRIMARY_ENTRY_PRICE: f"{get_emoji('target')} Primary Entry",
         LIMIT_ENTRY_1_PRICE: f"📥 L1 Entry ({ENTRY_PORTION_ALLOCATION[1]*100:.0f}%)",
         LIMIT_ENTRY_2_PRICE: f"📥 L2 Entry ({ENTRY_PORTION_ALLOCATION[2]*100:.0f}%)",
-        TP1_PRICE: f"{get_emoji('target')} TP1 ({TP_PERCENTAGES[0]*100:.0f}%)",
-        TP2_PRICE: f"{get_emoji('target')} TP2 ({TP_PERCENTAGES[1]*100:.0f}%)",
-        TP3_PRICE: f"{get_emoji('target')} TP3 ({TP_PERCENTAGES[2]*100:.0f}%)",
-        TP4_PRICE: f"{get_emoji('target')} TP4 ({TP_PERCENTAGES[3]*100:.0f}%)",
+        TP_PRICE: f"{get_emoji('target')} Take Profit ({TP_PERCENTAGES[0]*100:.0f}%)",  # Single TP approach only
+        TP1_PRICE: f"{get_emoji('target')} Take Profit ({TP_PERCENTAGES[0]*100:.0f}%)",  # Legacy alias
         SL_PRICE: f"{get_emoji('shield')} Stop Loss",
         MAX_LEVERAGE_FOR_SYMBOL: f"{get_emoji('chart')} Max Leverage",
         MARGIN_INPUT_TYPE: f"{get_emoji('money')} Margin Type",
@@ -239,7 +237,7 @@ def initialize_chat_data(chat_data: Dict[str, Any]):
         SYMBOL: "BTCUSDT", SIDE: "Buy", MARGIN_INPUT_TYPE: None, MARGIN_PERCENTAGE_VALUE: None,
         MARGIN_AMOUNT: None, LEVERAGE: None, MAX_LEVERAGE_FOR_SYMBOL: None, ORDER_STRATEGY: None,
         PRIMARY_ENTRY_PRICE: None, LIMIT_ENTRY_1_PRICE: None, LIMIT_ENTRY_2_PRICE: None,
-        TP1_PRICE: None, TP2_PRICE: None, TP3_PRICE: None, TP4_PRICE: None, SL_PRICE: None,
+        TP_PRICE: None, TP1_PRICE: None, SL_PRICE: None,  # Single TP approach with legacy compatibility
         AWAITING_INPUT_FOR: None, LAST_UI_MESSAGE_ID: None, POSITION_IDX: 0,
         PLACED_LIMIT_ENTRY_IDS: [], INITIAL_MARKET_FILL_QTY: Decimal("0"),
         INITIAL_AVG_ENTRY_PRICE: Decimal("0"), ACTIVE_MONITOR_TASK: {},
@@ -259,7 +257,7 @@ def initialize_chat_data(chat_data: Dict[str, Any]):
         # FIXED: Type conversions for specific fields with better error handling
         val_dec_fields = [
             MARGIN_AMOUNT, MARGIN_PERCENTAGE_VALUE, PRIMARY_ENTRY_PRICE, LIMIT_ENTRY_1_PRICE,
-            LIMIT_ENTRY_2_PRICE, TP1_PRICE, TP2_PRICE, TP3_PRICE, TP4_PRICE, SL_PRICE,
+            LIMIT_ENTRY_2_PRICE, TP_PRICE, SL_PRICE,  # Single TP approach only
             INITIAL_MARKET_FILL_QTY, INITIAL_AVG_ENTRY_PRICE, USER_OVERRIDE_MARGIN_VALUE_FIXED,
             USER_OVERRIDE_MARGIN_VALUE_PERCENTAGE, MAX_LEVERAGE_FOR_SYMBOL, INSTRUMENT_TICK_SIZE,
             INSTRUMENT_QTY_STEP, MIN_ORDER_QTY, MIN_ORDER_NOTIONAL_VALUE, LAST_KNOWN_POSITION_SIZE
@@ -604,7 +602,8 @@ def validate_trade_execution_data(chat_data: dict) -> Dict[str, Any]:
         SIDE: "Trade direction (Buy/Sell)",
         MARGIN_AMOUNT: "Margin amount",
         LEVERAGE: "Leverage",
-        TP1_PRICE: "Take profit price",
+        TP_PRICE: "Take profit price",
+        TP1_PRICE: "Take profit price",  # Legacy alias
         SL_PRICE: "Stop loss price"
     }
 

@@ -523,7 +523,7 @@ async def get_active_tp_sl_orders(symbol: str) -> List[Dict]:
                     is_tp_sl = True
 
                 # Method 3: Has TP/SL pattern in orderLinkId (even if other fields missing)
-                elif any(pattern in order_link_id for pattern in ["_TP", "_SL", "TP1", "TP2", "TP3", "TP4", "SL"]):
+                elif any(pattern in order_link_id for pattern in ["_TP", "_SL", "TP", "SL"]) or any(f"TP{i}" in order_link_id for i in range(1, 5)):  # Single TP approach with legacy support
                     is_tp_sl = True
 
                 if is_tp_sl:
@@ -1366,7 +1366,7 @@ def extract_trade_group_id(order: Dict) -> Optional[str]:
     """
     Extract trade group ID from order if present
 
-    Conservative approach orders should have orderLinkId like: "groupid_TP1", "groupid_LIMIT1", etc.
+    Conservative approach orders should have orderLinkId like: "groupid_TP", "groupid_LIMIT1", etc.
     """
     order_link_id = order.get("orderLinkId", "")
     if not order_link_id:
@@ -1381,7 +1381,7 @@ def extract_trade_group_id(order: Dict) -> Optional[str]:
             order_type = "_".join(parts[1:])
 
             # Validate this looks like a valid trade group pattern
-            valid_order_types = ["TP1", "TP2", "TP3", "TP4", "SL", "LIMIT1", "LIMIT2", "LIMIT3"]
+            valid_order_types = ["TP", "SL", "LIMIT1", "LIMIT2", "LIMIT3"]  # Single TP approach only
             if order_type in valid_order_types:
                 return group_id
 
@@ -1400,7 +1400,7 @@ def classify_order_type(order: Dict) -> str:
 
     # Check for TP/SL by orderLinkId first (most reliable for our bot)
     if order_link_id:
-        if any(tp in order_link_id for tp in ["_TP1", "_TP2", "_TP3", "_TP4"]):
+        if "_TP" in order_link_id or "_TP1" in order_link_id:  # Single TP approach with legacy support
             return "tp"
         if "_SL" in order_link_id:
             return "sl"
@@ -1856,7 +1856,7 @@ async def calculate_potential_pnl_for_positions() -> Dict[str, Any]:
     Enhanced calculation of potential P&L scenarios for all active positions
 
     Calculates:
-    - TP1 only profit (if all positions hit their first TP)
+    - TP only profit (if all positions hit their take profit)
     - All TPs profit (maximum profit if all TPs are hit)
     - SL loss (if all positions hit their stop loss)
     - Current unrealized P&L
@@ -1936,7 +1936,7 @@ async def calculate_potential_pnl_for_positions() -> Dict[str, Any]:
                 elif stop_order_type == "StopLoss":
                     is_sl_order = True
                 # Method 2: Check orderLinkId patterns
-                elif any(tp_pattern in order_link_id for tp_pattern in ["_TP", "TP1", "TP2", "TP3", "TP4"]):
+                elif any(tp_pattern in order_link_id for tp_pattern in ["_TP", "TP1"]):  # Single TP approach only
                     is_tp_order = True
                 elif "_SL" in order_link_id:
                     is_sl_order = True
@@ -2122,7 +2122,7 @@ async def get_detailed_order_info(symbol: str) -> Dict[str, Any]:
 
             # Check if it's a TP order
             if (order.get("stopOrderType") == "TakeProfit" or
-                any(tp in order.get("orderLinkId", "") for tp in ["_TP", "TP1", "TP2", "TP3", "TP4"])):
+                any(tp in order.get("orderLinkId", "") for tp in ["_TP", "TP1"])):  # Single TP approach only
                 tp_orders.append(order_info)
                 is_categorized = True
 

@@ -1,0 +1,138 @@
+{
+  "name": "Bybit Telegram Trading Bot",
+  "description": "Advanced Telegram bot for automated Bybit trading with Enhanced TP/SL management, Mirror Trading, and AI-powered market analysis",
+  "repository": "https://github.com/YOUR_USERNAME/bybit-telegram-bot",
+  "logo": "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/python/python-original.svg",
+  "keywords": [
+    "trading",
+    "bybit",
+    "telegram",
+    "bot",
+    "cryptocurrency",
+    "automated-trading",
+    "ai",
+    "python"
+  ],
+  "stack": "container",
+  "website": "https://github.com/YOUR_USERNAME/bybit-telegram-bot",
+  "env": {
+    "TELEGRAM_TOKEN": {
+      "description": "Your Telegram Bot Token from @BotFather",
+      "required": true
+    },
+    "BYBIT_API_KEY": {
+      "description": "Your Bybit API Key (with derivatives trading permission)",
+      "required": true
+    },
+    "BYBIT_API_SECRET": {
+      "description": "Your Bybit API Secret",
+      "required": true
+    },
+    "USE_TESTNET": {
+      "description": "Use Bybit testnet (true) or live trading (false)",
+      "value": "false",
+      "required": false
+    },
+    "OPENAI_API_KEY": {
+      "description": "OpenAI API Key for AI features (optional but recommended)",
+      "required": false
+    },
+    "LLM_PROVIDER": {
+      "description": "AI provider to use",
+      "value": "openai",
+      "required": false
+    },
+    "ENABLE_GPT4_REASONING": {
+      "description": "Enable GPT-4 reasoning for enhanced market analysis",
+      "value": "true",
+      "required": false
+    },
+    "BYBIT_API_KEY_2": {
+      "description": "Second Bybit API Key for mirror trading (optional)",
+      "required": false
+    },
+    "BYBIT_API_SECRET_2": {
+      "description": "Second Bybit API Secret for mirror trading (optional)",
+      "required": false
+    },
+    "REDDIT_CLIENT_ID": {
+      "description": "Reddit API Client ID for sentiment analysis (optional)",
+      "required": false
+    },
+    "REDDIT_CLIENT_SECRET": {
+      "description": "Reddit API Client Secret for sentiment analysis (optional)",
+      "required": false
+    },
+    "TWITTER_BEARER_TOKEN": {
+      "description": "Twitter Bearer Token for sentiment analysis (optional)",
+      "required": false
+    },
+    "YOUTUBE_API_KEY": {
+      "description": "YouTube Data API Key for sentiment analysis (optional)",
+      "required": false
+    },
+    "LOG_LEVEL": {
+      "description": "Logging level",
+      "value": "INFO",
+      "required": false
+    },
+    "ENABLE_ENHANCED_TP_SL": {
+      "description": "Enable enhanced TP/SL monitoring system",
+      "value": "true",
+      "required": false
+    },
+    "CANCEL_LIMITS_ON_TP1": {
+      "description": "Cancel unfilled limit orders when TP1 hits",
+      "value": "true",
+      "required": false
+    },
+    "DYNAMIC_FEE_CALCULATION": {
+      "description": "Use dynamic fee rates instead of fixed",
+      "value": "true",
+      "required": false
+    },
+    "BREAKEVEN_FAILSAFE_ENABLED": {
+      "description": "Enable comprehensive breakeven protection",
+      "value": "true",
+      "required": false
+    },
+    "ENABLE_ENHANCED_MARKET_ANALYSIS": {
+      "description": "Enable real-time market analysis",
+      "value": "true",
+      "required": false
+    },
+    "HTTP_MAX_CONNECTIONS": {
+      "description": "Maximum HTTP connections for performance",
+      "value": "600",
+      "required": false
+    },
+    "HTTP_MAX_CONNECTIONS_PER_HOST": {
+      "description": "Maximum HTTP connections per host",
+      "value": "150",
+      "required": false
+    },
+    "ENABLE_CIRCUIT_BREAKER": {
+      "description": "Enable circuit breaker for API protection",
+      "value": "true",
+      "required": false
+    },
+    "ENABLE_PERIODIC_MONITOR_CLEANUP": {
+      "description": "Enable automatic cleanup of stale monitors",
+      "value": "true",
+      "required": false
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "image": "heroku/python",
+  "addons": [],
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ]
+}

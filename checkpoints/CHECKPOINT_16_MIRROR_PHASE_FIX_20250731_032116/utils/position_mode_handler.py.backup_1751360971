@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""
+Position Mode Handler - Ensures all orders handle position mode correctly.
+This module intercepts order placement and automatically adds positionIdx when needed.
+Works without restart by monkey-patching the Bybit client methods.
+"""
+
+import logging
+from typing import Dict, Any, Optional
+from functools import wraps
+
+logger = logging.getLogger(__name__)
+
+
+class PositionModeHandler:
+    """Handles position mode detection and automatic parameter injection."""
+    
+    def __init__(self):
+        self.position_mode_cache = {}  # Cache position modes by symbol
+        self.enabled = True
+        self.positions_cache = {}  # Cache position data including positionIdx
+        
+    def detect_position_mode(self, client, symbol: str) -> Optional[int]:
+        """Detect the position index for a symbol."""
+        try:
+            # Check cache first
+            cache_key = f"{id(client)}_{symbol}"
+            if cache_key in self.positions_cache:
+                return self.positions_cache[cache_key]
+            
+            # Get position info
+            response = client.get_positions(
+                category="linear",
+                symbol=symbol
+            )
+            
+            if response['retCode'] == 0:
+                positions = response['result']['list']
+                
+                # Find active position
+                for pos in positions:
+                    if float(pos.get('size', 0)) > 0:
+                        position_idx = pos.get('positionIdx', 0)
+                        # Cache the result
+                        self.positions_cache[cache_key] = position_idx
+                        return position_idx
+                
+                # No active position, check any position to determine mode
+                if positions:
+                    # If we see positionIdx > 0, it's hedge mode
+                    for pos in positions:
+                        idx = pos.get('positionIdx', 0)
+                        if idx > 0:
+                            return 1  # Default to 1 for hedge mode
+            
+            return None  # Let it use default behavior
+            
+        except Exception as e:
+            logger.error(f"Error detecting position mode for {symbol}: {e}")
+            return None
+    
+    def wrap_place_order(self, original_method):
+        """Wrap the place_order method to auto-inject positionIdx."""
+        
+        @wraps(original_method)
+        def wrapper(self_client, **kwargs):
+            try:
+                # Only process linear orders
+                if kwargs.get('category') != 'linear':
+                    return original_method(self_client, **kwargs)
+                
+                symbol = kwargs.get('symbol')
+                if not symbol:
+                    return original_method(self_client, **kwargs)
+                
+                # Skip if positionIdx already provided
+                if 'positionIdx' in kwargs:
+                    return original_method(self_client, **kwargs)
+                
+                # Detect position index
+                handler = globals().get('position_mode_handler')
+                if handler and handler.enabled:
+                    position_idx = handler.detect_position_mode(self_client, symbol)
+                    
+                    if position_idx is not None:
+                        # Inject positionIdx
+                        kwargs['positionIdx'] = position_idx
+                        logger.debug(f"Auto-injected positionIdx={position_idx} for {symbol}")
+                
+                # Try with injected parameters
+                result = original_method(self_client, **kwargs)
+                
+                # If it fails due to position mode, try the opposite
+                if result.get('retCode') == 10001 and 'position idx' in result.get('retMsg', '').lower():
+                    logger.warning(f"Position mode error for {symbol}, trying alternative approach")
+                    
+                    if 'positionIdx' in kwargs:
+                        # Remove it and try again
+                        del kwargs['positionIdx']
+                        logger.debug(f"Retrying without positionIdx for {symbol}")
+                    else:
+                        # Add it and try again
+                        kwargs['positionIdx'] = 1
+                        logger.debug(f"Retrying with positionIdx=1 for {symbol}")
+                    
+                    result = original_method(self_client, **kwargs)
+                
+                return result
+                
+            except Exception as e:
+                logger.error(f"Error in position mode wrapper: {e}")
+                # Fallback to original method
+                return original_method(self_client, **kwargs)
+        
+        return wrapper
+    
+    def wrap_cancel_order(self, original_method):
+        """Wrap the cancel_order method to handle position mode."""
+        
+        @wraps(original_method)
+        def wrapper(self_client, **kwargs):
+            try:
+                result = original_method(self_client, **kwargs)
+                
+                # If it fails due to position mode, try with positionIdx
+                if result.get('retCode') == 10001 and 'position idx' in result.get('retMsg', '').lower():
+                    symbol = kwargs.get('symbol')
+                    if symbol and 'positionIdx' not in kwargs:
+                        handler = globals().get('position_mode_handler')
+                        if handler and handler.enabled:
+                            position_idx = handler.detect_position_mode(self_client, symbol)
+                            if position_idx is not None:
+                                kwargs['positionIdx'] = position_idx
+                                logger.debug(f"Retrying cancel with positionIdx={position_idx} for {symbol}")
+                                result = original_method(self_client, **kwargs)
+                
+                return result
+                
+            except Exception as e:
+                logger.error(f"Error in cancel order wrapper: {e}")
+                return original_method(self_client, **kwargs)
+        
+        return wrapper
+    
+    def clear_cache(self, symbol: Optional[str] = None):
+        """Clear position cache for a symbol or all symbols."""
+        if symbol:
+            # Clear specific symbol from all client caches
+            keys_to_remove = [k for k in self.positions_cache.keys() if k.endswith(f"_{symbol}")]
+            for key in keys_to_remove:
+                del self.positions_cache[key]
+        else:
+            # Clear all
+            self.positions_cache.clear()
+            self.position_mode_cache.clear()
+
+
+# Global instance
+position_mode_handler = PositionModeHandler()
+
+
+def inject_position_mode_handling():
+    """Inject position mode handling into existing Bybit clients."""
+    
+    try:
+        # Import the clients
+        from clients.bybit_client import bybit_client
+        
+        # Check if client exists and has the HTTP client
+        if hasattr(bybit_client, '_client') and bybit_client._client:
+            http_client = bybit_client._client
+            
+            # Wrap place_order method
+            if hasattr(http_client, 'place_order'):
+                original_place = http_client.place_order
+                http_client.place_order = position_mode_handler.wrap_place_order(original_place)
+                logger.info("✅ Injected position mode handling for main account place_order")
+            
+            # Wrap cancel_order method
+            if hasattr(http_client, 'cancel_order'):
+                original_cancel = http_client.cancel_order
+                http_client.cancel_order = position_mode_handler.wrap_cancel_order(original_cancel)
+                logger.info("✅ Injected position mode handling for main account cancel_order")
+        
+        # Also handle mirror account if available
+        try:
+            from execution.mirror_trader import bybit_client_2
+            
+            if bybit_client_2:
+                # Wrap place_order method
+                if hasattr(bybit_client_2, 'place_order'):
+                    original_place = bybit_client_2.place_order
+                    bybit_client_2.place_order = position_mode_handler.wrap_place_order(original_place)
+                    logger.info("✅ Injected position mode handling for mirror account place_order")
+                
+                # Wrap cancel_order method
+                if hasattr(bybit_client_2, 'cancel_order'):
+                    original_cancel = bybit_client_2.cancel_order
+                    bybit_client_2.cancel_order = position_mode_handler.wrap_cancel_order(original_cancel)
+                    logger.info("✅ Injected position mode handling for mirror account cancel_order")
+                    
+        except ImportError:
+            logger.debug("Mirror trader not available")
+            
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to inject position mode handling: {e}")
+        return False
+
+
+def ensure_position_mode_compatibility(client, symbol: str, order_params: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure order parameters are compatible with position mode.
+    This is a helper function that can be called before placing orders."""
+    
+    try:
+        # Skip if not linear
+        if order_params.get('category') != 'linear':
+            return order_params
+        
+        # Skip if positionIdx already set
+        if 'positionIdx' in order_params:
+            return order_params
+        
+        # Detect and add positionIdx if needed
+        position_idx = position_mode_handler.detect_position_mode(client, symbol)
+        if position_idx is not None:
+            order_params['positionIdx'] = position_idx
+            logger.debug(f"Added positionIdx={position_idx} to order params for {symbol}")
+        
+        return order_params
+        
+    except Exception as e:
+        logger.error(f"Error ensuring position mode compatibility: {e}")
+        return order_params
+
+
+# Auto-inject when module is imported
+logger.info("Position Mode Handler module loaded")
+inject_position_mode_handling()

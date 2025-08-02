@@ -271,8 +271,7 @@ async def view_predictions(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 💡 <b>Trading Signals</b>
 ├ Entry: 68,200-68,400
-├ TP1: 69,200 (45% prob)
-├ TP2: 69,800 (28% prob)
+├ TP: 69,200-69,800 (73% prob)
 ├ SL: 67,500 (12% prob)
 └ R:R Ratio: 3.2:1
 """

@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""
+Enhanced callback query handlers with ultra feature-rich dashboard
+Routes to advanced analytics and portfolio features
+"""
+import logging
+import asyncio
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.error import BadRequest
+from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
+
+from config.constants import *
+from utils.helpers import initialize_chat_data
+from dashboard.generator_v2 import build_mobile_dashboard_text
+# Removed old imports that don't exist anymore
+from dashboard.keyboards_v2 import DashboardKeyboards
+from handlers.analytics_callbacks import handle_analytics_callbacks
+from shared import msg_manager
+
+logger = logging.getLogger(__name__)
+
+async def handle_dashboard_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Enhanced dashboard callback handling with ultra features"""
+    query = update.callback_query
+    if not query:
+        return
+
+    try:
+        logger.debug(f"Enhanced callback handler called: {query.data}")
+        await query.answer()
+
+        if query.data in ["refresh_dashboard", "dashboard", "back_to_dashboard"]:
+            # Enhanced dashboard refresh with ultra features
+            if context.chat_data is None:
+                context.chat_data = {}
+            initialize_chat_data(context.chat_data)
+
+            # Check debouncing
+            from utils.dashboard_cache import dashboard_cache
+            refresh_key = f"refresh_{query.message.chat.id}"
+            if not dashboard_cache.should_refresh(refresh_key):
+                await query.answer("Please wait a moment before refreshing again", show_alert=False)
+                return
+            
+            # Clear volatile cache and market status for fresh refresh timestamps
+            from utils.cache import invalidate_volatile_caches, invalidate_market_analysis_cache
+            invalidate_volatile_caches()
+            invalidate_market_analysis_cache()  # Clear market status cache for fresh timestamps
+
+            # Delete the current message (which is the old dashboard)
+            try:
+                await query.message.delete()
+                logger.debug("Deleted old dashboard message via enhanced refresh")
+            except Exception as e:
+                logger.debug(f"Could not delete message: {e}")
+
+            # Clear stored message ID since we deleted it
+            context.chat_data[LAST_UI_MESSAGE_ID] = None
+
+            # Load fresh data with enhanced v5.0 generator (force refresh for immediate fresh timestamps)
+            dashboard_text = await build_mobile_dashboard_text(query.message.chat.id, context, force_refresh=True)
+
+            # Get position count for keyboard
+            from clients.bybit_client import get_all_positions
+            positions = await get_all_positions()
+            active_positions = len([p for p in positions if float(p.get('size', 0)) > 0])
+            has_monitors = context.chat_data.get('ACTIVE_MONITOR_TASK', {}) != {}
+
+            # Check if mirror trading is enabled
+            has_mirror = False
+            try:
+                from execution.mirror_trader import is_mirror_trading_enabled
+                has_mirror = is_mirror_trading_enabled()
+            except:
+                pass
+                
+            keyboard = DashboardKeyboards.main_dashboard(active_positions > 0, has_mirror)
+
+            # Send new message with ultra feature-rich UI
+            try:
+                sent = await context.bot.send_message(
+                    chat_id=query.message.chat.id,
+                    text=dashboard_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard
+                )
+                # Store new message ID
+                context.chat_data[LAST_UI_MESSAGE_ID] = sent.message_id
+                logger.debug(f"Sent new dashboard message {sent.message_id}")
+
+                logger.info(f"Ultra dashboard loaded for chat {query.message.chat.id}")
+            except Exception as e:
+                logger.error(f"Error loading ultra dashboard: {e}")
+                # Fallback: send a simple status message
+                await query.edit_message_text(
+                    "⚠️ Dashboard temporarily unavailable. Please try again.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard
+                )
+
+        # Route analytics and advanced feature callbacks
+        elif query.data in [
+            "show_analytics", "portfolio_analysis", "market_intelligence",
+            "performance_metrics", "position_heatmap", "trading_insights",
+            "risk_analysis", "correlation_matrix", "equity_curve",
+            "best_trading_hours", "portfolio_projections", "ai_analysis",
+            "daily_stats", "weekly_stats", "monthly_stats",
+            "win_loss_analysis", "best_pairs", "drawdown_chart",
+            "risk_metrics", "sharpe_ratio", "sortino_ratio",
+            "profit_factor", "hit_rate_analysis", "avg_win_loss",
+            "avg_hold_time", "monthly_returns", "calendar_returns",
+            "best_worst_trades", "diversification_analysis",
+            "allocation_chart", "portfolio_performance",
+            "portfolio_risk_score", "value_at_risk",
+            "portfolio_optimization", "portfolio_rebalance",
+            "order_book_analysis", "funding_rates", "volume_profile",
+            "market_sentiment", "fear_greed_index", "news_analysis",
+            "whale_alerts", "hot_sectors", "cold_zones",
+            "current_risk_score", "risk_limits", "position_sizing_calc",
+            "exposure_map", "max_drawdown_analysis", "risk_alerts",
+            "emergency_stop_confirm", "hedge_analysis", "portfolio_stress_test",
+            "alert_settings", "price_alerts", "pnl_alerts", "volume_alerts",
+            "risk_alerts_config", "target_alerts", "drawdown_alerts",
+            "mute_alerts", "unmute_alerts", "alert_history"
+        ]:
+            await handle_analytics_callbacks(update, context)
+
+        elif query.data in ["show_positions", "view_positions"]:
+            # Professional position viewing
+            await query.edit_message_text(
+                "📊 <b>Loading Portfolio Positions...</b>\n\nAnalyzing current positions...",
+                parse_mode=ParseMode.HTML
+            )
+
+            positions_text = await fetch_all_trades_status()
+            keyboard = build_position_management_keyboard()
+
+            await query.edit_message_text(
+                positions_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard
+            )
+
+        elif query.data == "trade_settings":
+            # Beautiful settings display
+            from dashboard.generator_analytics_compact import create_beautiful_header, create_info_line, create_elegant_divider
+
+            settings_text = f"""╔═══════════════════════════════╗
+║      ⚙️ <b>TRADING CONFIGURATION</b>      ║
+╚═══════════════════════════════╝
+
+{create_beautiful_header("CORE PARAMETERS", "⚙️")}{create_info_line("Leverage Settings", "Configure default leverage levels")}
+{create_info_line("Margin Configuration", "Set preferred margin amounts")}
+{create_info_line("Risk Management", "Define safety parameters")}
+
+{create_beautiful_header("STRATEGY SETTINGS", "🎯")}{create_info_line("Default Approach", "Fast Market or Conservative Limits")}
+{create_info_line("Order Preferences", "Customized execution parameters")}
+{create_info_line("Alert Configuration", "Notification preferences")}
+
+{create_beautiful_header("ADVANCED OPTIONS", "🛡️")}{create_info_line("Position Mode", "Hedge or One-Way trading")}
+{create_info_line("Auto Features", "Automated risk management")}
+{create_info_line("API Settings", "Connection parameters")}"""
+
+            keyboard = build_settings_keyboard()
+
+            await query.edit_message_text(
+                settings_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard
+            )
+
+        elif query.data == "show_statistics":
+            # Enhanced statistics display
+            await show_detailed_stats(query, context)
+
+        elif query.data == "help_menu":
+            # Comprehensive help
+            help_text = await generate_comprehensive_help()
+            keyboard = build_help_keyboard()
+
+            await query.edit_message_text(
+                help_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard
+            )
+
+        elif query.data == "start_conversation":
+            # Start new trade conversation
+            from handlers.conversation import enhanced_start_conversation
+            await enhanced_start_conversation(update, context)
+
+        elif query.data == "close_all_confirm":
+            # Close all positions confirmation
+            await show_close_all_confirmation(query, context)
+
+        # Quick trade callbacks
+        elif query.data.startswith("quick_"):
+            await handle_quick_trade_callbacks(update, context)
+
+
+    except Exception as e:
+        logger.error(f"🔴 ERROR in enhanced callback handler {query.data}: {e}", exc_info=True)
+        try:
+            await query.answer("An error occurred. Please try again.")
+        except:
+            pass  # Query might already be answered
+
+async def show_detailed_stats(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show detailed trading statistics"""
+    from dashboard.generator_analytics_compact import generate_enhanced_performance_stats_text
+
+    stats_text = await generate_enhanced_performance_stats_text(context.application.bot_data)
+    keyboard = build_stats_keyboard()
+
+    await query.edit_message_text(
+        stats_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard
+    )
+
+async def show_close_all_confirmation(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show confirmation before closing all positions"""
+    from clients.bybit_helpers import get_all_positions
+
+    positions = await get_all_positions()
+
+    if not positions:
+        text = "📊 No active positions to close."
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("⬅️ Back", callback_data="dashboard")
+        ]])
+    else:
+        total_pnl = sum(float(p.get("unrealisedPnl", 0)) for p in positions)
+
+        text = (
+            "⚠️ <b>CLOSE ALL POSITIONS</b>\n\n"
+            f"You have {len(positions)} active positions.\n"
+            f"Total Unrealized P&L: {'+'if total_pnl >= 0 else ''}{total_pnl:.2f} USDT\n\n"
+            "Are you sure you want to close ALL positions?"
+        )
+
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Yes, Close All", callback_data="execute_close_all"),
+                InlineKeyboardButton("❌ Cancel", callback_data="dashboard")
+            ]
+        ])
+
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard
+    )
+
+async def handle_quick_trade_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle quick trade related callbacks"""
+    query = update.callback_query
+
+    if query.data.startswith("quick_buy") or query.data.startswith("quick_sell"):
+        # Show quick trade options
+        from dashboard.keyboards_analytics import build_quick_trade_keyboard
+
+        side = "Buy" if "buy" in query.data else "Sell"
+        symbol = "BTCUSDT"  # Default, can be made configurable
+
+        text = (
+            f"⚡ <b>QUICK {side.upper()} - {symbol}</b>\n\n"
+            "Select amount and leverage:"
+        )
+
+        keyboard = build_quick_trade_keyboard(symbol)
+
+        await query.edit_message_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard
+        )
+
+    # Additional quick trade handling can be added here
+
+# Export the main handler
+__all__ = ['handle_dashboard_callbacks']

@@ -1,0 +1,1994 @@
+#!/usr/bin/env python3
+"""
+Enhanced TP/SL Manager for Mirror Trading Account
+Handles mirror account orders using the enhanced system
+"""
+import asyncio
+import logging
+from decimal import Decimal
+from typing import Dict, List, Optional, Tuple, Any
+from datetime import datetime
+import time
+
+from config.constants import *
+from utils.helpers import value_adjusted_to_step
+from utils.order_identifier import generate_order_link_id, generate_adjusted_order_link_id, ORDER_TYPE_TP, ORDER_TYPE_SL
+from clients.bybit_helpers import get_correct_position_idx
+from utils.quantity_formatter import format_quantity_for_exchange, validate_quantity_for_order
+
+
+# Special handling for symbols with no decimal places
+NO_DECIMAL_SYMBOLS = {'XRPUSDT', 'DOGEUSDT', 'SHIBUSDT', 'FLOKIUSDT'}
+
+def round_quantity_for_symbol(quantity, symbol):
+    """Round quantity based on symbol requirements"""
+    if symbol in NO_DECIMAL_SYMBOLS:
+        return str(int(round(float(quantity))))
+    return str(quantity)
+
+logger = logging.getLogger(__name__)
+
+# Import mirror trading components
+try:
+    from execution.mirror_trader import (
+        mirror_limit_order, mirror_tp_sl_order,
+        bybit_client_2, is_mirror_trading_enabled
+    )
+    MIRROR_TRADING_AVAILABLE = True
+except ImportError:
+    MIRROR_TRADING_AVAILABLE = False
+    logger.warning("Mirror trading not available")
+
+class MirrorEnhancedTPSLManager:
+    """
+    Manages TP/SL orders for mirror account using enhanced system
+    Synchronizes with main account orders
+    Enhanced with limit order tracking and phase management
+    """
+    
+    def __init__(self, main_manager):
+        self.main_manager = main_manager  # Reference to main enhanced_tp_sl_manager
+        self.mirror_monitors = {}  # symbol -> monitor data for mirror positions
+        
+        # Enhanced order lifecycle tracking for mirror account
+        self.mirror_order_lifecycle = {}  # order_id -> comprehensive lifecycle data
+        self.mirror_order_relationships = {}  # symbol_side -> order relationship map
+        self.mirror_execution_metrics = {}  # symbol_side -> execution performance metrics
+        
+        # Mirror error recovery and resilience
+        self.mirror_error_recovery_enabled = True
+        self.mirror_max_recovery_attempts = 3
+        self.mirror_recovery_backoff_multiplier = 2.0
+        self.mirror_failed_operations = {}  # operation_id -> failure data
+        self.mirror_circuit_breaker_state = {}  # symbol_side -> circuit breaker state
+        
+        # Enhanced fill tracking for mirror account
+        self.mirror_fill_tracker = {}  # symbol_side -> cumulative fill data
+        self.mirror_actual_entry_prices = {}  # symbol_side -> weighted average entry price
+        self.mirror_fee_rates_cache = {}  # account tier fee cache
+        
+        # Atomic operation locks for race condition prevention
+        self.mirror_breakeven_locks = {}  # symbol_side -> asyncio.Lock
+        self.mirror_monitor_locks = {}  # symbol_side -> asyncio.Lock
+        
+        # Enhanced monitoring intervals (same as main account)
+        self.mirror_standard_interval = 12  # Standard monitoring
+        self.mirror_active_interval = 5     # Active positions with pending TPs
+        self.mirror_critical_interval = 2   # Positions near breakeven triggers
+        
+    async def setup_mirror_tp_sl_orders(
+        self,
+        symbol: str,
+        side: str,
+        position_size: Decimal,
+        entry_price: Decimal,
+        tp_prices: List[Decimal],
+        tp_percentages: List[Decimal],
+        sl_price: Decimal,
+        chat_id: int,
+        approach: str = "CONSERVATIVE",
+        position_idx: int = 0,
+        qty_step: Decimal = Decimal("0.001"),
+        initial_position_size: Decimal = None,  # For enhanced SL coverage
+        target_position_size: Decimal = None    # Full intended position including limits
+    ) -> Dict[str, Any]:
+        """
+        ENHANCED: Set up mirror account TP/SL orders using enhanced system.
+        
+        Args:
+            symbol: Trading symbol
+            side: Buy or Sell
+            position_size: Current filled position size
+            entry_price: Entry price
+            tp_prices: List of TP target prices
+            tp_percentages: List of percentages for each TP
+            sl_price: Stop loss price
+            chat_id: Telegram chat ID
+            approach: Trading approach (CONSERVATIVE/FAST)
+            position_idx: Position index (ignored for One-Way mode)
+            qty_step: Quantity step for the symbol
+            initial_position_size: Actually filled position size
+            target_position_size: Full intended position including limit orders
+        
+        NOTE: Mirror account uses One-Way Mode, so position_idx is always 0.
+        """
+        if not MIRROR_TRADING_AVAILABLE or not is_mirror_trading_enabled():
+            return {"error": "Mirror trading not available", "orders": []}
+        
+        try:
+            logger.info(f"🪞 ENHANCED MIRROR TP/SL setup for {symbol} {side}")
+            logger.info(f"   Position size: {position_size}")
+            logger.info(f"   Initial size: {initial_position_size}")
+            logger.info(f"   Target size: {target_position_size}")
+            
+            # Use actual sizes for calculations
+            tp_sl_position_size = initial_position_size if initial_position_size is not None else position_size
+            full_target_size = target_position_size if target_position_size is not None else position_size
+            
+            results = {
+                "tp_orders": [],
+                "sl_order": None,
+                "errors": [],
+                "monitoring_active": False,
+                "success": False
+            }
+            
+            # Get current price for minimum value calculation
+            from clients.bybit_helpers import get_current_price
+            current_price = await get_current_price(symbol)
+            if not current_price:
+                current_price = entry_price
+            
+            # Minimum order value in USDT (Bybit requires $5 minimum)
+            MIN_ORDER_VALUE = Decimal("5.0")
+            
+            # Calculate order quantities and check minimum values
+            tp_quantities = []
+            tp_valid = []
+            remaining_percentage = Decimal("0")
+            
+            for i, percentage in enumerate(tp_percentages):
+                qty = position_size * Decimal(str(percentage)) / Decimal("100")
+                # Adjust quantity to step size
+                adjusted_qty = value_adjusted_to_step(qty, qty_step)
+                
+                # Check minimum order value
+                order_value = adjusted_qty * Decimal(str(current_price))
+                if order_value < MIN_ORDER_VALUE:
+                    logger.warning(f"MIRROR TP{i+1} value ${order_value:.2f} < minimum ${MIN_ORDER_VALUE}")
+                    tp_quantities.append(Decimal("0"))
+                    tp_valid.append(False)
+                    remaining_percentage += Decimal(str(percentage))
+                else:
+                    tp_quantities.append(adjusted_qty)
+                    tp_valid.append(True)
+            
+            # Redistribute remaining percentage to TP1 if needed
+            if remaining_percentage > 0 and tp_valid[0]:
+                logger.info(f"MIRROR: Redistributing {remaining_percentage}% to TP1")
+                tp_quantities[0] = value_adjusted_to_step(
+                    position_size * (Decimal(str(tp_percentages[0])) + remaining_percentage) / Decimal("100"),
+                    qty_step
+                )
+            
+            # Place mirror TP orders
+            for i, (tp_price, tp_qty, tp_pct) in enumerate(zip(tp_prices, tp_quantities, tp_percentages)):
+                try:
+                    # Skip if quantity is zero (failed minimum check)
+                    if tp_qty == 0:
+                        logger.warning(f"Skipping mirror TP{i+1} - below minimum order value")
+                        continue
+                    
+                    order_link_id = generate_order_link_id(
+                        "MIR", symbol, ORDER_TYPE_TP, 
+                        index=i+1
+                    )
+                    
+                    # Determine order side (opposite of position side)
+                    order_side = "Sell" if side == "Buy" else "Buy"
+                    
+                    logger.info(f"📍 MIRROR: Placing TP{i+1} order: {tp_qty} @ {tp_price}")
+                    
+                    # Use mirror_limit_order for direct limit orders
+                    # Format quantity to prevent scientific notation
+                    formatted_tp_qty = format_quantity_for_exchange(tp_qty, qty_step)
+                    
+                    order_result = await mirror_limit_order(
+                        symbol=symbol,
+                        side=order_side,
+                        qty=formatted_tp_qty,  # Use formatted quantity
+                        price=str(tp_price),
+                        position_idx=position_idx,  # Use the position index passed for hedge mode
+                        order_link_id=order_link_id
+                    )
+                    
+                    if order_result and order_result.get("orderId"):
+                        order_id = order_result["orderId"]
+                        results["tp_orders"].append({
+                            "order_id": order_id,
+                            "order_link_id": order_link_id,
+                            "price": tp_price,
+                            "quantity": tp_qty,
+                            "percentage": tp_pct,
+                            "tp_number": i + 1
+                        })
+                        
+                        # Track mirror order lifecycle
+                        self._track_mirror_order_lifecycle(
+                            order_id=order_id,
+                            order_type="TP",
+                            symbol=symbol,
+                            side=order_side,  # Use the actual order side
+                            price=tp_price,
+                            quantity=tp_qty,
+                            order_link_id=order_link_id
+                        )
+                        
+                        logger.info(f"✅ MIRROR: TP{i+1} order placed successfully")
+                    else:
+                        error_msg = f"Failed to place mirror TP{i+1} order"
+                        results["errors"].append(error_msg)
+                        logger.error(error_msg)
+                        
+                except Exception as e:
+                    error_msg = f"Error placing mirror TP{i+1}: {e}"
+                    results["errors"].append(error_msg)
+                    logger.error(error_msg)
+            
+            # ENHANCED: Place mirror SL order with full position coverage
+            try:
+                sl_order_link_id = generate_order_link_id(
+                    "MIR", symbol, ORDER_TYPE_SL
+                )
+                
+                sl_side = "Sell" if side == "Buy" else "Buy"
+                
+                # ENHANCED: Use main enhanced TP/SL manager's calculation method
+                sl_quantity = self.main_manager._calculate_full_position_sl_quantity(
+                    approach=approach,
+                    current_size=tp_sl_position_size,
+                    target_size=full_target_size,
+                    tp1_hit=False  # Initially TP1 hasn't hit
+                )
+                
+                logger.info(f"🛡️ ENHANCED MIRROR SL: Placing SL order: {sl_quantity} @ {sl_price}")
+                logger.info(f"   Current filled: {tp_sl_position_size}, Target: {full_target_size}")
+                
+                # Format SL quantity to prevent scientific notation
+                formatted_sl_qty = format_quantity_for_exchange(sl_quantity, qty_step)
+                
+                # Use mirror_tp_sl_order for stop orders
+                sl_result = await mirror_tp_sl_order(
+                    symbol=symbol,
+                    side=sl_side,
+                    qty=formatted_sl_qty,  # Use formatted quantity
+                    trigger_price=str(sl_price),
+                    position_idx=0,  # Mirror account uses One-Way mode
+                    order_link_id=sl_order_link_id,
+                    stop_order_type="StopLoss"
+                )
+                
+                if sl_result and sl_result.get("orderId"):
+                    order_id = sl_result["orderId"]
+                    results["sl_order"] = {
+                        "order_id": order_id,
+                        "order_link_id": sl_order_link_id,
+                        "price": sl_price,
+                        "quantity": sl_quantity,  # ENHANCED: Use calculated quantity
+                        "original_quantity": sl_quantity,
+                        "covers_full_position": True,  # Track enhanced coverage
+                        "target_position_size": full_target_size,  # Store target for adjustments
+                        "is_mirror": True  # Mark as mirror account order
+                    }
+                    
+                    # Track mirror order lifecycle
+                    self._track_mirror_order_lifecycle(
+                        order_id=order_id,
+                        order_type="SL",
+                        symbol=symbol,
+                        side=sl_side,  # Use the actual order side
+                        price=sl_price,
+                        quantity=position_size,
+                        order_link_id=sl_order_link_id
+                    )
+                    
+                    logger.info("✅ MIRROR: SL order placed successfully")
+                else:
+                    error_msg = "Failed to place mirror SL order"
+                    results["errors"].append(error_msg)
+                    logger.error(error_msg)
+                    
+            except Exception as e:
+                error_msg = f"Error placing mirror SL: {e}"
+                results["errors"].append(error_msg)
+                logger.error(error_msg)
+            
+            # Initialize monitoring for mirror position
+            monitor_data = {
+                "symbol": symbol,
+                "side": side,
+                "entry_price": entry_price,
+                "position_size": position_size,
+                "remaining_size": position_size,
+                "tp_orders": results["tp_orders"],
+                "sl_order": results["sl_order"],
+                "filled_tps": [],
+                "approach": approach,
+                "chat_id": chat_id,
+                "created_at": time.time(),
+                "last_check": time.time(),
+                "sl_moved_to_be": False,
+                "is_mirror": True
+            }
+            
+            self.mirror_monitors[f"{symbol}_{side}_MIRROR"] = monitor_data
+            # ========== MONITOR TRACKING FIX ==========
+            # Create dashboard monitor entry for mirror position
+            try:
+                # Create monitor tasks entry directly using persistence
+                await self._create_mirror_dashboard_entry(
+                    symbol=symbol,
+                    side=side,
+                    chat_id=chat_id,
+                    approach=approach.lower()
+                )
+                logger.info(f"✅ MIRROR: Created dashboard monitor entry for {symbol} {side}")
+                
+            except Exception as dashboard_error:
+                logger.error(f"❌ MIRROR: Failed to create dashboard monitor for {symbol} {side}: {dashboard_error}")
+                # Continue execution - this is not critical for trading functionality
+            # ========== END MONITOR TRACKING FIX ==========
+
+            results["monitoring_active"] = True
+            
+            logger.info(f"✅ Mirror enhanced TP/SL setup complete for {symbol} {side}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ Error in mirror enhanced TP/SL setup: {e}")
+            return {
+                "tp_orders": [],
+                "sl_order": None,
+                "errors": [str(e)],
+                "monitoring_active": False
+            }
+    
+    async def _create_mirror_dashboard_entry(self, symbol: str, side: str, chat_id: int, approach: str):
+        """Create dashboard monitor entry for mirror position"""
+        try:
+            import pickle
+            import time
+            
+            # Load current bot data
+            pkl_path = '/Users/lualakol/bybit-telegram-bot/bybit_bot_dashboard_v4.1_enhanced.pkl'
+            with open(pkl_path, 'rb') as f:
+                data = pickle.load(f)
+            
+            if 'bot_data' not in data:
+                data['bot_data'] = {}
+            
+            bot_data = data['bot_data']
+            
+            # Initialize monitor_tasks if not exists
+            if 'monitor_tasks' not in bot_data:
+                bot_data['monitor_tasks'] = {}
+            
+            # Create monitor key for mirror account
+            monitor_key = f"{chat_id}_{symbol}_{approach}_mirror"
+            
+            # Create monitor entry
+            bot_data['monitor_tasks'][monitor_key] = {
+                'chat_id': chat_id,
+                'symbol': symbol,
+                'approach': approach,
+                'monitoring_mode': 'ENHANCED_TP_SL_MIRROR',
+                'started_at': time.time(),
+                'active': True,
+                'account_type': 'mirror',
+                'system_type': 'enhanced_tp_sl',
+                'side': side
+            }
+            
+            # Save back to persistence
+            with open(pkl_path, 'wb') as f:
+                pickle.dump(data, f)
+            
+            logger.info(f"✅ Created mirror dashboard monitor: {monitor_key}")
+            
+        except Exception as e:
+            logger.error(f"Error creating mirror dashboard entry: {e}")
+            raise
+    
+    async def register_mirror_limit_orders(self, symbol: str, side: str, mirror_limit_order_ids: List[str]):
+        """
+        Register mirror limit orders for position building phase
+        This allows the Mirror Enhanced TP/SL system to track and manage mirror entry limit orders
+        
+        Args:
+            symbol: Trading symbol
+            side: Buy or Sell
+            mirror_limit_order_ids: List of mirror order IDs for limit orders
+        """
+        mirror_key = f"{symbol}_{side}_MIRROR"
+        if mirror_key not in self.mirror_monitors:
+            logger.warning(f"Cannot register mirror limit orders - no monitor found for {symbol} {side}")
+            return
+        
+        monitor_data = self.mirror_monitors[mirror_key]
+        
+        # Add mirror limit orders to tracking
+        for order_id in mirror_limit_order_ids:
+            limit_order = {
+                "order_id": order_id,
+                "registered_at": time.time(),
+                "status": "ACTIVE"
+            }
+            if "limit_orders" not in monitor_data:
+                monitor_data["limit_orders"] = []
+            monitor_data["limit_orders"].append(limit_order)
+            
+            # Track mirror limit order lifecycle
+            self._track_mirror_order_lifecycle(
+                order_id=order_id,
+                order_type="LIMIT",
+                symbol=symbol,
+                side=side,  # Use position side for limit entry orders
+                price=Decimal("0"),  # Will be updated when we get order details
+                quantity=Decimal("0"),  # Will be updated when we get order details
+                order_link_id=None  # Entry orders may not have our standard link IDs
+            )
+        
+        logger.info(f"🪞 Registered {len(mirror_limit_order_ids)} mirror limit orders for {symbol} {side}")
+        logger.info(f"   Mirror Phase: {monitor_data.get('phase', 'UNKNOWN')}")
+        logger.info(f"   Total mirror limit orders tracked: {len(monitor_data.get('limit_orders', []))}")
+    
+    def _track_mirror_order_lifecycle(self, order_id: str, order_type: str, symbol: str, side: str, 
+                                     price: Decimal, quantity: Decimal, order_link_id: str = None):
+        """
+        Track comprehensive mirror order lifecycle data for enhanced monitoring
+        
+        Args:
+            order_id: Unique order identifier
+            order_type: TP, SL, or LIMIT
+            symbol: Trading symbol
+            side: Buy/Sell
+            price: Order price
+            quantity: Order quantity
+            order_link_id: Order link identifier
+        """
+        current_time = time.time()
+        
+        self.mirror_order_lifecycle[order_id] = {
+            "order_id": order_id,
+            "order_type": order_type,
+            "symbol": symbol,
+            "side": side,
+            "price": price,
+            "quantity": quantity,
+            "original_quantity": quantity,
+            "order_link_id": order_link_id,
+            "status": "ACTIVE",
+            "created_at": current_time,
+            "last_updated": current_time,
+            "fill_events": [],
+            "modification_history": [],
+            "execution_metrics": {
+                "fill_rate": 0.0,
+                "partial_fills": 0,
+                "time_to_fill": None,
+                "price_improvement": Decimal("0"),
+                "slippage": Decimal("0")
+            },
+            "relationship_data": {
+                "parent_position": f"{symbol}_{side}_MIRROR",
+                "related_orders": [],
+                "dependency_chain": [],
+                "main_account_correlation": None  # Link to main account order if applicable
+            }
+        }
+        
+        # Add to mirror order relationships
+        position_key = f"{symbol}_{side}_MIRROR"
+        if position_key not in self.mirror_order_relationships:
+            self.mirror_order_relationships[position_key] = {
+                "tp_orders": [],
+                "sl_orders": [],
+                "limit_orders": [],
+                "filled_orders": [],
+                "cancelled_orders": []
+            }
+        
+        # Categorize order
+        if order_type == "TP":
+            self.mirror_order_relationships[position_key]["tp_orders"].append(order_id)
+        elif order_type == "SL":
+            self.mirror_order_relationships[position_key]["sl_orders"].append(order_id)
+        elif order_type == "LIMIT":
+            self.mirror_order_relationships[position_key]["limit_orders"].append(order_id)
+            
+        logger.info(f"📊 Tracking mirror order lifecycle: {order_id[:8]}... ({order_type})")
+    
+    async def _move_mirror_sl_to_breakeven_enhanced(self, monitor_data: Dict, position: Dict):
+        """Enhanced breakeven move for mirror account with dynamic fee calculation"""
+        try:
+            symbol = monitor_data["symbol"]
+            side = monitor_data["side"]
+            monitor_key = f"{symbol}_{side}"
+            
+            # Use actual weighted average entry price if available
+            if monitor_key in self.mirror_actual_entry_prices:
+                entry_price = self.mirror_actual_entry_prices[monitor_key]["weighted_price"]
+                logger.info(f"🪞 Using actual weighted entry price: {entry_price}")
+            else:
+                entry_price = monitor_data["entry_price"]
+                logger.warning(f"⚠️ Mirror using planned entry price: {entry_price}")
+                
+            current_sl_price = monitor_data["sl_order"]["price"]
+            
+            # Dynamic fee calculation with safety margin (same as main account)
+            fee_rate = await self._get_mirror_trading_fee_rate(symbol)
+            safety_margin = Decimal("0.0001")  # Additional 0.01% safety margin
+            total_fee_buffer = fee_rate + safety_margin
+            
+            logger.info(f"🪞 Mirror fee calculation: base_rate={fee_rate:.4f}%, total={total_fee_buffer:.4f}%")
+            
+            if side == "Buy":
+                breakeven_price = entry_price * (Decimal("1") + total_fee_buffer)
+                if breakeven_price <= current_sl_price:
+                    logger.info(f"🚫 Mirror breakeven price {breakeven_price} not better than current SL {current_sl_price}")
+                    return
+            else:  # Sell
+                breakeven_price = entry_price * (Decimal("1") - total_fee_buffer)
+                if breakeven_price >= current_sl_price:
+                    logger.info(f"🚫 Mirror breakeven price {breakeven_price} not better than current SL {current_sl_price}")
+                    return
+            
+            logger.info(f"🪞 Moving mirror SL to breakeven: {current_sl_price} → {breakeven_price}")
+            
+            # Mark as moved to breakeven
+            monitor_data["sl_moved_to_be"] = True
+            monitor_data["breakeven_price"] = breakeven_price
+            monitor_data["breakeven_time"] = time.time()
+            
+            logger.info(f"✅ Mirror SL marked for breakeven move: {breakeven_price}")
+        
+        except Exception as e:
+            logger.error(f"Error moving mirror SL to breakeven: {e}")
+    
+    async def _get_mirror_trading_fee_rate(self, symbol: str) -> Decimal:
+        """Get dynamic trading fee rate for the mirror account"""
+        try:
+            # Check cache first
+            if symbol in self.mirror_fee_rates_cache:
+                cache_entry = self.mirror_fee_rates_cache[symbol]
+                if time.time() - cache_entry["timestamp"] < 300:  # 5 minute cache
+                    return cache_entry["fee_rate"]
+            
+            # Fallback to conservative default (mirror account usually same tier)
+            default_fee = Decimal("0.0006")  # 0.06% conservative default
+            logger.info(f"🪞 Using default mirror fee rate: {default_fee:.4f}% for {symbol}")
+            return default_fee
+            
+        except Exception as e:
+            logger.error(f"Error getting mirror trading fee rate: {e}")
+            return Decimal("0.0006")  # Safe fallback
+    
+    async def _track_mirror_actual_entry_price(self, symbol: str, side: str, filled_price: Decimal, filled_qty: Decimal):
+        """Track actual entry prices from mirror order fills for accurate breakeven calculation"""
+        monitor_key = f"{symbol}_{side}"
+        
+        if monitor_key not in self.mirror_actual_entry_prices:
+            # First fill
+            self.mirror_actual_entry_prices[monitor_key] = {
+                "weighted_price": filled_price,
+                "total_qty": filled_qty,
+                "fills": []
+            }
+        else:
+            # Additional fill - calculate weighted average
+            entry_data = self.mirror_actual_entry_prices[monitor_key]
+            old_total_qty = entry_data["total_qty"]
+            new_total_qty = old_total_qty + filled_qty
+            
+            # Weighted average calculation
+            old_total_value = entry_data["weighted_price"] * old_total_qty
+            new_fill_value = filled_price * filled_qty
+            new_weighted_price = (old_total_value + new_fill_value) / new_total_qty
+            
+            entry_data["weighted_price"] = new_weighted_price
+            entry_data["total_qty"] = new_total_qty
+        
+        # Record the fill
+        self.mirror_actual_entry_prices[monitor_key]["fills"].append({
+            "price": filled_price,
+            "qty": filled_qty,
+            "timestamp": time.time()
+        })
+        
+        logger.info(f"🪞 Updated mirror weighted entry price for {monitor_key}: {self.mirror_actual_entry_prices[monitor_key]['weighted_price']:.6f}")
+    
+    def _update_mirror_order_status(self, order_id: str, new_status: str, fill_data: Dict = None):
+        """
+        Update mirror order status and track fill events
+        
+        Args:
+            order_id: Order identifier
+            new_status: New order status (FILLED, PARTIAL_FILLED, CANCELLED, etc.)
+            fill_data: Optional fill information
+        """
+        if order_id not in self.mirror_order_lifecycle:
+            return
+            
+        order_data = self.mirror_order_lifecycle[order_id]
+        old_status = order_data["status"]
+        current_time = time.time()
+        
+        # Update basic status
+        order_data["status"] = new_status
+        order_data["last_updated"] = current_time
+        
+        # Handle fill events
+        if fill_data and new_status in ["FILLED", "PARTIAL_FILLED"]:
+            fill_event = {
+                "timestamp": current_time,
+                "fill_price": fill_data.get("fill_price", order_data["price"]),
+                "fill_quantity": fill_data.get("fill_quantity", Decimal("0")),
+                "cumulative_filled": fill_data.get("cumulative_filled", Decimal("0")),
+                "remaining_quantity": fill_data.get("remaining_quantity", order_data["quantity"])
+            }
+            order_data["fill_events"].append(fill_event)
+            
+            # Update execution metrics
+            metrics = order_data["execution_metrics"]
+            metrics["partial_fills"] += 1
+            
+            # Calculate fill rate
+            if order_data["original_quantity"] > 0:
+                metrics["fill_rate"] = float(fill_data.get("cumulative_filled", 0) / order_data["original_quantity"])
+            
+            # Calculate time to fill for completed orders
+            if new_status == "FILLED" and metrics["time_to_fill"] is None:
+                metrics["time_to_fill"] = current_time - order_data["created_at"]
+                
+            # Calculate price improvement/slippage
+            fill_price = fill_data.get("fill_price", order_data["price"])
+            if isinstance(fill_price, (int, float, str)):
+                fill_price = Decimal(str(fill_price))
+            price_diff = fill_price - order_data["price"]
+            
+            if order_data["side"] == "Buy":
+                metrics["price_improvement"] = -price_diff  # Negative diff is improvement for buys
+            else:
+                metrics["price_improvement"] = price_diff   # Positive diff is improvement for sells
+                
+            metrics["slippage"] = abs(price_diff)
+            
+            logger.info(f"📈 Mirror order fill event: {order_id[:8]}... {old_status} → {new_status}")
+            
+        # Update order relationships
+        position_key = order_data["relationship_data"]["parent_position"]
+        if position_key in self.mirror_order_relationships:
+            relationships = self.mirror_order_relationships[position_key]
+            
+            if new_status == "FILLED":
+                if order_id not in relationships["filled_orders"]:
+                    relationships["filled_orders"].append(order_id)
+            elif new_status == "CANCELLED":
+                if order_id not in relationships["cancelled_orders"]:
+                    relationships["cancelled_orders"].append(order_id)
+    
+    def _calculate_mirror_position_metrics(self, symbol: str, side: str) -> Dict:
+        """
+        Calculate comprehensive execution metrics for a mirror position
+        
+        Returns:
+            Dict containing position-level performance metrics
+        """
+        position_key = f"{symbol}_{side}_MIRROR"
+        relationships = self.mirror_order_relationships.get(position_key, {})
+        
+        metrics = {
+            "total_orders": 0,
+            "filled_orders": 0,
+            "cancelled_orders": 0,
+            "partial_filled_orders": 0,
+            "fill_rate": 0.0,
+            "average_time_to_fill": 0.0,
+            "total_slippage": Decimal("0"),
+            "total_price_improvement": Decimal("0"),
+            "execution_efficiency": 0.0,
+            "main_account_correlation": 0.0  # How well mirror tracks main account
+        }
+        
+        all_orders = []
+        for order_type in ["tp_orders", "sl_orders", "limit_orders"]:
+            for order_id in relationships.get(order_type, []):
+                if order_id in self.mirror_order_lifecycle:
+                    all_orders.append(self.mirror_order_lifecycle[order_id])
+        
+        if not all_orders:
+            return metrics
+            
+        metrics["total_orders"] = len(all_orders)
+        
+        filled_times = []
+        total_slippage = Decimal("0")
+        total_improvement = Decimal("0")
+        
+        for order in all_orders:
+            order_metrics = order.get("execution_metrics", {})
+            status = order.get("status", "UNKNOWN")
+            
+            if status == "FILLED":
+                metrics["filled_orders"] += 1
+                time_to_fill = order_metrics.get("time_to_fill")
+                if time_to_fill:
+                    filled_times.append(time_to_fill)
+            elif status == "CANCELLED":
+                metrics["cancelled_orders"] += 1
+            elif status == "PARTIAL_FILLED":
+                metrics["partial_filled_orders"] += 1
+                
+            # Accumulate slippage and price improvement
+            total_slippage += order_metrics.get("slippage", Decimal("0"))
+            total_improvement += order_metrics.get("price_improvement", Decimal("0"))
+        
+        # Calculate averages
+        if metrics["total_orders"] > 0:
+            metrics["fill_rate"] = metrics["filled_orders"] / metrics["total_orders"]
+            metrics["execution_efficiency"] = (metrics["filled_orders"] + metrics["partial_filled_orders"]) / metrics["total_orders"]
+            
+        if filled_times:
+            metrics["average_time_to_fill"] = sum(filled_times) / len(filled_times)
+            
+        metrics["total_slippage"] = total_slippage
+        metrics["total_price_improvement"] = total_improvement
+        
+        # Store in execution metrics cache
+        self.mirror_execution_metrics[position_key] = metrics
+        
+        return metrics
+    
+    async def cleanup_orphaned_mirror_monitors(self):
+        """
+        Clean up mirror monitors that no longer have corresponding positions
+        This prevents resource leaks and memory buildup in mirror account
+        """
+        try:
+            monitors_to_remove = []
+            
+            logger.info("🪞 Starting orphaned mirror monitor cleanup")
+            
+            for monitor_key, monitor_data in self.mirror_monitors.items():
+                symbol = monitor_data["symbol"]
+                side = monitor_data["side"]
+                
+                try:
+                    # Check if mirror position still exists
+                    positions = None
+                    if bybit_client_2:
+                        # Use run_in_executor for synchronous HTTP client
+                        loop = asyncio.get_event_loop()
+                        response = await loop.run_in_executor(
+                            None,
+                            lambda: bybit_client_2.get_positions(
+                                category="linear",
+                                symbol=symbol
+                            )
+                        )
+                        if response and response.get("retCode") == 0:
+                            positions = response.get("result", {}).get("list", [])
+                    
+                    position_exists = False
+                    if positions:
+                        for pos in positions:
+                            if pos.get("side") == side and float(pos.get("size", 0)) > 0:
+                                position_exists = True
+                                break
+                    
+                    if not position_exists:
+                        # Mirror position closed, schedule monitor for removal
+                        monitors_to_remove.append(monitor_key)
+                        logger.info(f"🪞 Orphaned mirror monitor found: {monitor_key}")
+                        
+                        # Cancel monitoring task if running
+                        if monitor_data.get("monitoring_task"):
+                            monitor_data["monitoring_task"].cancel()
+                            
+                        # Clean up related mirror orders
+                        await self._cleanup_mirror_monitor_orders(monitor_data)
+                        
+                        # Clean up mirror order lifecycle data
+                        await self._cleanup_mirror_order_lifecycle_data(symbol, side)
+                        
+                except Exception as e:
+                    logger.error(f"Error checking mirror position for {monitor_key}: {e}")
+            
+            # Remove orphaned mirror monitors
+            for monitor_key in monitors_to_remove:
+                del self.mirror_monitors[monitor_key]
+                logger.info(f"🪞 Removed orphaned mirror monitor: {monitor_key}")
+            
+            if monitors_to_remove:
+                logger.info(f"✅ Cleaned up {len(monitors_to_remove)} orphaned mirror monitors")
+            else:
+                logger.debug("✅ No orphaned mirror monitors found")
+                
+        except Exception as e:
+            logger.error(f"Error in orphaned mirror monitor cleanup: {e}")
+    
+    async def _cleanup_mirror_monitor_orders(self, monitor_data: Dict):
+        """
+        Clean up mirror orders associated with a monitor
+        Cancels open orders and updates mirror order lifecycle data
+        """
+        try:
+            symbol = monitor_data["symbol"]
+            side = monitor_data["side"]
+            
+            # Cancel all mirror TP orders
+            for tp_order in monitor_data.get("tp_orders", []):
+                try:
+                    order_id = tp_order["order_id"]
+                    success = await self._cancel_mirror_order(symbol, order_id)
+                    if success:
+                        logger.info(f"🪞 Cancelled mirror TP order: {order_id[:8]}...")
+                        # Update mirror order lifecycle
+                        self._update_mirror_order_status(order_id, "CANCELLED")
+                except Exception as e:
+                    logger.error(f"Error cancelling mirror TP order: {e}")
+            
+            # Cancel mirror SL order
+            if monitor_data.get("sl_order"):
+                try:
+                    sl_order_id = monitor_data["sl_order"]["order_id"]
+                    success = await self._cancel_mirror_order(symbol, sl_order_id)
+                    if success:
+                        logger.info(f"🪞 Cancelled mirror SL order: {sl_order_id[:8]}...")
+                        # Update mirror order lifecycle
+                        self._update_mirror_order_status(sl_order_id, "CANCELLED")
+                except Exception as e:
+                    logger.error(f"Error cancelling mirror SL order: {e}")
+            
+            # Cancel mirror limit orders if in cleanup phase
+            if monitor_data.get("cleanup_completed", False):
+                for limit_order in monitor_data.get("limit_orders", []):
+                    if limit_order.get("status") == "ACTIVE":
+                        try:
+                            order_id = limit_order["order_id"]
+                            success = await self._cancel_mirror_order(symbol, order_id)
+                            if success:
+                                logger.info(f"🪞 Cancelled mirror limit order: {order_id[:8]}...")
+                                limit_order["status"] = "CANCELLED"
+                                # Update mirror order lifecycle
+                                self._update_mirror_order_status(order_id, "CANCELLED")
+                        except Exception as e:
+                            logger.error(f"Error cancelling mirror limit order: {e}")
+                            
+        except Exception as e:
+            logger.error(f"Error cleaning up mirror monitor orders: {e}")
+    
+    async def _cleanup_mirror_order_lifecycle_data(self, symbol: str, side: str):
+        """
+        Clean up mirror order lifecycle and relationship data for a closed position
+        """
+        try:
+            position_key = f"{symbol}_{side}_MIRROR"
+            
+            # Get all mirror orders for this position
+            if position_key in self.mirror_order_relationships:
+                relationships = self.mirror_order_relationships[position_key]
+                all_orders = []
+                
+                for order_type in ["tp_orders", "sl_orders", "limit_orders", "filled_orders", "cancelled_orders"]:
+                    all_orders.extend(relationships.get(order_type, []))
+                
+                # Archive mirror order data before cleanup (keep for analysis)
+                archived_orders = {}
+                for order_id in all_orders:
+                    if order_id in self.mirror_order_lifecycle:
+                        archived_orders[order_id] = self.mirror_order_lifecycle[order_id].copy()
+                        # Mark as archived
+                        archived_orders[order_id]["archived_at"] = time.time()
+                        archived_orders[order_id]["status"] = "ARCHIVED"
+                
+                # Clean up active data structures
+                for order_id in all_orders:
+                    if order_id in self.mirror_order_lifecycle:
+                        del self.mirror_order_lifecycle[order_id]
+                
+                # Store archived data for future analysis
+                if not hasattr(self, 'archived_mirror_orders'):
+                    self.archived_mirror_orders = {}
+                self.archived_mirror_orders[position_key] = archived_orders
+                
+                # Clean up relationships
+                del self.mirror_order_relationships[position_key]
+                
+                # Clean up execution metrics
+                if position_key in self.mirror_execution_metrics:
+                    # Archive metrics
+                    if not hasattr(self, 'archived_mirror_metrics'):
+                        self.archived_mirror_metrics = {}
+                    self.archived_mirror_metrics[position_key] = self.mirror_execution_metrics[position_key]
+                    del self.mirror_execution_metrics[position_key]
+                
+                logger.info(f"🪞 Archived mirror lifecycle data for {len(all_orders)} orders from {position_key}")
+                
+        except Exception as e:
+            logger.error(f"Error cleaning up mirror order lifecycle data: {e}")
+    
+    async def perform_mirror_memory_cleanup(self):
+        """
+        Perform comprehensive mirror memory cleanup to prevent resource leaks
+        """
+        try:
+            logger.info("🪞 Starting mirror memory cleanup")
+            
+            # Clean up orphaned mirror monitors
+            await self.cleanup_orphaned_mirror_monitors()
+            
+            # Archive old mirror order lifecycle data (older than 24 hours)
+            current_time = time.time()
+            old_orders = []
+            cutoff_time = current_time - (24 * 3600)  # 24 hours
+            
+            for order_id, order_data in self.mirror_order_lifecycle.items():
+                if order_data.get("created_at", current_time) < cutoff_time and order_data.get("status") in ["FILLED", "CANCELLED"]:
+                    old_orders.append(order_id)
+            
+            if old_orders:
+                # Archive old mirror orders
+                if not hasattr(self, 'archived_mirror_orders'):
+                    self.archived_mirror_orders = {}
+                
+                for order_id in old_orders:
+                    order_data = self.mirror_order_lifecycle[order_id]
+                    position_key = order_data["relationship_data"]["parent_position"]
+                    
+                    if position_key not in self.archived_mirror_orders:
+                        self.archived_mirror_orders[position_key] = {}
+                    
+                    self.archived_mirror_orders[position_key][order_id] = order_data.copy()
+                    self.archived_mirror_orders[position_key][order_id]["archived_at"] = current_time
+                    
+                    del self.mirror_order_lifecycle[order_id]
+                
+                logger.info(f"🪞 Archived {len(old_orders)} old mirror orders")
+            
+            # Limit archived mirror data size (keep only last 1000 positions)
+            if hasattr(self, 'archived_mirror_orders') and len(self.archived_mirror_orders) > 1000:
+                # Keep only most recent 1000
+                sorted_positions = sorted(
+                    self.archived_mirror_orders.items(),
+                    key=lambda x: max([order.get("archived_at", 0) for order in x[1].values()]),
+                    reverse=True
+                )
+                self.archived_mirror_orders = dict(sorted_positions[:1000])
+                logger.info("🪞 Trimmed archived mirror orders to 1000 most recent positions")
+            
+            logger.info("✅ Mirror memory cleanup completed")
+            
+        except Exception as e:
+            logger.error(f"Error in mirror memory cleanup: {e}")
+    
+    async def get_mirror_resource_usage_stats(self) -> Dict:
+        """
+        Get current mirror resource usage statistics
+        """
+        try:
+            stats = {
+                "active_mirror_monitors": len(self.mirror_monitors),
+                "tracked_mirror_orders": len(self.mirror_order_lifecycle),
+                "mirror_order_relationships": len(self.mirror_order_relationships),
+                "mirror_execution_metrics": len(self.mirror_execution_metrics),
+                "archived_mirror_orders": len(getattr(self, 'archived_mirror_orders', {})),
+                "archived_mirror_metrics": len(getattr(self, 'archived_mirror_metrics', {})),
+                "memory_usage": {
+                    "mirror_monitors": len(str(self.mirror_monitors)),
+                    "mirror_lifecycle": len(str(self.mirror_order_lifecycle)),
+                    "mirror_relationships": len(str(self.mirror_order_relationships))
+                }
+            }
+            
+            # Calculate active vs completed mirror orders
+            active_orders = 0
+            completed_orders = 0
+            
+            for order_data in self.mirror_order_lifecycle.values():
+                if order_data.get("status") in ["ACTIVE", "PARTIAL_FILLED"]:
+                    active_orders += 1
+                else:
+                    completed_orders += 1
+            
+            stats["mirror_order_status_breakdown"] = {
+                "active": active_orders,
+                "completed": completed_orders
+            }
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Error getting mirror resource usage stats: {e}")
+            return {}
+    
+    def _get_mirror_circuit_breaker_key(self, symbol: str, side: str) -> str:
+        """Get mirror circuit breaker key for position"""
+        return f"{symbol}_{side}_MIRROR"
+    
+    def _check_mirror_circuit_breaker(self, symbol: str, side: str) -> bool:
+        """
+        Check if mirror circuit breaker allows operations for this position
+        Returns True if operations are allowed, False if circuit is open
+        """
+        cb_key = self._get_mirror_circuit_breaker_key(symbol, side)
+        
+        if cb_key not in self.mirror_circuit_breaker_state:
+            # Initialize mirror circuit breaker
+            self.mirror_circuit_breaker_state[cb_key] = {
+                "state": "CLOSED",  # CLOSED, OPEN, HALF_OPEN
+                "failure_count": 0,
+                "last_failure_time": 0,
+                "recovery_timeout": 300,  # 5 minutes
+                "failure_threshold": 5
+            }
+            return True
+        
+        cb_state = self.mirror_circuit_breaker_state[cb_key]
+        current_time = time.time()
+        
+        if cb_state["state"] == "CLOSED":
+            return True
+        elif cb_state["state"] == "OPEN":
+            # Check if recovery timeout has passed
+            if current_time - cb_state["last_failure_time"] > cb_state["recovery_timeout"]:
+                cb_state["state"] = "HALF_OPEN"
+                logger.info(f"🪞 Mirror circuit breaker transitioning to HALF_OPEN for {cb_key}")
+                return True
+            return False
+        else:  # HALF_OPEN
+            return True
+    
+    def _record_mirror_circuit_breaker_success(self, symbol: str, side: str):
+        """Record successful mirror operation for circuit breaker"""
+        cb_key = self._get_mirror_circuit_breaker_key(symbol, side)
+        
+        if cb_key in self.mirror_circuit_breaker_state:
+            cb_state = self.mirror_circuit_breaker_state[cb_key]
+            if cb_state["state"] == "HALF_OPEN":
+                cb_state["state"] = "CLOSED"
+                cb_state["failure_count"] = 0
+                logger.info(f"🪞 Mirror circuit breaker closed for {cb_key}")
+    
+    def _record_mirror_circuit_breaker_failure(self, symbol: str, side: str):
+        """Record failed mirror operation for circuit breaker"""
+        cb_key = self._get_mirror_circuit_breaker_key(symbol, side)
+        
+        if cb_key not in self.mirror_circuit_breaker_state:
+            self._check_mirror_circuit_breaker(symbol, side)  # Initialize
+        
+        cb_state = self.mirror_circuit_breaker_state[cb_key]
+        cb_state["failure_count"] += 1
+        cb_state["last_failure_time"] = time.time()
+        
+        if cb_state["failure_count"] >= cb_state["failure_threshold"]:
+            cb_state["state"] = "OPEN"
+            logger.warning(f"🪞 Mirror circuit breaker opened for {cb_key} (failures: {cb_state['failure_count']})")
+    
+    async def _execute_mirror_with_recovery(self, operation_name: str, operation_func, *args, **kwargs):
+        """
+        Execute a mirror operation with automatic error recovery and circuit breaker
+        
+        Args:
+            operation_name: Name of the operation for logging
+            operation_func: The async function to execute
+            *args, **kwargs: Arguments to pass to the operation function
+            
+        Returns:
+            Operation result or None if all attempts failed
+        """
+        if not self.mirror_error_recovery_enabled:
+            return await operation_func(*args, **kwargs)
+        
+        symbol = kwargs.get('symbol', args[0] if args else 'UNKNOWN')
+        side = kwargs.get('side', args[1] if len(args) > 1 else 'UNKNOWN')
+        
+        # Check mirror circuit breaker
+        if not self._check_mirror_circuit_breaker(symbol, side):
+            logger.warning(f"🪞 Mirror circuit breaker open for {symbol} {side}, skipping {operation_name}")
+            return None
+        
+        operation_id = f"mirror_{operation_name}_{symbol}_{side}_{int(time.time())}"
+        
+        for attempt in range(1, self.mirror_max_recovery_attempts + 1):
+            try:
+                logger.debug(f"🪞 Executing mirror {operation_name} (attempt {attempt}/{self.mirror_max_recovery_attempts})")
+                
+                result = await operation_func(*args, **kwargs)
+                
+                # Success - record for circuit breaker and clean up failure tracking
+                self._record_mirror_circuit_breaker_success(symbol, side)
+                if operation_id in self.mirror_failed_operations:
+                    del self.mirror_failed_operations[operation_id]
+                
+                return result
+                
+            except Exception as e:
+                logger.error(f"🪞 Mirror {operation_name} attempt {attempt} failed: {e}")
+                
+                # Record failure
+                failure_data = {
+                    "operation_name": operation_name,
+                    "symbol": symbol,
+                    "side": side,
+                    "attempt": attempt,
+                    "error": str(e),
+                    "timestamp": time.time(),
+                    "args": str(args),
+                    "kwargs": str(kwargs)
+                }
+                self.mirror_failed_operations[operation_id] = failure_data
+                
+                # Record circuit breaker failure
+                self._record_mirror_circuit_breaker_failure(symbol, side)
+                
+                # If this is the last attempt, give up
+                if attempt >= self.mirror_max_recovery_attempts:
+                    logger.error(f"🪞 Mirror {operation_name} failed after {self.mirror_max_recovery_attempts} attempts")
+                    break
+                
+                # Calculate backoff delay
+                backoff_delay = attempt * self.mirror_recovery_backoff_multiplier
+                logger.info(f"🪞 Waiting {backoff_delay}s before mirror retry {attempt + 1}")
+                await asyncio.sleep(backoff_delay)
+        
+        return None
+    
+    async def _handle_mirror_monitor_error(self, symbol: str, side: str, error: Exception):
+        """
+        Handle errors in mirror position monitoring with recovery attempts
+        """
+        try:
+            mirror_key = f"{symbol}_{side}_MIRROR"
+            
+            logger.warning(f"🪞 Mirror monitor error for {symbol} {side}: {error}")
+            
+            # Check if circuit breaker allows recovery attempts
+            if not self._check_mirror_circuit_breaker(symbol, side):
+                logger.warning(f"🪞 Mirror circuit breaker prevents recovery for {symbol} {side}")
+                return
+            
+            # Attempt to recover mirror monitoring
+            recovery_successful = await self._execute_mirror_with_recovery(
+                "mirror_monitor_recovery",
+                self._recover_mirror_monitor_state,
+                symbol,
+                side
+            )
+            
+            if recovery_successful:
+                logger.info(f"🪞 Mirror monitor recovery successful for {symbol} {side}")
+            else:
+                logger.error(f"🪞 Mirror monitor recovery failed for {symbol} {side}")
+                
+                # Consider stopping mirror monitoring if recovery fails
+                if mirror_key in self.mirror_monitors:
+                    monitor_data = self.mirror_monitors[mirror_key]
+                    if monitor_data.get("monitoring_task"):
+                        monitor_data["monitoring_task"].cancel()
+                        logger.warning(f"🪞 Stopped mirror monitoring for {symbol} {side} due to persistent errors")
+                        
+        except Exception as e:
+            logger.error(f"Error in mirror monitor error handling: {e}")
+    
+    async def _recover_mirror_monitor_state(self, symbol: str, side: str):
+        """
+        Attempt to recover mirror monitor state by re-syncing with exchange
+        """
+        try:
+            mirror_key = f"{symbol}_{side}_MIRROR"
+            if mirror_key not in self.mirror_monitors:
+                raise Exception(f"Mirror monitor {mirror_key} not found")
+            
+            monitor_data = self.mirror_monitors[mirror_key]
+            
+            # Get current mirror position state
+            if not bybit_client_2:
+                raise Exception("Mirror client not available")
+            
+            # Use run_in_executor for synchronous HTTP client
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: bybit_client_2.get_positions(
+                    category="linear",
+                    symbol=symbol
+                )
+            )
+            
+            if not response or response.get("retCode") != 0:
+                raise Exception("Could not fetch mirror position info")
+            
+            positions = response.get("result", {}).get("list", [])
+            position = None
+            for pos in positions:
+                if pos.get("side") == side:
+                    position = pos
+                    break
+            
+            if not position or float(position.get("size", 0)) == 0:
+                # Mirror position closed, clean up monitor
+                await self._cleanup_mirror_monitor_orders(monitor_data)
+                del self.mirror_monitors[mirror_key]
+                return True
+            
+            # Update monitor data with current position state
+            current_size = Decimal(str(position["size"]))
+            monitor_data["remaining_size"] = current_size
+            monitor_data["last_check"] = time.time()
+            
+            logger.info(f"🪞 Mirror monitor state recovered for {symbol} {side}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error recovering mirror monitor state: {e}")
+            raise
+    
+    def get_mirror_error_recovery_stats(self) -> Dict:
+        """
+        Get mirror error recovery and resilience statistics
+        """
+        try:
+            current_time = time.time()
+            
+            # Count recent mirror failures (last 24 hours)
+            recent_failures = 0
+            recent_cutoff = current_time - (24 * 3600)
+            
+            for failure_data in self.mirror_failed_operations.values():
+                if failure_data.get("timestamp", 0) > recent_cutoff:
+                    recent_failures += 1
+            
+            # Mirror circuit breaker states
+            circuit_breaker_stats = {}
+            for cb_key, cb_state in self.mirror_circuit_breaker_state.items():
+                circuit_breaker_stats[cb_key] = {
+                    "state": cb_state["state"],
+                    "failure_count": cb_state["failure_count"],
+                    "last_failure": cb_state.get("last_failure_time", 0)
+                }
+            
+            return {
+                "mirror_error_recovery_enabled": self.mirror_error_recovery_enabled,
+                "total_mirror_failed_operations": len(self.mirror_failed_operations),
+                "recent_mirror_failures_24h": recent_failures,
+                "mirror_max_recovery_attempts": self.mirror_max_recovery_attempts,
+                "mirror_circuit_breakers": circuit_breaker_stats,
+                "mirror_recovery_settings": {
+                    "backoff_multiplier": self.mirror_recovery_backoff_multiplier,
+                    "enabled": self.mirror_error_recovery_enabled
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting mirror recovery stats: {e}")
+            return {}
+
+    async def _cancel_mirror_unfilled_limit_orders(self, monitor_data: Dict):
+        """
+        Cancel all unfilled mirror limit orders during phase transition
+        This is called when moving from BUILDING to PROFIT_TAKING phase
+        """
+        symbol = monitor_data["symbol"]
+        side = monitor_data["side"]
+        
+        cancelled_count = 0
+        failed_count = 0
+        
+        for limit_order in monitor_data.get("limit_orders", []):
+            if limit_order.get("status") == "ACTIVE":
+                try:
+                    from clients.bybit_helpers import cancel_order_with_client_retry
+                    success = await cancel_order_with_client_retry(
+                        bybit_client_2,
+                        category="linear",
+                        symbol=symbol,
+                        orderId=limit_order["order_id"]
+                    )
+                    if success:
+                        limit_order["status"] = "CANCELLED"
+                        limit_order["cancelled_at"] = time.time()
+                        cancelled_count += 1
+                        logger.info(f"🪞 Cancelled mirror limit order {limit_order['order_id'][:8]}...")
+                    else:
+                        failed_count += 1
+                        logger.warning(f"🪞 Failed to cancel mirror limit order {limit_order['order_id'][:8]}...")
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"❌ Error cancelling mirror limit order {limit_order['order_id'][:8]}...: {e}")
+        
+        if cancelled_count > 0:
+            logger.info(f"🪞 Mirror limit order cleanup: {cancelled_count} cancelled, {failed_count} failed")
+    
+    async def _sync_phase_with_main(self, symbol: str, side: str):
+        """
+        Sync mirror position phase with main account
+        """
+        main_key = f"{symbol}_{side}"
+        mirror_key = f"{symbol}_{side}_MIRROR"
+        
+        if main_key not in self.main_manager.position_monitors:
+            return
+        
+        if mirror_key not in self.mirror_monitors:
+            return
+        
+        main_data = self.main_manager.position_monitors[main_key]
+        mirror_data = self.mirror_monitors[mirror_key]
+        
+        main_phase = main_data.get("phase", "UNKNOWN")
+        mirror_phase = mirror_data.get("phase", "UNKNOWN")
+        
+        # Sync phase changes
+        if main_phase != mirror_phase:
+            logger.info(f"🪞 Syncing mirror phase: {mirror_phase} → {main_phase}")
+            
+            if main_phase == "PROFIT_TAKING" and mirror_phase == "BUILDING":
+                # Main account transitioned to profit-taking, sync mirror
+                await self._cancel_mirror_unfilled_limit_orders(mirror_data)
+                mirror_data["phase"] = "PROFIT_TAKING"
+                mirror_data["phase_transition_time"] = time.time()
+                mirror_data["tp1_hit"] = main_data.get("tp1_hit", False)
+                
+                logger.info(f"✅ Mirror phase transition complete: {symbol} {side} now in PROFIT_TAKING mode")
+    
+    async def sync_with_main_position(self, symbol: str, side: str):
+        """
+        Sync mirror orders with main account position changes
+        Called when main account position changes (e.g., limit order fills)
+        """
+        main_key = f"{symbol}_{side}"
+        mirror_key = f"{symbol}_{side}_MIRROR"
+        
+        if main_key not in self.main_manager.position_monitors:
+            return
+        
+        if mirror_key not in self.mirror_monitors:
+            return
+        
+        main_data = self.main_manager.position_monitors[main_key]
+        mirror_data = self.mirror_monitors[mirror_key]
+        
+        try:
+            # First, sync phases between main and mirror
+            await self._sync_phase_with_main(symbol, side)
+            
+            # Check if main position size changed (indicating order fill)
+            if main_data["remaining_size"] != main_data["position_size"]:
+                # Calculate fill percentage
+                filled_size = main_data["position_size"] - main_data["remaining_size"]
+                fill_percentage = (filled_size / main_data["position_size"]) * 100
+                
+                logger.info(f"🔄 MIRROR: Main position reduced by {fill_percentage:.2f}% - syncing mirror orders")
+                
+                # Adjust mirror TP/SL quantities proportionally
+                await self._adjust_mirror_orders_proportionally(mirror_data, fill_percentage)
+        
+        except Exception as e:
+            logger.error(f"Error syncing mirror with main position: {e}")
+    
+    async def _adjust_mirror_orders_proportionally(self, monitor_data: Dict, fill_percentage: float):
+        """
+        Adjust mirror TP/SL orders when main position changes
+        This handles the case when limit orders are filled
+        """
+        try:
+            symbol = monitor_data["symbol"]
+            
+            # For each TP order, reduce quantity proportionally
+            for tp_order in monitor_data.get("tp_orders", []):
+                original_qty = tp_order["quantity"]
+                new_qty = original_qty * (1 - fill_percentage / 100)
+                
+                if new_qty < Decimal("0.001"):
+                    # Cancel order if quantity too small
+                    await self._cancel_mirror_order(symbol, tp_order["order_id"])
+                else:
+                    # Amend order with new quantity
+                    await self._amend_mirror_order_quantity(
+                        symbol, 
+                        tp_order["order_id"],
+                        str(new_qty)
+                    )
+            
+            # Adjust SL quantity
+            if monitor_data.get("sl_order"):
+                sl_order = monitor_data["sl_order"]
+                original_sl_qty = sl_order["original_quantity"]
+                new_sl_qty = original_sl_qty * (1 - fill_percentage / 100)
+                
+                await self._amend_mirror_order_quantity(
+                    symbol,
+                    sl_order["order_id"],
+                    str(new_sl_qty)
+                )
+                
+                monitor_data["sl_order"]["quantity"] = new_sl_qty
+            
+            # Update remaining size
+            monitor_data["remaining_size"] = monitor_data["position_size"] * (1 - fill_percentage / 100)
+            
+            logger.info(f"✅ MIRROR: Orders adjusted for {fill_percentage:.2f}% position reduction")
+            
+        except Exception as e:
+            logger.error(f"Error adjusting mirror orders: {e}")
+    
+    async def _cancel_mirror_order(self, symbol: str, order_id: str) -> bool:
+        """Cancel a mirror account order"""
+        if not bybit_client_2:
+            return False
+        
+        try:
+            # Use run_in_executor for synchronous HTTP client
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: bybit_client_2.cancel_order(
+                    category="linear",
+                    symbol=symbol,
+                    orderId=order_id
+                )
+            )
+            
+            if response and response.get("retCode") == 0:
+                logger.info(f"✅ MIRROR: Order {order_id[:8]}... cancelled")
+                return True
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error cancelling mirror order: {e}")
+            return False
+    
+    async def _amend_mirror_order_quantity(self, symbol: str, order_id: str, new_qty: str) -> bool:
+        """Amend mirror account order quantity"""
+        if not bybit_client_2:
+            return False
+        
+        try:
+            # Use run_in_executor for synchronous HTTP client
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: bybit_client_2.amend_order(
+                    category="linear",
+                    symbol=symbol,
+                    orderId=order_id,
+                    qty=new_qty
+                )
+            )
+            
+            if response and response.get("retCode") == 0:
+                logger.info(f"✅ MIRROR: Order {order_id[:8]}... quantity updated to {new_qty}")
+                return True
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error amending mirror order quantity: {e}")
+            return False
+    
+    async def sync_with_main_position_enhanced(self, symbol: str, side: str, main_current_size: Decimal):
+        """
+        Enhanced sync method that handles both position increases and decreases
+        Uses absolute position size matching instead of percentage-based adjustments
+        """
+        mirror_key = f"{symbol}_{side}_MIRROR"
+        main_key = f"{symbol}_{side}"
+        
+        if mirror_key not in self.mirror_monitors:
+            logger.warning(f"🪞 No mirror monitor found for {symbol} {side}")
+            return
+        
+        if main_key not in self.main_manager.position_monitors:
+            logger.warning(f"🏛️ No main monitor found for {symbol} {side}")
+            return
+        
+        try:
+            main_data = self.main_manager.position_monitors[main_key]
+            mirror_data = self.mirror_monitors[mirror_key]
+            
+            # Get current mirror position size
+            # Import the correct function from bybit_helpers
+            from clients.bybit_helpers import get_all_positions
+            mirror_positions = await get_all_positions(bybit_client_2)
+            current_mirror_size = Decimal("0")
+            
+            if mirror_positions:
+                for pos in mirror_positions:
+                    if pos.get("symbol") == symbol and pos.get("side") == side:
+                        current_mirror_size = Decimal(str(pos.get("size", "0")))
+                        break
+            
+            logger.info(f"🔄 Enhanced sync: Main {main_current_size}, Mirror {current_mirror_size}")
+            
+            # Calculate target mirror size based on proportion
+            mirror_proportion = mirror_data.get("mirror_proportion", Decimal("0.5"))  # Default 50%
+            target_mirror_size = main_current_size * mirror_proportion
+            
+            # Calculate size difference
+            size_difference = target_mirror_size - current_mirror_size
+            
+            if abs(size_difference) < Decimal("0.001"):
+                logger.info(f"✅ Mirror position already in sync (difference: {size_difference})")
+                return
+            
+            logger.info(f"🎯 Target mirror size: {target_mirror_size}, Current: {current_mirror_size}, Diff: {size_difference}")
+            
+            # Adjust mirror TP orders to match new position size
+            await self._adjust_mirror_tp_orders_absolute(mirror_data, target_mirror_size)
+            
+            # Update mirror monitor data
+            mirror_data["position_size"] = target_mirror_size
+            mirror_data["remaining_size"] = target_mirror_size
+            
+            logger.info(f"✅ Enhanced mirror sync completed for {symbol} {side}")
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced mirror sync: {e}")
+    
+    async def sync_position_increase_from_main(self, symbol: str, side: str, main_new_size: Decimal, 
+                                             main_size_increase: Decimal, main_monitor_data: Dict):
+        """
+        Sync mirror account when main position increases due to limit order fills
+        This is called directly from the main enhanced manager
+        """
+        try:
+            mirror_key = f"{symbol}_{side}_MIRROR"
+            
+            if mirror_key not in self.mirror_monitors:
+                logger.warning(f"🪞 No mirror monitor for position increase sync: {symbol} {side}")
+                return
+            
+            mirror_data = self.mirror_monitors[mirror_key]
+            
+            # Calculate proportional increase for mirror
+            mirror_proportion = mirror_data.get("mirror_proportion", Decimal("0.5"))
+            mirror_size_increase = main_size_increase * mirror_proportion
+            mirror_new_size = main_new_size * mirror_proportion
+            
+            logger.info(f"📈 Mirror position increase: {symbol} {side} +{mirror_size_increase} (total: {mirror_new_size})")
+            
+            # Update mirror position size tracking
+            mirror_data["position_size"] = mirror_new_size
+            mirror_data["remaining_size"] = mirror_new_size
+            
+            # Adjust all mirror TP orders to match new position size
+            await self._adjust_mirror_tp_orders_absolute(mirror_data, mirror_new_size)
+            
+            # Adjust mirror SL order
+            await self._adjust_mirror_sl_order_absolute(mirror_data, mirror_new_size)
+            
+            logger.info(f"✅ Mirror position increase sync completed")
+            
+        except Exception as e:
+            logger.error(f"Error syncing mirror position increase: {e}")
+    
+    async def _adjust_mirror_tp_orders_absolute(self, mirror_data: Dict, target_position_size: Decimal):
+        """
+        Adjust mirror TP orders to match absolute target position size
+        Uses cancel-and-replace strategy for reliability
+        """
+        try:
+            symbol = mirror_data["symbol"]
+            side = mirror_data["side"]
+            approach = mirror_data.get("approach", "CONSERVATIVE")
+            
+            # Define TP percentages based on approach
+            if approach == "CONSERVATIVE":
+                tp_percentages = [Decimal("85"), Decimal("5"), Decimal("5"), Decimal("5")]  # TP1: 85%, TP2-4: 5% each
+            else:  # FAST
+                tp_percentages = [Decimal("100")]  # Single TP at 100%
+            
+            # Calculate new TP quantities based on target position size
+            new_tp_quantities = []
+            for tp_pct in tp_percentages:
+                tp_qty = (target_position_size * tp_pct) / Decimal("100")
+                new_tp_quantities.append(tp_qty)
+            
+            logger.info(f"🔄 Adjusting {len(new_tp_quantities)} mirror TP orders for {symbol} {side}")
+            
+            # Cancel and replace all TP orders
+            tp_orders = mirror_data.get("tp_orders", [])
+            
+            for i, tp_order in enumerate(tp_orders):
+                if i >= len(new_tp_quantities):
+                    # Cancel excess orders
+                    await self._cancel_mirror_order(symbol, tp_order["order_id"])
+                    continue
+                
+                new_qty = new_tp_quantities[i]
+                
+                # Skip if quantity too small
+                if new_qty < Decimal("0.001"):
+                    await self._cancel_mirror_order(symbol, tp_order["order_id"])
+                    continue
+                
+                # Cancel existing order
+                if await self._cancel_mirror_order(symbol, tp_order["order_id"]):
+                    # Place new order with updated quantity
+                    await self._place_new_mirror_tp_order(
+                        mirror_data, tp_order, new_qty, i + 1
+                    )
+            
+            logger.info(f"✅ Mirror TP orders adjusted to match position size {target_position_size}")
+            
+        except Exception as e:
+            logger.error(f"Error adjusting mirror TP orders: {e}")
+    
+    async def _adjust_mirror_sl_order_absolute(self, mirror_data: Dict, target_position_size: Decimal):
+        """
+        Adjust mirror SL order to match absolute target position size
+        """
+        try:
+            symbol = mirror_data["symbol"]
+            sl_order = mirror_data.get("sl_order")
+            
+            if not sl_order:
+                return
+            
+            # Cancel existing SL order
+            if await self._cancel_mirror_order(symbol, sl_order["order_id"]):
+                # Place new SL order with updated quantity
+                await self._place_new_mirror_sl_order(mirror_data, sl_order, target_position_size)
+            
+            logger.info(f"✅ Mirror SL order adjusted to match position size {target_position_size}")
+            
+        except Exception as e:
+            logger.error(f"Error adjusting mirror SL order: {e}")
+    
+    async def _place_new_mirror_tp_order(self, mirror_data: Dict, old_tp_order: Dict, new_qty: Decimal, tp_number: int):
+        """
+        Place a new mirror TP order with updated quantity
+        """
+        try:
+            if not bybit_client_2:
+                return False
+            
+            symbol = mirror_data["symbol"]
+            side = mirror_data["side"]
+            order_side = "Sell" if side == "Buy" else "Buy"
+            
+            # Get instrument info for quantity adjustment
+            from clients.bybit_helpers import get_instrument_info
+            instrument_info = await get_instrument_info(symbol)
+            qty_step = Decimal("1")  # Default to 1 for DOGEUSDT
+            
+            if instrument_info:
+                lot_size_filter = instrument_info.get("lotSizeFilter", {})
+                qty_step = Decimal(lot_size_filter.get("qtyStep", "1"))
+            
+            # Format quantity for exchange
+            formatted_qty = format_quantity_for_exchange(new_qty, qty_step)
+            
+            # Validate quantity
+            is_valid, adjusted_qty = validate_quantity_for_order(formatted_qty, qty_step)
+            
+            if not is_valid or adjusted_qty < qty_step:
+                logger.warning(f"Mirror TP{tp_number} quantity {new_qty} too small after adjustment, skipping")
+                return False
+            
+            # Use run_in_executor for synchronous HTTP client
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: bybit_client_2.place_order(
+                    category="linear",
+                    symbol=symbol,
+                    side=order_side,
+                    orderType="Limit",
+                    qty=str(adjusted_qty),
+                    price=str(old_tp_order["price"]),
+                    reduceOnly=True,
+                    orderLinkId=f"BOT_MIR_TP{tp_number}_{symbol}_{int(time.time())}",
+                    timeInForce="GTC",
+                    positionIdx=old_tp_order.get("position_idx", 0)
+                )
+            )
+            
+            if response and response.get("retCode") == 0:
+                result = response.get("result", {})
+                new_order_id = result.get("orderId")
+                
+                if new_order_id:
+                    # Update order data
+                    old_tp_order["order_id"] = new_order_id
+                    old_tp_order["quantity"] = new_qty
+                    old_tp_order["adjustment_count"] = old_tp_order.get("adjustment_count", 0) + 1
+                    
+                    logger.info(f"✅ Mirror TP{tp_number} order placed: {new_qty} @ {old_tp_order['price']}")
+                    return True
+            
+            logger.error(f"❌ Failed to place mirror TP{tp_number} order")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error placing new mirror TP order: {e}")
+            return False
+    
+    async def _place_new_mirror_sl_order(self, mirror_data: Dict, old_sl_order: Dict, new_qty: Decimal):
+        """
+        Place a new mirror SL order with updated quantity
+        """
+        try:
+            if not bybit_client_2:
+                return False
+            
+            symbol = mirror_data["symbol"]
+            side = mirror_data["side"]
+            sl_side = "Sell" if side == "Buy" else "Buy"
+            
+            # Get instrument info for quantity adjustment
+            from clients.bybit_helpers import get_instrument_info
+            instrument_info = await get_instrument_info(symbol)
+            qty_step = Decimal("1")  # Default to 1 for DOGEUSDT
+            
+            if instrument_info:
+                lot_size_filter = instrument_info.get("lotSizeFilter", {})
+                qty_step = Decimal(lot_size_filter.get("qtyStep", "1"))
+            
+            # Format quantity for exchange
+            formatted_qty = format_quantity_for_exchange(new_qty, qty_step)
+            
+            # Validate quantity
+            is_valid, adjusted_qty = validate_quantity_for_order(formatted_qty, qty_step)
+            
+            if not is_valid or adjusted_qty < qty_step:
+                logger.warning(f"Mirror SL quantity {new_qty} too small after adjustment, skipping")
+                return False
+            
+            # Use run_in_executor for synchronous HTTP client
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: bybit_client_2.place_order(
+                    category="linear",
+                    symbol=symbol,
+                    side=sl_side,
+                    orderType="Market",
+                    qty=str(adjusted_qty),
+                    triggerPrice=str(old_sl_order["price"]),
+                    reduceOnly=True,
+                    orderLinkId=f"BOT_MIR_SL_{symbol}_{int(time.time())}",
+                    positionIdx=old_sl_order.get("position_idx", 0),
+                    stopOrderType="StopLoss"
+                )
+            )
+            
+            if response and response.get("retCode") == 0:
+                result = response.get("result", {})
+                new_order_id = result.get("orderId")
+                
+                if new_order_id:
+                    # Update order data
+                    old_sl_order["order_id"] = new_order_id
+                    old_sl_order["quantity"] = new_qty
+                    old_sl_order["adjustment_count"] = old_sl_order.get("adjustment_count", 0) + 1
+                    
+                    logger.info(f"✅ Mirror SL order placed: {new_qty} @ {old_sl_order['price']}")
+                    return True
+            
+            logger.error(f"❌ Failed to place mirror SL order")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error placing new mirror SL order: {e}")
+            return False
+
+# Global instance
+mirror_enhanced_tp_sl_manager = None
+
+def initialize_mirror_manager(main_manager):
+    """Initialize mirror manager with reference to main manager"""
+    global mirror_enhanced_tp_sl_manager
+    mirror_enhanced_tp_sl_manager = MirrorEnhancedTPSLManager(main_manager)
+    return mirror_enhanced_tp_sl_manager
+
+async def start_mirror_monitoring_task(symbol: str, side: str, position_data: Dict):
+    """Start monitoring task for mirror position"""
+    if mirror_enhanced_tp_sl_manager:
+        # Create monitoring task for mirror position
+        monitor_key = f"{symbol}_{side}_MIRROR"
+        if monitor_key in mirror_enhanced_tp_sl_manager.mirror_monitors:
+            monitor_data = mirror_enhanced_tp_sl_manager.mirror_monitors[monitor_key]
+            
+            # Start monitoring loop
+            monitor_task = asyncio.create_task(
+                _run_mirror_monitor_loop(symbol, side, monitor_data)
+            )
+            monitor_data["monitoring_task"] = monitor_task
+            logger.info(f"🪞 Started mirror monitoring task for {symbol} {side}")
+
+async def _run_mirror_monitor_loop(symbol: str, side: str, monitor_data: Dict):
+    """Run monitoring loop for mirror position"""
+    try:
+        while True:
+            # Get mirror position
+            if not bybit_client_2:
+                break
+                
+            # Use run_in_executor for synchronous HTTP client
+            loop = asyncio.get_event_loop()
+            positions = await loop.run_in_executor(
+                None,
+                lambda: bybit_client_2.get_positions(
+                    category="linear",
+                    symbol=symbol
+                )
+            )
+            
+            if not positions or positions.get("retCode") != 0:
+                break
+                
+            position_list = positions.get("result", {}).get("list", [])
+            position = next((p for p in position_list if p.get("side") == side), None)
+            
+            if not position or float(position.get("size", 0)) == 0:
+                logger.info(f"🪞 Mirror position {symbol} {side} closed")
+                # Note: Alerts are disabled for mirror accounts per previous requirements
+                break
+            
+            current_size = Decimal(str(position["size"]))
+            
+            # Check if size changed
+            if current_size != monitor_data["remaining_size"]:
+                logger.info(f"🪞 Mirror position {symbol} {side} size changed: {monitor_data['remaining_size']} → {current_size}")
+                monitor_data["remaining_size"] = current_size
+            
+            # Sync with main account position
+            if mirror_enhanced_tp_sl_manager:
+                await mirror_enhanced_tp_sl_manager.sync_with_main_position(symbol, side)
+            
+            # Wait before next check
+            await asyncio.sleep(12)
+            
+    except asyncio.CancelledError:
+        logger.info(f"🪞 Mirror monitor cancelled for {symbol} {side}")
+    except Exception as e:
+        logger.error(f"🪞 Error in mirror monitor loop: {e}")
+
+
+async def sync_mirror_positions_on_startup(mirror_manager):
+    """
+    Sync mirror positions on startup - create monitors for orphaned positions
+    This ensures all mirror positions have Enhanced TP/SL monitoring
+    """
+    try:
+        if not bybit_client_2:
+            logger.warning("Mirror client not available")
+            return
+            
+        logger.info("🪞 Starting mirror position sync...")
+        
+        # Get all mirror positions
+        loop = asyncio.get_event_loop()
+        positions_response = await loop.run_in_executor(
+            None,
+            lambda: bybit_client_2.get_positions(
+                category="linear",
+                settleCoin="USDT"
+            )
+        )
+        
+        if not positions_response or positions_response.get("retCode") != 0:
+            logger.error(f"Failed to fetch mirror positions: {positions_response}")
+            return
+            
+        all_positions = []
+        position_list = positions_response.get("result", {}).get("list", [])
+        
+        # Filter active positions
+        for pos in position_list:
+            if float(pos.get('size', 0)) > 0:
+                all_positions.append(pos)
+                
+        logger.info(f"🪞 Found {len(all_positions)} mirror positions to check")
+        
+        monitors_created = 0
+        monitors_skipped = 0
+        
+        for position in all_positions:
+            try:
+                symbol = position.get('symbol')
+                side = position.get('side')
+                size = float(position.get('size', 0))
+                
+                if size <= 0:
+                    continue
+                
+                monitor_key = f"{symbol}_{side}_MIRROR"
+                
+                # Check if monitor already exists
+                if monitor_key in mirror_manager.mirror_monitors:
+                    logger.debug(f"✅ Mirror monitor already exists for {monitor_key}")
+                    monitors_skipped += 1
+                    continue
+                
+                # Create monitor for this position
+                logger.info(f"🆕 Creating mirror monitor for orphaned position: {symbol} {side}")
+                
+                # Get position details
+                avg_price = Decimal(str(position.get('avgPrice', 0)))
+                
+                # Get open orders for this position
+                orders_response = await loop.run_in_executor(
+                    None,
+                    lambda: bybit_client_2.get_open_orders(
+                        category="linear",
+                        symbol=symbol
+                    )
+                )
+                
+                # Create basic monitor data
+                monitor_data = {
+                    "symbol": symbol,
+                    "side": side,
+                    "position_size": Decimal(str(size)),
+                    "remaining_size": Decimal(str(size)),
+                    "entry_price": avg_price,
+                    "avg_price": avg_price,
+                    "approach": "fast",  # Default to fast for orphaned positions
+                    "tp_orders": [],
+                    "sl_order": None,
+                    "filled_tps": [],
+                    "cancelled_limits": False,
+                    "tp1_hit": False,
+                    "tp1_info": None,
+                    "sl_moved_to_be": False,
+                    "sl_move_attempts": 0,
+                    "created_at": time.time(),
+                    "last_check": time.time(),
+                    "limit_orders": [],
+                    "limit_orders_cancelled": False,
+                    "phase": "MONITORING",
+                    "chat_id": None,  # Will be set from main position if available
+                    "account_type": "mirror",
+                    "is_mirror": True
+                }
+                
+                # Try to get chat_id from main position
+                main_key = f"{symbol}_{side}"
+                if main_key in mirror_manager.main_manager.position_monitors:
+                    main_monitor = mirror_manager.main_manager.position_monitors[main_key]
+                    monitor_data["chat_id"] = main_monitor.get("chat_id")
+                    monitor_data["approach"] = main_monitor.get("approach", "fast")
+                
+                # Add to mirror monitors
+                mirror_manager.mirror_monitors[monitor_key] = monitor_data
+                
+                # Create dashboard entry
+                if monitor_data["chat_id"]:
+                    await mirror_manager._create_mirror_dashboard_entry(
+                        symbol=symbol,
+                        side=side,
+                        chat_id=monitor_data["chat_id"],
+                        approach=monitor_data["approach"]
+                    )
+                
+                # Start monitoring task
+                monitor_task = asyncio.create_task(
+                    _run_mirror_monitor_loop(symbol, side, monitor_data)
+                )
+                monitor_data["monitoring_task"] = monitor_task
+                
+                monitors_created += 1
+                logger.info(f"✅ Created mirror monitor for {symbol} {side}")
+                
+            except Exception as e:
+                logger.error(f"Error creating mirror monitor for position: {e}")
+                continue
+        
+        logger.info(f"🪞 Mirror position sync complete: {monitors_created} created, {monitors_skipped} skipped")
+        
+    except Exception as e:
+        logger.error(f"Error syncing mirror positions on startup: {e}")
+        import traceback
+        traceback.print_exc()

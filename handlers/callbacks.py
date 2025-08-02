@@ -660,11 +660,11 @@ This will permanently delete:
             from decimal import Decimal
             stats_keys = [
                 STATS_TOTAL_TRADES, STATS_TOTAL_WINS, STATS_TOTAL_LOSSES,
-                STATS_TP1_HITS, STATS_SL_HITS, STATS_OTHER_CLOSURES,
+                STATS_TP_HITS, STATS_SL_HITS, STATS_OTHER_CLOSURES,
                 STATS_TOTAL_PNL, STATS_WIN_STREAK, STATS_LOSS_STREAK,
                 STATS_BEST_TRADE, STATS_WORST_TRADE,
                 STATS_CONSERVATIVE_TRADES, STATS_FAST_TRADES,
-                STATS_CONSERVATIVE_TP1_CANCELLATIONS,
+                STATS_CONSERVATIVE_TP_CANCELLATIONS,
                 'stats_total_wins_pnl', 'stats_total_losses_pnl',
                 'stats_max_drawdown', 'stats_peak_equity',
                 'stats_current_drawdown', 'recent_trade_pnls'
@@ -1006,7 +1006,7 @@ async def show_detailed_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
         total_wins = context.application.bot_data.get(STATS_TOTAL_WINS, 0)
         total_losses = context.application.bot_data.get(STATS_TOTAL_LOSSES, 0)
         total_pnl = context.application.bot_data.get(STATS_TOTAL_PNL, 0)
-        tp1_hits = context.application.bot_data.get(STATS_TP1_HITS, 0)
+        tp_hits = context.application.bot_data.get(STATS_TP_HITS, 0) or context.application.bot_data.get(STATS_TP1_HITS, 0)  # Check both for compatibility
         sl_hits = context.application.bot_data.get(STATS_SL_HITS, 0)
         other_closures = context.application.bot_data.get(STATS_OTHER_CLOSURES, 0)
         win_streak = context.application.bot_data.get(STATS_WIN_STREAK, 0)
@@ -1038,7 +1038,7 @@ async def show_detailed_stats(update: Update, context: ContextTypes.DEFAULT_TYPE
 • Loss Streak: {loss_streak}
 
 🎯 <b>Exit Analysis:</b>
-• TP1 Hits: {tp1_hits}
+• TP Hits: {tp_hits}
 • SL Hits: {sl_hits}
 • Manual Closes: {other_closures}
 
@@ -1170,7 +1170,7 @@ async def show_conservative_approach_stats(update: Update, context: ContextTypes
 • Gradual position building
 • Multiple TP targets
 • Enhanced risk distribution
-• TP1 hit cancellation logic
+• TP hit cancellation logic
 
 📱 <b>Conservative approach tracking enabled</b>
 """
@@ -1202,7 +1202,7 @@ async def export_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "total_wins": context.application.bot_data.get(STATS_TOTAL_WINS, 0),
             "total_losses": context.application.bot_data.get(STATS_TOTAL_LOSSES, 0),
             "total_pnl": float(context.application.bot_data.get(STATS_TOTAL_PNL, 0)),
-            "tp1_hits": context.application.bot_data.get(STATS_TP1_HITS, 0),
+            "tp_hits": context.application.bot_data.get(STATS_TP_HITS, 0) or context.application.bot_data.get(STATS_TP1_HITS, 0),
             "sl_hits": context.application.bot_data.get(STATS_SL_HITS, 0),
             "other_closures": context.application.bot_data.get(STATS_OTHER_CLOSURES, 0),
             "win_streak": context.application.bot_data.get(STATS_WIN_STREAK, 0),

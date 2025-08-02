@@ -35,7 +35,7 @@ async def send_simple_alert(chat_id: int, message: str, alert_type: str = None) 
         global _application
         if not _application:
             logger.error("❌ Application not set for alert system")
-            # Try to get application from main module as fallback
+            # Try multiple fallback methods to get application reference
             try:
                 import main
                 if hasattr(main, '_global_app') and main._global_app:
@@ -43,7 +43,25 @@ async def send_simple_alert(chat_id: int, message: str, alert_type: str = None) 
                     logger.info("✅ Retrieved application reference from main module")
                 else:
                     logger.error("❌ Could not retrieve application reference from main module")
-                    return False
+                    # Try direct bot creation as last resort
+                    try:
+                        from telegram import Bot
+                        from config.settings import TELEGRAM_TOKEN
+                        if TELEGRAM_TOKEN:
+                            logger.info("🔄 Creating direct bot instance for alert")
+                            bot = Bot(token=TELEGRAM_TOKEN)
+                            # Create a minimal application-like object
+                            class MinimalApp:
+                                def __init__(self, bot):
+                                    self.bot = bot
+                            _application = MinimalApp(bot)
+                            logger.info("✅ Created fallback bot instance for alerts")
+                        else:
+                            logger.error("❌ No TELEGRAM_TOKEN available for fallback bot")
+                            return False
+                    except Exception as fallback_e:
+                        logger.error(f"❌ Failed to create fallback bot: {fallback_e}")
+                        return False
             except Exception as e:
                 logger.error(f"❌ Failed to import application from main: {e}")
                 return False
@@ -163,12 +181,12 @@ async def send_trade_alert(bot: Bot, chat_id: int, alert_type: str,
             message = format_limit_filled_alert(
                 symbol, side, approach, additional_info
             )
-        elif alert_type == "tp1_early_hit":
-            message = format_tp1_early_hit_alert(
+        elif alert_type == "tp_early_hit":
+            message = format_tp_early_hit_alert(
                 symbol, side, approach, cancelled_orders, additional_info
             )
-        elif alert_type == "tp1_with_fills":
-            message = format_tp1_with_fills_alert(
+        elif alert_type == "tp_with_fills":
+            message = format_tp_with_fills_alert(
                 symbol, side, approach, cancelled_orders, additional_info
             )
         elif alert_type == "conservative_rebalance":
@@ -222,9 +240,8 @@ def format_tp_hit_alert(symbol: str, side: str, approach: str,
                        additional_info: Dict[str, Any]) -> str:
     """Format take profit hit alert message with enhanced information and 2025 best practices"""
     
-    # Determine which TP was hit for conservative/ggshot
-    tp_number = additional_info.get("tp_number", 1) if approach in ["conservative", "ggshot"] else ""
-    tp_text = f"TP{tp_number}" if tp_number else "TP"
+    # Single TP approach - always use "TP" terminology
+    tp_text = "TP"  # Single take profit approach
     
     # Get additional context
     account_type = additional_info.get("account_type", "main").upper()
@@ -265,34 +282,32 @@ def format_tp_hit_alert(symbol: str, side: str, approach: str,
             message += f"   • ... and {len(cancelled_orders) - 5} more\n"
 
     if approach in ["conservative", "ggshot"] and additional_info:
-        remaining_tps = additional_info.get("remaining_tps", [])
-        if remaining_tps:
-            message += f"\n\n<b>🎯 Active TPs:</b> {', '.join(remaining_tps)}"
-
-        # Enhanced breakeven information for TP1
-        if tp_number == 1:
-            sl_moved = additional_info.get("sl_moved_to_be", False)
-            breakeven_price = additional_info.get("breakeven_price")
-            
-            if sl_moved and breakeven_price:
-                message += f"\n\n<b>🛡️ STOP LOSS MOVED TO BREAKEVEN</b>"
-                message += f"\n• Breakeven Price: ${format_price(breakeven_price)} 🎯"
-                message += f"\n• Protection: 100% of remaining position 🔒"
-                message += f"\n• Includes: 0.06% fees + 0.02% safety margin 📊"
-                message += f"\n• Status: Position now risk-free! ✅"
+        # Single TP approach: No remaining TPs since position fully closes when TP is hit
+        
+        # Enhanced breakeven information for single TP approach
+        # Always show breakeven info since we only have one TP
+        sl_moved = additional_info.get("sl_moved_to_be", False)
+        breakeven_price = additional_info.get("breakeven_price")
+        
+        if sl_moved and breakeven_price:
+            message += f"\n\n<b>🛡️ STOP LOSS MOVED TO BREAKEVEN</b>"
+            message += f"\n• Breakeven Price: ${format_price(breakeven_price)} 🎯"
+            message += f"\n• Protection: 100% of remaining position 🔒"
+            message += f"\n• Includes: 0.06% fees + 0.02% safety margin 📊"
+            message += f"\n• Status: Position now risk-free! ✅"
                 
-                # Add limit order cancellation info if applicable
-                limits_cancelled = additional_info.get("limits_cancelled", False)
-                if limits_cancelled:
-                    message += f"\n• Limit Orders: Cancelled (TP1 hit) ❌"
-            else:
-                # Enhanced pending breakeven info
-                message += f"\n\n<b>⏳ PENDING ACTIONS:</b>"
-                message += f"\n• SL will move to breakeven 🛡️"
-                message += f"\n• Target: Entry + 0.08% (fees + margin) 🎯"
-                message += f"\n• Coverage: Will protect remaining position 🔒"
-                if approach == "conservative":
-                    message += f"\n• Limit orders will be cancelled ❌"
+            # Add limit order cancellation info if applicable
+            limits_cancelled = additional_info.get("limits_cancelled", False)
+            if limits_cancelled:
+                message += f"\n• Limit Orders: Cancelled (TP hit) ❌"
+        else:
+            # Enhanced pending breakeven info
+            message += f"\n\n<b>⏳ PENDING ACTIONS:</b>"
+            message += f"\n• SL will move to breakeven 🛡️"
+            message += f"\n• Target: Entry + 0.08% (fees + margin) 🎯"
+            message += f"\n• Coverage: Will protect remaining position 🔒"
+            if approach == "conservative":
+                message += f"\n• Limit orders will be cancelled ❌"
 
     # Add system status
     message += f"\n\n<b>⚙️ System Status:</b>"
@@ -470,10 +485,10 @@ def format_limit_filled_alert(symbol: str, side: str, approach: str,
 
     return message.strip()
 
-def format_tp1_early_hit_alert(symbol: str, side: str, approach: str,
+def format_tp_early_hit_alert(symbol: str, side: str, approach: str,
                               cancelled_orders: List[str],
                               additional_info: Dict[str, Any]) -> str:
-    """Format TP1 early hit alert (before any limits filled) with 2025 best practices"""
+    """Format TP early hit alert (before any limits filled) with 2025 best practices"""
     
     # Enhanced 2025 emojis and formatting
     account_type = additional_info.get("account_type", "main").upper() if additional_info else "MAIN"
@@ -486,14 +501,14 @@ def format_tp1_early_hit_alert(symbol: str, side: str, approach: str,
     sl_moved = False
     new_sl_price = additional_info.get("new_sl_price") if additional_info else None
 
-    message = f"""🚨 <b>TP1 HIT EARLY - ALL ORDERS CANCELLED</b>
+    message = f"""🚨 <b>TP HIT EARLY - ALL ORDERS CANCELLED</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 <b>📊 Trade Details:</b>
 • Symbol: {symbol} {side_emoji} {side}
 • Approach: {approach_emoji} {approach_text}
 • Account: {account_emoji} {account_type}
 
-⚠️ <b>TP1 hit before limit orders filled!</b>
+⚠️ <b>TP hit before limit orders filled!</b>
 📝 All remaining orders have been cancelled ❌
 💡 Consider market conditions for next trade 📈
 """
@@ -517,10 +532,10 @@ def format_tp1_early_hit_alert(symbol: str, side: str, approach: str,
 
     return message.strip()
 
-def format_tp1_with_fills_alert(symbol: str, side: str, approach: str,
+def format_tp_with_fills_alert(symbol: str, side: str, approach: str,
                                cancelled_orders: List[str],
                                additional_info: Dict[str, Any]) -> str:
-    """Format TP1 hit with fills alert (after some limits filled) with 2025 best practices"""
+    """Format TP hit with fills alert (after some limits filled) with 2025 best practices"""
     
     # Enhanced 2025 emojis and formatting
     account_type = additional_info.get("account_type", "main").upper() if additional_info else "MAIN"
@@ -533,16 +548,16 @@ def format_tp1_with_fills_alert(symbol: str, side: str, approach: str,
     sl_moved = False  # Removed breakeven functionality
     new_sl_price = additional_info.get("new_sl_price")
 
-    message = f"""🎯 <b>TP1 HIT - REMAINING LIMITS CANCELLED</b>
+    message = f"""🎯 <b>TP HIT - REMAINING LIMITS CANCELLED</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 <b>📊 Trade Details:</b>
 • Symbol: {symbol} {side_emoji} {side}
 • Approach: {approach_emoji} {approach_text}
 • Account: {account_emoji} {account_type}
 
-✅ <b>TP1 hit with {filled_count}/{total_limits} limits filled</b>
+✅ <b>TP hit with {filled_count}/{total_limits} limits filled</b>
 📝 Unfilled limit orders cancelled ❌
-✨ TP2, TP3, TP4 remain active 🎯
+✨ Position fully closed at Take Profit target! 🏆
 """
 
     # Add SL movement info if applicable
@@ -691,8 +706,8 @@ async def send_position_closed_summary(chat_id: int,
             features_used.append("Breakeven Protection")
         if info.get("auto_rebalanced"):
             features_used.append("Auto-Rebalancing")
-        if info.get("limit_cancelled_on_tp1"):
-            features_used.append("TP1 Limit Cancel")
+        if info.get("limit_cancelled_on_tp"):
+            features_used.append("TP Limit Cancel")
         if info.get("sl_auto_adjusted"):
             features_used.append("SL Auto-Adjustment")
         
@@ -857,10 +872,7 @@ def format_conservative_rebalance_alert(symbol: str, side: str, position_size: D
         trigger = info.get("trigger", "unknown")
         filled_limits = info.get("filled_limits", 0)
         total_limits = info.get("total_limits", 3)
-        tp1_qty = info.get("tp1_qty", 0)
-        tp2_qty = info.get("tp2_qty", 0)
-        tp3_qty = info.get("tp3_qty", 0)
-        tp4_qty = info.get("tp4_qty", 0)
+        tp_qty = info.get("tp_qty", 0) or info.get("tp1_qty", 0)  # Single TP approach only
         sl_qty = info.get("sl_qty", 0)
         cancelled_orders = info.get("cancelled_orders", [])
         new_orders = info.get("new_orders", [])
@@ -874,8 +886,8 @@ def format_conservative_rebalance_alert(symbol: str, side: str, position_size: D
             trigger_emoji = "🔄"
         elif trigger.startswith("TP") and trigger.endswith("_hit"):
             tp_num = trigger[2]  # Extract TP number
-            remaining_tps = info.get("remaining_tps", 0)
-            trigger_text = f"TP{tp_num} Hit - {remaining_tps} TPs Remaining"
+            # Single Take Profit approach - position closes 100%
+            trigger_text = f"Take Profit Hit - Position Closed 100%"
             trigger_emoji = "🎯"
         else:
             trigger_text = "Manual Trigger"
@@ -883,15 +895,10 @@ def format_conservative_rebalance_alert(symbol: str, side: str, position_size: D
 
         # Determine distribution text based on trigger
         if trigger.startswith("TP") and trigger.endswith("_hit"):
-            tp_hit_num = int(trigger[2])
-            remaining_tps = info.get("remaining_tps", 0)
-            if remaining_tps > 0:
-                dist_pct = f"{100/remaining_tps:.1f}"
-                distribution_text = f"EQUAL DISTRIBUTION ({dist_pct}% each)"
-            else:
-                distribution_text = "NO TPs REMAINING"
+            # Single Take Profit approach - position closed 100%
+            distribution_text = "POSITION CLOSED (100%)"
         else:
-            distribution_text = "STANDARD DISTRIBUTION (85/5/5/5)"
+            distribution_text = "SINGLE TAKE PROFIT (100%)"
 
         # Build message
         message = f"""🛡️ <b>CONSERVATIVE REBALANCE</b>
@@ -903,11 +910,8 @@ def format_conservative_rebalance_alert(symbol: str, side: str, position_size: D
 💰 <b>Entry Price:</b> {format_decimal_or_na(info.get('entry_price', 0), 6)}
 📍 <b>Current Price:</b> {format_decimal_or_na(info.get('current_price', 0), 6)}
 
-<b>🎯 NEW TP {distribution_text}</b>
-├─ TP1: {format_decimal_or_na(tp1_qty, 4)}{' (hit)' if tp1_qty == 0 and trigger.startswith('TP') else ' (85%)' if not trigger.startswith('TP') else ''}
-├─ TP2: {format_decimal_or_na(tp2_qty, 4)}{' (hit)' if tp2_qty == 0 and trigger.startswith('TP') else ' (5%)' if not trigger.startswith('TP') else ''}
-├─ TP3: {format_decimal_or_na(tp3_qty, 4)}{' (hit)' if tp3_qty == 0 and trigger.startswith('TP') else ' (5%)' if not trigger.startswith('TP') else ''}
-└─ TP4: {format_decimal_or_na(tp4_qty, 4)}{' (hit)' if tp4_qty == 0 and trigger.startswith('TP') else ' (5%)' if not trigger.startswith('TP') else ''}
+<b>🎯 TAKE PROFIT TARGET</b>
+└─ TP: {format_decimal_or_na(tp_qty, 4)}{' (hit)' if tp_qty == 0 and trigger.startswith('TP') else ' (100%)' if not trigger.startswith('TP') else ''}
 
 <b>🛡️ STOP LOSS</b>
 └─ SL: {format_decimal_or_na(sl_qty, 4)} (100%)
