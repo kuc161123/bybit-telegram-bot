@@ -61,47 +61,29 @@ class EnhancedTPSLManager:
         logger.info(f"🔔 Mirror alerts configuration: ENABLE_MIRROR_ALERTS = {ENABLE_MIRROR_ALERTS}")
         self.position_monitors = {}  # symbol -> monitor data
         self.order_state = {}  # symbol -> order state tracking
-        self.price_cache = {}  # symbol -> (price, timestamp)
         self.monitor_tasks = {}  # monitor_key -> monitor_info (dashboard compatibility)
-        self.price_cache_ttl = 5  # seconds
         
-        # PERFORMANCE: Add async lock for cache refresh
-        self._cache_refresh_lock = asyncio.Lock()
-        self._cache_refresh_in_progress = False
+        # DIRECT API ONLY: All caching removed for maximum real-time accuracy
+        # Server environment provides fast API responses, eliminating need for caching
         
         # Persistence timing control
         self.last_persistence_save = 0
         self.persistence_interval = 30  # Save at most every 30 seconds
         self.pending_persistence_save = False
         
-        # PHASE 2 OPTIMIZATION: Write-through cache with dirty flags
-        self.monitor_cache = {}  # In-memory cache of monitor states
-        self.dirty_monitors = set()  # Track which monitors need persistence
-        self.cache_write_interval = 15  # Write dirty cache every 15 seconds
-        self.last_cache_write = 0
-        
-        # PHASE 2 OPTIMIZATION: Memory structures with indexing and LRU cache
-        from utils.cache import EnhancedCache
+        # DIRECT API INDEXING: Simple indexing without caching
         self.symbol_index = {}  # symbol -> set of monitor_keys (fast lookup)
         self.account_index = {}  # account_type -> set of monitor_keys
         self.phase_index = {}  # phase -> set of monitor_keys
-        self.urgency_cache = EnhancedCache(max_size=1000)  # Cache urgency calculations
         
-        # PERFORMANCE OPTIMIZATION: Execution-aware caching system (2025 best practices)
+        # DIRECT API EXECUTION: No caching during execution for maximum accuracy
         self._execution_mode = False  # Set to True during trade execution
-        self._execution_cache = {}    # Cache API calls during execution (5s TTL)
-        self._execution_cache_ttl = 5  # 5 second cache during execution
-        self._last_execution_cache_clear = 0
-        
-        # EXECUTION SPEED OPTIMIZATION: Enhanced execution mode system
         self._execution_mode_start_time = 0  # Track when execution mode was enabled
         self._execution_mode_timeout = 120   # Auto-disable after 120 seconds
-        self._pre_execution_monitoring_interval = 5  # Store original interval
-        self._execution_monitoring_interval = 30    # Reduced interval during execution
+        self._pre_execution_monitoring_interval = 1  # Server-optimized: 1 second interval
+        self._execution_monitoring_interval = 1    # Server-optimized: 1 second during execution
         
-        # ULTRA-HIGH PERFORMANCE: Dynamic monitoring system for 100+ trades
-        self._position_urgency_cache = {}    # position_key -> (urgency, last_calculated_time)
-        self._urgency_cache_ttl = 30        # Cache urgency calculations for 30 seconds
+        # DIRECT API PERFORMANCE: No caching, optimized for server environment
         self._last_position_count = 0       # Track position count changes
         self._dynamic_intervals_enabled = False  # Will be enabled based on position count
         
@@ -110,16 +92,8 @@ class EnhancedTPSLManager:
         self._critical_only_monitoring = False  # Only monitor critical positions during execution
         self._batch_processing_enabled = False  # Process positions in batches
         
-        # MONITORING MODE: Normal operations cache (15s TTL)
-        self._monitoring_cache = {}   # Cache for normal monitoring operations
-        self._monitoring_cache_ttl = 15  # 15 second cache for monitoring
-        self._last_monitoring_cache_clear = 0
-        
-        # CACHE-ON-DEMAND: Dynamic cache management based on operation mode
-        self._cache_mode = "monitoring"  # "monitoring", "execution", "maintenance"
-        self._cache_hit_rates = {"execution": 0.0, "monitoring": 0.0}
-        self._cache_requests = {"execution": 0, "monitoring": 0}
-        self._cache_hits = {"execution": 0, "monitoring": 0}
+        # DIRECT API MODE: No caching for real-time server performance
+        self._api_mode = "direct"  # Always direct API calls
         
         # Initialize persistence task flag
         self._persistence_task_pending = False
@@ -127,13 +101,8 @@ class EnhancedTPSLManager:
         # Start periodic persistence flush task (if event loop is available)
         self._start_persistence_flush_task()
         
-        # Start cache maintenance task
-        self._start_cache_maintenance_task()
-        
-        # Initialize execution-aware cache
-        from utils.execution_aware_cache import execution_aware_cache, CacheMode
-        self.execution_cache = execution_aware_cache
-        self.CacheMode = CacheMode
+        # NO CACHE MAINTENANCE: Direct API only
+        # Server environment eliminates need for caching systems
         
         # API call batching system for performance
         self.api_batch_queue = {}  # operation_type -> list of requests
@@ -412,28 +381,7 @@ class EnhancedTPSLManager:
         self.mirror_sync_locks = {}  # symbol_side -> asyncio.Lock
 
 
-    def _update_monitor_cache(self, monitor_key: str, monitor_data: Dict):
-        """
-        PHASE 2 OPTIMIZATION: Update write-through cache with dirty flag tracking
-        This dramatically reduces pickle file operations
-        """
-        try:
-            # Update in-memory cache
-            self.monitor_cache[monitor_key] = monitor_data.copy()
-            
-            # Mark as dirty for next persistence write
-            self.dirty_monitors.add(monitor_key)
-            
-            # PHASE 2 OPTIMIZATION: Update indexes for fast lookups
-            self._update_monitor_indexes(monitor_key, monitor_data)
-            
-            # Check if we need to write dirty cache to persistence
-            current_time = time.time()
-            if current_time - self.last_cache_write > self.cache_write_interval:
-                asyncio.create_task(self._flush_dirty_cache())
-                
-        except Exception as e:
-            logger.error(f"Error updating monitor cache: {e}")
+    # MONITOR CACHE METHOD REMOVED: Direct persistence only for server performance
     
     def _update_monitor_indexes(self, monitor_key: str, monitor_data: Dict):
         """
@@ -510,35 +458,7 @@ class EnhancedTPSLManager:
         monitor_keys = self.phase_index.get(phase, set())
         return {key: self.position_monitors[key] for key in monitor_keys if key in self.position_monitors}
     
-    async def _flush_dirty_cache(self):
-        """
-        PHASE 2 OPTIMIZATION: Flush only dirty monitors to persistence
-        Write-through cache pattern for optimal performance
-        """
-        if not self.dirty_monitors:
-            return
-            
-        try:
-            current_time = time.time()
-            dirty_count = len(self.dirty_monitors)
-            
-            # Only flush if we have dirty data and enough time has passed
-            if current_time - self.last_cache_write < self.cache_write_interval:
-                return
-            
-            logger.debug(f"💾 Flushing {dirty_count} dirty monitors to persistence")
-            
-            # Update persistence with only dirty monitors (more efficient)
-            await self._save_dirty_monitors_to_persistence()
-            
-            # Clear dirty flags
-            self.dirty_monitors.clear()
-            self.last_cache_write = current_time
-            
-            logger.debug(f"✅ Cache flush complete: {dirty_count} monitors persisted")
-            
-        except Exception as e:
-            logger.error(f"Error flushing dirty cache: {e}")
+    # CACHE METHODS REMOVED: Direct API only for server performance
     
     async def _save_dirty_monitors_to_persistence(self):
         """Save only dirty monitors to persistence file (write-through optimization)"""
@@ -697,102 +617,9 @@ class EnhancedTPSLManager:
             logger.debug("📊 No event loop available yet, will start persistence flush when loop starts")
             # Store a flag to start the task later
     
-    def _start_cache_maintenance_task(self):
-        """Start a background task for cache maintenance"""
-        try:
-            # Check if there's a running event loop
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._periodic_cache_maintenance())
-            logger.debug("🔧 Cache maintenance task started")
-        except RuntimeError:
-            logger.debug("🔧 No event loop available yet, will start cache maintenance when loop starts")
+    # CACHE MAINTENANCE REMOVED: Direct API only for server performance
     
-    async def _periodic_cache_maintenance(self):
-        """Periodically maintain cache and update performance metrics"""
-        from utils.execution_aware_cache import start_cache_maintenance
-        await start_cache_maintenance()
-        
-        while True:
-            try:
-                await asyncio.sleep(60)  # Run every minute
-                
-                # Get cache statistics
-                stats = await self.execution_cache.get_stats()
-                
-                # Log cache performance every 5 minutes
-                if int(time.time()) % 300 == 0:
-                    logger.info(f"📊 Cache Performance: {stats['stats']['hit_rates']}")
-                    logger.info(f"📊 Cache Sizes: {stats['stats']['cache_sizes']}")
-                    logger.info(f"📊 Total Cache Entries: {stats['total_entries']}")
-                
-            except Exception as e:
-                logger.error(f"❌ Cache maintenance error: {e}")
-                await asyncio.sleep(60)
-    
-    async def set_execution_mode(self, enable: bool = True):
-        """
-        Switch cache to execution mode for faster API responses during active trading
-        Based on 2025 best practices for execution-aware caching
-        """
-        if enable:
-            await self.execution_cache.set_mode(self.CacheMode.EXECUTION)
-            logger.info("🚀 Switched to EXECUTION cache mode (5s TTL for fast trading)")
-        else:
-            await self.execution_cache.set_mode(self.CacheMode.MONITORING)
-            logger.info("🔍 Switched to MONITORING cache mode (15s TTL for normal operations)")
-    
-    async def set_maintenance_mode(self, enable: bool = True):
-        """Switch cache to maintenance mode for cleanup operations"""
-        if enable:
-            await self.execution_cache.set_mode(self.CacheMode.MAINTENANCE)
-            logger.info("🔧 Switched to MAINTENANCE cache mode (30s TTL for cleanup)")
-        else:
-            await self.execution_cache.set_mode(self.CacheMode.MONITORING)
-            logger.info("🔍 Switched back to MONITORING cache mode")
-            
-    async def _get_cached_position_info(self, symbol: str, account_type: str = "main") -> Optional[Any]:
-        """
-        Get position info with execution-aware caching
-        Uses different TTL based on current operation mode
-        """
-        from clients.bybit_helpers import get_position_info_for_account, get_all_positions
-        
-        params = {"symbol": symbol, "account": account_type}
-        
-        if symbol == "ALL":
-            # Get all positions
-            return await self.execution_cache.get_cached_api_call(
-                "all_positions", params, get_all_positions
-            )
-        else:
-            # Get specific position
-            return await self.execution_cache.get_cached_api_call(
-                "position_info", params, get_position_info_for_account,
-                symbol, account_type
-            )
-    
-    async def _get_cached_order_info(self, symbol: str, account_type: str = "main") -> Optional[Any]:
-        """
-        Get order info with execution-aware caching
-        Uses different TTL based on current operation mode
-        """
-        from clients.bybit_helpers import get_all_open_orders
-        from execution.mirror_trader import bybit_client_2
-        
-        params = {"symbol": symbol, "account": account_type}
-        
-        if account_type == "mirror" and bybit_client_2:
-            # Mirror account orders
-            return await self.execution_cache.get_cached_api_call(
-                "mirror_orders", params, get_all_open_orders,
-                client=bybit_client_2, symbol=symbol
-            )
-        else:
-            # Main account orders
-            return await self.execution_cache.get_cached_api_call(
-                "main_orders", params, get_all_open_orders,
-                symbol=symbol
-            )
+    # CACHE MODE METHODS REMOVED: Direct API only for server performance
     
     async def _periodic_persistence_flush(self):
         """Periodically flush any pending persistence saves"""
@@ -1352,10 +1179,16 @@ class EnhancedTPSLManager:
         This is a fallback when monitor data doesn't track orders properly
         """
         try:
-            # CRITICAL FIX: Use monitoring cache instead of direct API calls
+            # DIRECT API: Get orders from exchange
             account_type = "mirror" if is_mirror_account else "main"
-            cached_orders = await self._get_cached_open_orders(symbol, account_type)
-            response = {"result": {"list": cached_orders}}
+            if account_type == "mirror":
+                from clients.bybit_client import bybit_client_2
+                orders = await get_all_open_orders(client=bybit_client_2)
+                orders = [order for order in (orders or []) if order.get('symbol') == symbol]
+            else:
+                orders = await get_all_open_orders()
+                orders = [order for order in (orders or []) if order.get('symbol') == symbol]
+            response = {"result": {"list": orders}}
 
             if not response:
                 logger.warning(f"Failed to get live orders for {symbol}")
@@ -2060,8 +1893,8 @@ class EnhancedTPSLManager:
         self._ensure_tp_numbers(monitor_data)
         self.position_monitors[monitor_key] = monitor_data
         
-        # PHASE 2 OPTIMIZATION: Update write-through cache instead of immediate persistence
-        self._update_monitor_cache(monitor_key, monitor_data)
+        # DIRECT PERSISTENCE: No caching for server performance
+        # Monitor data stored directly in position_monitors dictionary
 
         # Use adaptive monitoring intervals based on position state
         current_time = time.time()
@@ -2088,8 +1921,8 @@ class EnhancedTPSLManager:
             return
 
         try:
-            # CRITICAL FIX: Use cached position fetching to reduce API calls
-            positions = await self._get_cached_position_info(symbol, account_type)
+            # DIRECT API: Real-time position fetching for maximum accuracy
+            positions = await get_position_info_for_account(symbol, account_type)
             logger.debug(f"🔍 Got {account_type} position for {symbol} {side} (monitor: {monitor_key})")
 
             # Additional safety check - ensure we're monitoring the correct account
@@ -2461,8 +2294,10 @@ class EnhancedTPSLManager:
             if monitor_data.get("all_tps_filled"):
                 return "all_tps_filled"
             
-            # Fallback: Check active orders to determine closure reason
-            active_orders = await self._get_cached_open_orders(symbol, account_type)
+            # DIRECT API: Check active orders to determine closure reason
+            active_orders = await get_all_open_orders() if account_type == "main" else await get_all_open_orders(client=bybit_client_2)
+            # Filter for symbol
+            active_orders = [order for order in (active_orders or []) if order.get('symbol') == symbol]
             
             # Check if SL order is missing (likely it triggered)
             sl_still_active = False
@@ -2832,9 +2667,17 @@ class EnhancedTPSLManager:
             
             logger.info(f"🔍 Validating TP orders for {symbol} ({account_type.upper()})")
             
-            # Get fresh order data from exchange
+            # DIRECT API: Get fresh order data from exchange
             try:
-                fresh_orders = await self._get_cached_open_orders(symbol, account_type)
+                if account_type == "mirror":
+                    from clients.bybit_client import bybit_client_2
+                    fresh_orders = await get_all_open_orders(client=bybit_client_2)
+                    # Filter for symbol
+                    fresh_orders = [order for order in (fresh_orders or []) if order.get('symbol') == symbol]
+                else:
+                    fresh_orders = await get_all_open_orders()
+                    # Filter for symbol
+                    fresh_orders = [order for order in (fresh_orders or []) if order.get('symbol') == symbol]
                 
                 # ENHANCED: Debug order ID collection
                 fresh_order_ids = set()
@@ -2944,8 +2787,11 @@ class EnhancedTPSLManager:
             logger.info(f"📊 Current TP orders in monitor: {len(current_tp_orders)}")
             logger.info(f"📊 Expected TP orders for phase {phase}: {expected_tp_count}")
             
-            # STEP 1: Get fresh exchange data for mirror account
-            fresh_mirror_orders = await self._get_cached_open_orders(symbol, "mirror")
+            # DIRECT API: Get fresh exchange data for mirror account
+            from clients.bybit_client import bybit_client_2
+            fresh_mirror_orders = await get_all_open_orders(client=bybit_client_2)
+            # Filter for symbol
+            fresh_mirror_orders = [order for order in (fresh_mirror_orders or []) if order.get('symbol') == symbol]
             exchange_tp_orders = []
             
             for order in fresh_mirror_orders:
@@ -3120,8 +2966,9 @@ class EnhancedTPSLManager:
                 logger.error(f"❌ Main account also has no TP orders")
                 return {}
             
-            # Get current mirror position to calculate proper quantities
-            fresh_position = await self._get_cached_position_info(symbol, "mirror")
+            # DIRECT API: Get current mirror position to calculate proper quantities
+            fresh_position = await get_position_info_for_account(symbol, "mirror")
+            fresh_position = fresh_position[0] if fresh_position and len(fresh_position) > 0 else None
             if not fresh_position or float(fresh_position.get("size", 0)) == 0:
                 logger.error(f"❌ No mirror position found for TP order recreation")
                 return {}
@@ -3374,11 +3221,9 @@ class EnhancedTPSLManager:
                     try:
                         logger.info(f"🔍 Attempt {attempt + 1}/3: Fetching fresh mirror orders from exchange...")
                         
-                        # Force cache refresh for mirror orders to get latest data
-                        self._monitoring_cache.pop(f"orders_{symbol}_mirror", None)
-                        self._monitoring_cache.pop("mirror_ALL_orders", None)
-                        
-                        fresh_mirror_orders = await self._get_cached_open_orders(symbol, "mirror")
+                        # DIRECT API: Get fresh mirror orders
+                        fresh_mirror_orders = await get_all_open_orders(client=bybit_client_2)
+                        fresh_mirror_orders = [order for order in (fresh_mirror_orders or []) if order.get('symbol') == symbol]
                         
                         if fresh_mirror_orders:
                             logger.info(f"✅ Found {len(fresh_mirror_orders)} orders on mirror exchange")
@@ -3555,9 +3400,10 @@ class EnhancedTPSLManager:
             
             logger.info(f"🔧 MAIN ACCOUNT TP Recovery: {symbol} {side}")
             
-            # Get fresh TP orders from exchange for main account
+            # DIRECT API: Get fresh TP orders from exchange for main account
             try:
-                fresh_orders = await self._get_cached_open_orders(symbol, "main")
+                fresh_orders = await get_all_open_orders()
+                fresh_orders = [order for order in (fresh_orders or []) if order.get('symbol') == symbol]
                 if not fresh_orders:
                     logger.warning(f"⚠️ No orders found on exchange for main account")
                     return {}
@@ -4158,11 +4004,14 @@ class EnhancedTPSLManager:
             
             logger.info(f"🔍 Validating SL order for {symbol} ({account_type.upper()})")
             
-            # Get fresh SL orders from exchange
+            # DIRECT API: Get fresh SL orders from exchange
             if is_mirror_account:
-                exchange_orders = await self._get_cached_open_orders(symbol, "mirror")
+                from clients.bybit_client import bybit_client_2
+                exchange_orders = await get_all_open_orders(client=bybit_client_2)
+                exchange_orders = [order for order in (exchange_orders or []) if order.get('symbol') == symbol]
             else:
-                exchange_orders = await self._get_cached_open_orders(symbol, "main")
+                exchange_orders = await get_all_open_orders()
+                exchange_orders = [order for order in (exchange_orders or []) if order.get('symbol') == symbol]
             
             if not exchange_orders:
                 logger.warning(f"⚠️ Could not fetch exchange orders for validation")
@@ -4347,9 +4196,12 @@ class EnhancedTPSLManager:
                         limit_order_ids = monitor_data.get("limit_order_ids", [])
                     
                     if limit_order_ids:
-                        # Get current orders from exchange
-                        # CRITICAL FIX: Use monitoring cache for cleanup operations
-                        all_orders = await self._get_cached_open_orders("ALL", account_type)
+                        # DIRECT API: Get current orders from exchange
+                        if account_type == "mirror":
+                            from clients.bybit_client import bybit_client_2
+                            all_orders = await get_all_open_orders(client=bybit_client_2)
+                        else:
+                            all_orders = await get_all_open_orders()
                         
                         if all_orders:
                             for order in all_orders:
@@ -4700,8 +4552,14 @@ class EnhancedTPSLManager:
             account_type = monitor_data.get("account_type", "main")
             monitor_key = f"{symbol}_{side}_{account_type}"
 
-            # Get current open orders for verification (with caching)
-            open_orders = await self._get_cached_open_orders(symbol, account_type)
+            # DIRECT API: Get current open orders for verification
+            if account_type == "mirror":
+                from clients.bybit_client import bybit_client_2
+                open_orders = await get_all_open_orders(client=bybit_client_2)
+                open_orders = [order for order in (open_orders or []) if order.get('symbol') == symbol]
+            else:
+                open_orders = await get_all_open_orders()
+                open_orders = [order for order in (open_orders or []) if order.get('symbol') == symbol]
 
             # Check TP orders for fills
             tp_orders = self._ensure_tp_orders_dict(monitor_data)
@@ -5480,378 +5338,10 @@ All take profit targets have been achieved! 🎯"""
             self._last_execution_cache_clear = current_time
 
     # CRITICAL FIX: Monitoring cache implementation for position/order fetching
-    async def _get_cached_position_info(self, symbol: str, account_type: str = "main"):
-        """Get position info with monitoring cache"""
-        cache_key = f"position_{symbol}_{account_type}"
-        current_time = time.time()
-        
-        # Check if we have fresh cached data
-        if cache_key in self._monitoring_cache:
-            cached_entry = self._monitoring_cache[cache_key]
-            if current_time - cached_entry['timestamp'] < self._monitoring_cache_ttl:
-                logger.debug(f"🚀 Using cached position data for {symbol} ({account_type}) - age: {current_time - cached_entry['timestamp']:.1f}s")
-                return cached_entry['data']
-        
-        # Get from refreshed cache data
-        all_positions_key = f"{account_type}_ALL_positions"
-        
-        if all_positions_key in self._monitoring_cache:
-            cache_entry = self._monitoring_cache[all_positions_key]
-            if current_time - cache_entry['timestamp'] < self._monitoring_cache_ttl:
-                all_positions = cache_entry['data']
-                
-                if symbol == "ALL":
-                    logger.debug(f"🚀 Cache hit: Returning {len(all_positions)} positions for ALL symbols ({account_type})")
-                    return all_positions
-                else:
-                    # Filter by symbol and cache the individual result to prevent future cache misses
-                    filtered_positions = [p for p in all_positions if p.get("symbol") == symbol]
-                    
-                    # CRITICAL FIX: Cache the individual symbol result to prevent constant refreshes
-                    self._monitoring_cache[cache_key] = {
-                        'data': filtered_positions,
-                        'timestamp': cache_entry['timestamp']  # Use same timestamp as ALL data
-                    }
-                    
-                    logger.debug(f"🚀 Cache hit: Returning {len(filtered_positions)} positions for {symbol} ({account_type}) + cached individual result")
-                    return filtered_positions
-        
-        # CRITICAL FIX: If cache is empty, refresh it immediately but avoid duplicate refreshes
-        # Check if a refresh is already in progress or recent
-        if hasattr(self, '_cache_refresh_in_progress') and self._cache_refresh_in_progress:
-            logger.debug(f"⏳ Position cache refresh already in progress for {symbol} ({account_type}) - waiting...")
-            # Wait for refresh to complete by attempting to acquire and release the lock
-            async with self._cache_refresh_lock:
-                pass  # Just wait for the lock to be available
-        elif hasattr(self, '_last_cache_refresh') and time.time() - self._last_cache_refresh < 5:
-            logger.debug(f"⏭️ Recent position cache refresh for {symbol} ({account_type}) - using stale data if available")
-        else:
-            logger.info(f"⚡ Position cache miss for {symbol} ({account_type}) - triggering immediate refresh")
-            await self._refresh_monitoring_cache()
-        
-        # Try again after refresh
-        if all_positions_key in self._monitoring_cache:
-            cache_entry = self._monitoring_cache[all_positions_key]
-            all_positions = cache_entry['data']
-            
-            if symbol == "ALL":
-                logger.info(f"✅ Position cache populated: Returning {len(all_positions)} positions for ALL symbols ({account_type})")
-                return all_positions
-            else:
-                # Filter by symbol and cache the individual result to prevent future cache misses
-                filtered_positions = [p for p in all_positions if p.get("symbol") == symbol]
-                
-                # CRITICAL FIX: Cache the individual symbol result to prevent constant refreshes
-                self._monitoring_cache[cache_key] = {
-                    'data': filtered_positions,
-                    'timestamp': cache_entry['timestamp']  # Use same timestamp as ALL data
-                }
-                
-                logger.info(f"✅ Position cache populated: Returning {len(filtered_positions)} positions for {symbol} ({account_type}) + cached individual result")
-                return filtered_positions
-        
-        # If still no data after refresh, return empty list
-        logger.warning(f"⚠️ No position data available for {symbol} ({account_type}) even after cache refresh")
-        return []
-
-    async def _get_cached_open_orders(self, symbol: str, account_type: str = "main"):
-        """Get open orders with monitoring cache"""
-        cache_key = f"orders_{symbol}_{account_type}"
-        current_time = time.time()
-        
-        # Check if we have fresh cached data
-        if cache_key in self._monitoring_cache:
-            cached_entry = self._monitoring_cache[cache_key]
-            if current_time - cached_entry['timestamp'] < self._monitoring_cache_ttl:
-                logger.debug(f"🚀 Using cached order data for {symbol} ({account_type}) - age: {current_time - cached_entry['timestamp']:.1f}s")
-                return cached_entry['data']
-        
-        # Fetch fresh data
-        logger.debug(f"🔍 Fetching fresh order data for {symbol} ({account_type})")
-        # Get from refreshed cache data
-        all_orders_key = f"{account_type}_ALL_orders"
-        
-        if all_orders_key in self._monitoring_cache:
-            cache_entry = self._monitoring_cache[all_orders_key]
-            if time.time() - cache_entry['timestamp'] < self._monitoring_cache_ttl:
-                all_orders = cache_entry['data']
-                
-                if symbol == "ALL":
-                    logger.debug(f"🚀 Cache hit: Returning {len(all_orders)} orders for ALL symbols ({account_type})")
-                    return all_orders
-                else:
-                    # Filter by symbol and cache the individual result to prevent future cache misses
-                    filtered_orders = [o for o in all_orders if o.get("symbol") == symbol]
-                    
-                    # CRITICAL FIX: Cache the individual symbol result to prevent constant refreshes
-                    self._monitoring_cache[cache_key] = {
-                        'data': filtered_orders,
-                        'timestamp': cache_entry['timestamp']  # Use same timestamp as ALL data
-                    }
-                    
-                    logger.debug(f"🚀 Cache hit: Returning {len(filtered_orders)} orders for {symbol} ({account_type}) + cached individual result")
-                    return filtered_orders
-        
-        # CRITICAL FIX: If cache is empty, refresh it immediately but avoid duplicate refreshes
-        # Check if a refresh is already in progress or recent
-        if hasattr(self, '_cache_refresh_in_progress') and self._cache_refresh_in_progress:
-            logger.debug(f"⏳ Cache refresh already in progress for {symbol} ({account_type}) - waiting...")
-            # Wait for refresh to complete by attempting to acquire and release the lock
-            async with self._cache_refresh_lock:
-                pass  # Just wait for the lock to be available
-        elif hasattr(self, '_last_cache_refresh') and time.time() - self._last_cache_refresh < 5:
-            logger.debug(f"⏭️ Recent cache refresh for {symbol} ({account_type}) - using stale data if available")
-        else:
-            logger.info(f"⚡ Cache miss for {symbol} ({account_type}) - triggering immediate refresh")
-            await self._refresh_monitoring_cache()
-        
-        # Try again after refresh
-        if all_orders_key in self._monitoring_cache:
-            cache_entry = self._monitoring_cache[all_orders_key]
-            all_orders = cache_entry['data']
-            
-            if symbol == "ALL":
-                logger.info(f"✅ Cache populated: Returning {len(all_orders)} orders for ALL symbols ({account_type})")
-                return all_orders
-            else:
-                # Filter by symbol and cache the individual result to prevent future cache misses
-                filtered_orders = [o for o in all_orders if o.get("symbol") == symbol]
-                
-                # CRITICAL FIX: Cache the individual symbol result to prevent constant refreshes
-                self._monitoring_cache[cache_key] = {
-                    'data': filtered_orders,
-                    'timestamp': cache_entry['timestamp']  # Use same timestamp as ALL data
-                }
-                
-                logger.info(f"✅ Cache populated: Returning {len(filtered_orders)} orders for {symbol} ({account_type}) + cached individual result")
-                return filtered_orders
-        
-        # If still no data after refresh, return empty list
-        logger.warning(f"⚠️ No data available for {symbol} ({account_type}) even after cache refresh")
-        return []
-
-    async def _refresh_monitoring_cache(self):
-        """Refresh monitoring cache with fresh data from exchange - PERFORMANCE CRITICAL"""
-        current_time = time.time()
-        
-        # PERFORMANCE: Check if refresh is already in progress
-        if self._cache_refresh_in_progress:
-            logger.debug("⏳ Cache refresh already in progress - waiting for completion...")
-            # Wait for the lock to be released (meaning refresh is done)
-            async with self._cache_refresh_lock:
-                logger.debug("✅ Cache refresh completed by another task")
-                return
-        
-        # Don't refresh too frequently - minimum 15 seconds between refreshes
-        # PERFORMANCE: Use 20 seconds during heavy monitoring to reduce API load
-        min_refresh_interval = 20 if len(self.monitor_tasks) > 50 else 15
-        if hasattr(self, '_last_cache_refresh') and current_time - self._last_cache_refresh < min_refresh_interval:
-            logger.debug(f"⏭️ Cache refresh skipped - last refresh {current_time - self._last_cache_refresh:.1f}s ago (min: {min_refresh_interval}s)")
-            return
-        
-        # Acquire lock to prevent concurrent refreshes
-        async with self._cache_refresh_lock:
-            # Double-check the refresh time inside the lock
-            if hasattr(self, '_last_cache_refresh') and time.time() - self._last_cache_refresh < 15:
-                logger.debug("⏭️ Cache refresh skipped (double-check) - another task just refreshed")
-                return
-            
-            self._cache_refresh_in_progress = True
-        
-        try:
-            logger.info("🔄 PERFORMANCE CRITICAL: Refreshing monitoring cache with parallel API calls...")
-            refresh_start = time.time()
-            
-            # Import at call time to avoid circular imports
-            from clients.bybit_helpers import get_all_positions, get_all_open_orders
-            
-            # Check if mirror trading is enabled
-            import os
-            mirror_enabled = os.getenv("ENABLE_MIRROR_TRADING", "false").lower() == "true"
-            
-            if mirror_enabled and self._mirror_client:
-                logger.debug("📊 Fetching ALL account data in parallel (main + mirror)...")
-                
-                # CRITICAL FIX: Use self._mirror_client instead of importing bybit_client_2
-                # This ensures we use the same client instance that's available in the manager
-                
-                # PERFORMANCE FIX: Execute all 4 API calls in parallel
-                main_positions, main_orders, mirror_positions, mirror_orders = await asyncio.gather(
-                    get_all_positions(),
-                    get_all_open_orders(),
-                    get_all_positions(client=self._mirror_client),
-                    get_all_open_orders(client=self._mirror_client),
-                    return_exceptions=True
-                )
-                
-                # Handle potential exceptions
-                if isinstance(main_positions, Exception):
-                    logger.error(f"Main positions fetch failed: {main_positions}")
-                    main_positions = []
-                if isinstance(main_orders, Exception):
-                    logger.error(f"Main orders fetch failed: {main_orders}")
-                    main_orders = []
-                if isinstance(mirror_positions, Exception):
-                    logger.error(f"Mirror positions fetch failed: {mirror_positions}")
-                    mirror_positions = []
-                if isinstance(mirror_orders, Exception):
-                    logger.error(f"Mirror orders fetch failed: {mirror_orders}")
-                    mirror_orders = []
-                
-                # Cache all data
-                self._monitoring_cache["main_ALL_positions"] = {
-                    'data': main_positions,
-                    'timestamp': current_time
-                }
-                self._monitoring_cache["main_ALL_orders"] = {
-                    'data': main_orders,
-                    'timestamp': current_time
-                }
-                self._monitoring_cache["mirror_ALL_positions"] = {
-                    'data': mirror_positions,
-                    'timestamp': current_time
-                }
-                self._monitoring_cache["mirror_ALL_orders"] = {
-                    'data': mirror_orders,
-                    'timestamp': current_time
-                }
-                
-                logger.info(f"✅ Parallel cache refresh: {len(main_positions)} main pos, {len(main_orders)} main orders, {len(mirror_positions)} mirror pos, {len(mirror_orders)} mirror orders")
-            else:
-                logger.debug("📊 Fetching main account data in parallel (mirror disabled)...")
-                
-                # PERFORMANCE FIX: Execute main account API calls in parallel
-                main_positions, main_orders = await asyncio.gather(
-                    get_all_positions(),
-                    get_all_open_orders(),
-                    return_exceptions=True
-                )
-                
-                # Handle potential exceptions
-                if isinstance(main_positions, Exception):
-                    logger.error(f"Main positions fetch failed: {main_positions}")
-                    main_positions = []
-                if isinstance(main_orders, Exception):
-                    logger.error(f"Main orders fetch failed: {main_orders}")
-                    main_orders = []
-                
-                # Cache main account data
-                self._monitoring_cache["main_ALL_positions"] = {
-                    'data': main_positions,
-                    'timestamp': current_time
-                }
-                self._monitoring_cache["main_ALL_orders"] = {
-                    'data': main_orders,
-                    'timestamp': current_time
-                }
-                
-                logger.info(f"✅ Parallel cache refresh: {len(main_positions)} main positions, {len(main_orders)} main orders (mirror disabled)")
-            
-            self._last_cache_refresh = current_time
-            refresh_time = time.time() - refresh_start
-            logger.info(f"⚡ Cache refresh completed in {refresh_time:.2f}s - Next refresh in 15s")
-            
-        except Exception as e:
-            logger.error(f"❌ CRITICAL ERROR refreshing monitoring cache: {e}")
-            import traceback
-            logger.error(f"❌ Traceback: {traceback.format_exc()}")
-        finally:
-            # PERFORMANCE: Always reset the flag
-            self._cache_refresh_in_progress = False
-
-    def _cleanup_monitoring_cache(self):
-        """Clean up expired monitoring cache entries"""
-        current_time = time.time()
-        if current_time - self._last_monitoring_cache_clear > 30:  # Clean every 30s
-            expired_keys = []
-            for key, entry in self._monitoring_cache.items():
-                if current_time - entry['timestamp'] > self._monitoring_cache_ttl:
-                    expired_keys.append(key)
-            
-            for key in expired_keys:
-                del self._monitoring_cache[key]
-            
-            if expired_keys:
-                logger.debug(f"🧹 Cleaned {len(expired_keys)} expired monitoring cache entries")
-            
-            self._last_monitoring_cache_clear = current_time
-
-    def get_cache_stats(self):
-        """Get monitoring cache statistics for debugging"""
-        cache_size = len(self._monitoring_cache)
-        cache_entries = {}
-        current_time = time.time()
-        
-        for key, entry in self._monitoring_cache.items():
-            age = current_time - entry['timestamp']
-            cache_entries[key] = f"{age:.1f}s ago"
-        
-        return {
-            "cache_size": cache_size,
-            "cache_ttl": self._monitoring_cache_ttl,
-            "entries": cache_entries
-        }
-
-    async def save_state_for_restart(self):
-        """Save monitor state specifically for safe bot restart"""
-        try:
-            logger.info("💾 Preparing monitor state for safe bot restart...")
-            
-            # Use robust persistence to save monitor state
-            from utils.robust_persistence import robust_persistence
-            
-            # Save current monitor state 
-            saved_count = 0
-            for monitor_key, monitor_data in self.position_monitors.items():
-                try:
-                    # Clean monitor data before saving
-                    clean_monitor = {}
-                    for field_key, field_value in monitor_data.items():
-                        # Skip non-serializable fields
-                        if any([
-                            'task' in str(field_key).lower(),
-                            'monitoring_task' in str(field_key),
-                            hasattr(field_value, '_callbacks'),
-                            hasattr(field_value, '__await__'),
-                            hasattr(field_value, 'cancel'),
-                            callable(field_value) and not isinstance(field_value, type)
-                        ]):
-                            continue
-                        clean_monitor[field_key] = field_value
-                    
-                    # Save each monitor to robust persistence
-                    await robust_persistence.update_monitor(monitor_key, clean_monitor)
-                    saved_count += 1
-                except Exception as e:
-                    logger.error(f"Error saving monitor {monitor_key}: {e}")
-            
-            if saved_count > 0:
-                # Create restart-specific signal file
-                with open('.safe_restart_state_saved', 'w') as f:
-                    import json
-                    restart_info = {
-                        'timestamp': time.time(),
-                        'monitor_count': saved_count,
-                        'execution_mode': getattr(self, '_execution_mode', False),
-                        'performance_optimizations': {
-                            'execution_aware_caching': True,
-                            'api_call_deduplication': True,
-                            'smart_throttling': True
-                        }
-                    }
-                    json.dump(restart_info, f, indent=2)
-                
-                logger.info(f"✅ Bot ready for safe restart - {saved_count} monitors preserved")
-                logger.info(f"🔄 Restart info saved to .safe_restart_state_saved")
-                return True
-            else:
-                logger.warning("⚠️ No monitors to save for restart")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Error preparing for safe restart: {e}")
-            return False
-
+    # LARGE CACHE METHODS REMOVED: All caching methods replaced with direct API calls
+    # Server environment provides fast API responses, eliminating need for position/order caching
+    
+    # Continuing with non-cache methods...
     async def cleanup_position_orders(self, symbol: str, side: str, account_type: str = None):
         """Clean up all orders when position is closed"""
         monitor_key = f"{symbol}_{side}_{account_type}"
@@ -5940,8 +5430,10 @@ All take profit targets have been achieved! 🎯"""
                 from execution.mirror_trader import bybit_client_2, cancel_mirror_order
 
                 if bybit_client_2:
-                    # CRITICAL FIX: Use monitoring cache for mirror orders
-                    mirror_orders = await self._get_cached_open_orders(symbol, "mirror")
+                    # DIRECT API: Get mirror orders
+                    from clients.bybit_client import bybit_client_2
+                    mirror_orders = await get_all_open_orders(client=bybit_client_2)
+                    mirror_orders = [order for order in (mirror_orders or []) if order.get('symbol') == symbol]
                     symbol_orders = mirror_orders
 
                     # Cancel all bot orders for this symbol (TP, SL, and limit)
@@ -7186,8 +6678,14 @@ All take profit targets have been achieved! 🎯"""
         try:
             logger.info(f"🔧 Attempting order placement recovery for {symbol} {side} {order_type}")
 
-            # Get current open orders to check if order was placed despite error (with caching)
-            open_orders = await self._get_cached_open_orders(symbol, account_type)
+            # DIRECT API: Get current open orders to check if order was placed despite error
+            if account_type == "mirror":
+                from clients.bybit_client import bybit_client_2
+                open_orders = await get_all_open_orders(client=bybit_client_2)
+                open_orders = [order for order in (open_orders or []) if order.get('symbol') == symbol]
+            else:
+                open_orders = await get_all_open_orders()
+                open_orders = [order for order in (open_orders or []) if order.get('symbol') == symbol]
             if not open_orders:
                 return False
 
@@ -8771,9 +8269,15 @@ All take profit targets have been achieved! 🎯"""
             elif monitor_data.get("all_tps_filled"):
                 closure_reason = "all_tps_filled"
             else:
-                # Fallback: Check active orders to see what might have triggered (with caching)
+                # DIRECT API: Check active orders to see what might have triggered
                 account_type = monitor_data.get("account_type", "main")
-                active_orders = await self._get_cached_open_orders(symbol, account_type)
+                if account_type == "mirror":
+                    from clients.bybit_client import bybit_client_2
+                    active_orders = await get_all_open_orders(client=bybit_client_2)
+                    active_orders = [order for order in (active_orders or []) if order.get('symbol') == symbol]
+                else:
+                    active_orders = await get_all_open_orders()
+                    active_orders = [order for order in (active_orders or []) if order.get('symbol') == symbol]
 
                 # Check if SL order is missing (likely it triggered)
                 sl_still_active = False
@@ -10034,12 +9538,18 @@ All take profit targets have been achieved! 🎯"""
                     from clients.bybit_helpers import bybit_client
                     client = bybit_client
                 
-                # CRITICAL FIX: Use monitoring cache instead of direct API calls
+                # DIRECT API: Get all orders for monitoring setup
                 try:
-                    all_orders = await self._get_cached_open_orders(symbol, account_type)
-                    logger.debug(f"🚀 Using cached orders for monitoring setup: {len(all_orders)} orders for {symbol} ({account_type})")
+                    if account_type == "mirror":
+                        from clients.bybit_client import bybit_client_2
+                        all_orders = await get_all_open_orders(client=bybit_client_2)
+                        all_orders = [order for order in (all_orders or []) if order.get('symbol') == symbol]
+                    else:
+                        all_orders = await get_all_open_orders()
+                        all_orders = [order for order in (all_orders or []) if order.get('symbol') == symbol]
+                    logger.debug(f"🚀 Using direct API orders for monitoring setup: {len(all_orders)} orders for {symbol} ({account_type})")
                 except Exception as e:
-                    logger.warning(f"Could not get cached orders for {symbol} ({account_type}): {e}")
+                    logger.warning(f"Could not get orders from API for {symbol} ({account_type}): {e}")
                     # Emergency fallback - this should rarely happen
                     if account_type == "mirror":
                         from clients.bybit_helpers import get_all_open_orders
