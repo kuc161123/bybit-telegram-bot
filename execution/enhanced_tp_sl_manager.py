@@ -1182,7 +1182,7 @@ class EnhancedTPSLManager:
             # DIRECT API: Get orders from exchange
             account_type = "mirror" if is_mirror_account else "main"
             if account_type == "mirror":
-                from clients.bybit_client import bybit_client_2
+                from execution.mirror_trader import bybit_client_2
                 orders = await get_all_open_orders(client=bybit_client_2)
                 orders = [order for order in (orders or []) if order.get('symbol') == symbol]
             else:
@@ -2670,7 +2670,7 @@ class EnhancedTPSLManager:
             # DIRECT API: Get fresh order data from exchange
             try:
                 if account_type == "mirror":
-                    from clients.bybit_client import bybit_client_2
+                    from execution.mirror_trader import bybit_client_2
                     fresh_orders = await get_all_open_orders(client=bybit_client_2)
                     # Filter for symbol
                     fresh_orders = [order for order in (fresh_orders or []) if order.get('symbol') == symbol]
@@ -2788,7 +2788,7 @@ class EnhancedTPSLManager:
             logger.info(f"📊 Expected TP orders for phase {phase}: {expected_tp_count}")
             
             # DIRECT API: Get fresh exchange data for mirror account
-            from clients.bybit_client import bybit_client_2
+            from execution.mirror_trader import bybit_client_2
             fresh_mirror_orders = await get_all_open_orders(client=bybit_client_2)
             # Filter for symbol
             fresh_mirror_orders = [order for order in (fresh_mirror_orders or []) if order.get('symbol') == symbol]
@@ -4006,7 +4006,7 @@ class EnhancedTPSLManager:
             
             # DIRECT API: Get fresh SL orders from exchange
             if is_mirror_account:
-                from clients.bybit_client import bybit_client_2
+                from execution.mirror_trader import bybit_client_2
                 exchange_orders = await get_all_open_orders(client=bybit_client_2)
                 exchange_orders = [order for order in (exchange_orders or []) if order.get('symbol') == symbol]
             else:
@@ -4198,7 +4198,7 @@ class EnhancedTPSLManager:
                     if limit_order_ids:
                         # DIRECT API: Get current orders from exchange
                         if account_type == "mirror":
-                            from clients.bybit_client import bybit_client_2
+                            from execution.mirror_trader import bybit_client_2
                             all_orders = await get_all_open_orders(client=bybit_client_2)
                         else:
                             all_orders = await get_all_open_orders()
@@ -4554,7 +4554,7 @@ class EnhancedTPSLManager:
 
             # DIRECT API: Get current open orders for verification
             if account_type == "mirror":
-                from clients.bybit_client import bybit_client_2
+                from execution.mirror_trader import bybit_client_2
                 open_orders = await get_all_open_orders(client=bybit_client_2)
                 open_orders = [order for order in (open_orders or []) if order.get('symbol') == symbol]
             else:
@@ -4804,7 +4804,7 @@ class EnhancedTPSLManager:
 
             # Load current dashboard monitors
             import pickle
-            pkl_path = '/Users/lualakol/bybit-telegram-bot/bybit_bot_dashboard_v4.1_enhanced.pkl'
+            pkl_path = 'bybit_bot_dashboard_v4.1_enhanced.pkl'
 
             try:
                 with open(pkl_path, 'rb') as f:
@@ -5431,7 +5431,7 @@ All take profit targets have been achieved! 🎯"""
 
                 if bybit_client_2:
                     # DIRECT API: Get mirror orders
-                    from clients.bybit_client import bybit_client_2
+                    from execution.mirror_trader import bybit_client_2
                     mirror_orders = await get_all_open_orders(client=bybit_client_2)
                     mirror_orders = [order for order in (mirror_orders or []) if order.get('symbol') == symbol]
                     symbol_orders = mirror_orders
@@ -5472,7 +5472,7 @@ All take profit targets have been achieved! 🎯"""
             
             # Get ALL orders from mirror account
             from clients.bybit_helpers import get_all_open_orders
-            from clients.bybit_client import bybit_client_2
+            from execution.mirror_trader import bybit_client_2
             
             if not bybit_client_2:
                 logger.warning("❌ Mirror client not available for comprehensive cleanup")
@@ -6680,7 +6680,7 @@ All take profit targets have been achieved! 🎯"""
 
             # DIRECT API: Get current open orders to check if order was placed despite error
             if account_type == "mirror":
-                from clients.bybit_client import bybit_client_2
+                from execution.mirror_trader import bybit_client_2
                 open_orders = await get_all_open_orders(client=bybit_client_2)
                 open_orders = [order for order in (open_orders or []) if order.get('symbol') == symbol]
             else:
@@ -8272,7 +8272,7 @@ All take profit targets have been achieved! 🎯"""
                 # DIRECT API: Check active orders to see what might have triggered
                 account_type = monitor_data.get("account_type", "main")
                 if account_type == "mirror":
-                    from clients.bybit_client import bybit_client_2
+                    from execution.mirror_trader import bybit_client_2
                     active_orders = await get_all_open_orders(client=bybit_client_2)
                     active_orders = [order for order in (active_orders or []) if order.get('symbol') == symbol]
                 else:
@@ -8393,7 +8393,7 @@ All take profit targets have been achieved! 🎯"""
             import pickle
             
             # Load bot_data directly from persistence
-            pkl_path = '/Users/lualakol/bybit-telegram-bot/bybit_bot_dashboard_v4.1_enhanced.pkl'
+            pkl_path = 'bybit_bot_dashboard_v4.1_enhanced.pkl'
             
             try:
                 with open(pkl_path, 'rb') as f:
@@ -8654,7 +8654,7 @@ All take profit targets have been achieved! 🎯"""
         try:
             # Load bot_data directly from persistence for monitor_tasks compatibility
             import pickle
-            pkl_path = '/Users/lualakol/bybit-telegram-bot/bybit_bot_dashboard_v4.1_enhanced.pkl'
+            pkl_path = 'bybit_bot_dashboard_v4.1_enhanced.pkl'
 
             # Load current bot data
             with open(pkl_path, 'rb') as f:
@@ -8768,7 +8768,7 @@ All take profit targets have been achieved! 🎯"""
         try:
             # Load bot_data directly from persistence for monitor_tasks compatibility
             import pickle
-            pkl_path = '/Users/lualakol/bybit-telegram-bot/bybit_bot_dashboard_v4.1_enhanced.pkl'
+            pkl_path = 'bybit_bot_dashboard_v4.1_enhanced.pkl'
 
             # Load current bot data
             with open(pkl_path, 'rb') as f:
@@ -9541,7 +9541,7 @@ All take profit targets have been achieved! 🎯"""
                 # DIRECT API: Get all orders for monitoring setup
                 try:
                     if account_type == "mirror":
-                        from clients.bybit_client import bybit_client_2
+                        from execution.mirror_trader import bybit_client_2
                         all_orders = await get_all_open_orders(client=bybit_client_2)
                         all_orders = [order for order in (all_orders or []) if order.get('symbol') == symbol]
                     else:
