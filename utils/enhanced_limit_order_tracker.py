@@ -24,17 +24,12 @@ class EnhancedLimitOrderTracker:
     """
     
     def __init__(self):
-        # CACHE SYSTEM REMOVED - Direct API calls only for reliability
-        # No caching to ensure real-time TP detection and position monitoring
+        # COMPLETE CACHE REMOVAL - Direct API calls only for maximum reliability
+        # No caching whatsoever to ensure real-time TP detection and position monitoring
         
         # Rate limiting to prevent API overload - 60 second intervals for reliability
         self.api_call_timestamps = {}  # order_id -> last API call timestamp
         self.min_call_interval = 60  # Minimum 60 seconds between API calls for same order
-        
-        # CONSERVATIVE: Intelligent rate limiting for stable positions (optional)
-        self.position_activity_timestamps = {}  # position_key -> last activity timestamp
-        self.stable_position_cache = {}  # position_key -> cached order data
-        self.stable_position_cache_timestamps = {}  # position_key -> cache timestamp
         
         # Performance tracking (non-cache based)
         self.api_stats = {
@@ -44,57 +39,8 @@ class EnhancedLimitOrderTracker:
             "last_reset": time.time()
         }
         
-    def _is_position_stable(self, symbol: str, account_type: str) -> bool:
-        """
-        Conservative check if position is stable (no recent activity)
-        Only for positions that haven't had fills or changes recently
-        """
-        from config.settings import STABLE_POSITION_THRESHOLD, STABLE_POSITION_CACHE_TTL
-        
-        position_key = f"{symbol}_{account_type}"
-        current_time = time.time()
-        
-        # Check if position has recent activity
-        last_activity = self.position_activity_timestamps.get(position_key, 0)
-        stable_duration = current_time - last_activity
-        
-        # Position is stable if no activity for > STABLE_POSITION_THRESHOLD seconds
-        return stable_duration > STABLE_POSITION_THRESHOLD
-    
-    def _get_stable_position_cache(self, symbol: str, account_type: str) -> Optional[Dict]:
-        """Get cached data for stable positions"""
-        from config.settings import STABLE_POSITION_CACHE_TTL
-        
-        position_key = f"{symbol}_{account_type}"
-        current_time = time.time()
-        
-        if position_key in self.stable_position_cache:
-            cache_time = self.stable_position_cache_timestamps.get(position_key, 0)
-            if current_time - cache_time < STABLE_POSITION_CACHE_TTL:
-                return self.stable_position_cache[position_key]
-        
-        return None
-    
-    def _set_stable_position_cache(self, symbol: str, account_type: str, data: Dict):
-        """Cache data for stable positions"""
-        position_key = f"{symbol}_{account_type}"
-        current_time = time.time()
-        
-        self.stable_position_cache[position_key] = data
-        self.stable_position_cache_timestamps[position_key] = current_time
-    
-    def _mark_position_activity(self, symbol: str, account_type: str):
-        """Mark position as having recent activity (clears stable status)"""
-        position_key = f"{symbol}_{account_type}"
-        current_time = time.time()
-        
-        self.position_activity_timestamps[position_key] = current_time
-        
-        # Clear cache for positions with activity
-        if position_key in self.stable_position_cache:
-            del self.stable_position_cache[position_key]
-        if position_key in self.stable_position_cache_timestamps:
-            del self.stable_position_cache_timestamps[position_key]
+    # ALL STABLE POSITION CACHING METHODS REMOVED
+    # Direct API calls only - no caching whatsoever
 
     async def fetch_and_update_limit_order_details(
         self, 
@@ -103,8 +49,8 @@ class EnhancedLimitOrderTracker:
         account_type: str = "main"
     ) -> Dict[str, Dict]:
         """
-        Fetch full details for limit orders with DIRECT API calls
-        CONSERVATIVE: Uses short-term caching for stable positions only
+        Fetch full details for limit orders with DIRECT API calls ONLY
+        NO CACHING WHATSOEVER - Maximum reliability for real-time trading
         
         Args:
             order_ids: List of order IDs to fetch
@@ -117,19 +63,7 @@ class EnhancedLimitOrderTracker:
         current_time = time.time()
         updated_orders = {}
         
-        # CONSERVATIVE: Check if position is stable and can use brief caching
-        is_stable = self._is_position_stable(symbol, account_type)
-        if is_stable:
-            cached_data = self._get_stable_position_cache(symbol, account_type)
-            if cached_data:
-                # Use cached data for stable positions
-                for order_id in order_ids:
-                    if order_id in cached_data:
-                        updated_orders[order_id] = cached_data[order_id]
-                
-                if len(updated_orders) == len(order_ids):
-                    logger.debug(f"📋 Used stable position cache for {symbol} ({account_type})")
-                    return updated_orders
+        # NO CACHING - Direct API calls only for maximum reliability
         
         # Track API performance
         self.api_stats["total_api_calls"] += len(order_ids)
@@ -184,21 +118,7 @@ class EnhancedLimitOrderTracker:
             # Process individually for small batches
             await self._process_orders_individually_direct(orders_to_fetch, symbol, client, updated_orders)
         
-        # CONSERVATIVE: Cache results for stable positions only (very short TTL)
-        if updated_orders and is_stable:
-            self._set_stable_position_cache(symbol, account_type, updated_orders)
-        
-        # Detect activity: if any orders have changes, mark position as active
-        if updated_orders:
-            for order_id, order_data in updated_orders.items():
-                # Check if order has recent activity (fills, cancellations, etc.)
-                order_status = order_data.get('orderStatus', 'Unknown')
-                cum_exec_qty = float(order_data.get('cumExecQty', '0'))
-                
-                if order_status in ['PartiallyFilled', 'Filled', 'Cancelled'] or cum_exec_qty > 0:
-                    # Mark position as having activity
-                    self._mark_position_activity(symbol, account_type)
-                    break
+        # NO CACHING - All data is fresh from direct API calls
                 
         return updated_orders
     
@@ -737,7 +657,7 @@ class EnhancedLimitOrderTracker:
             "uptime_minutes": round(uptime / 60, 2),
             "min_call_interval_seconds": self.min_call_interval,
             "tracked_orders": len(self.api_call_timestamps),
-            "cache_system": "DISABLED - Direct API calls only"
+            "cache_system": "COMPLETELY DISABLED - Direct API calls only, no caching whatsoever"
         }
     
     def reset_api_statistics(self):
@@ -748,7 +668,7 @@ class EnhancedLimitOrderTracker:
             "failed_calls": 0,
             "last_reset": time.time()
         }
-        logger.info("🔄 API statistics reset - NO CACHE system active")
+        logger.info("🔄 API statistics reset - COMPLETELY NO CACHE system active")
 
 
 # Global instance
