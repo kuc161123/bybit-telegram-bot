@@ -263,8 +263,8 @@ READ_ONLY_MONITORING_CHAT_ID_BASE = 9000000000  # Base for synthetic chat IDs
 # =============================================
 # MARKET ANALYSIS CACHE PARAMETERS
 # =============================================
-MARKET_ANALYSIS_CACHE_TTL = 86400  # 24 hours in seconds
-AI_INSIGHTS_CACHE_TTL = 86400  # 24 hours in seconds
+MARKET_ANALYSIS_CACHE_TTL = 300  # 5 minutes for real-time market analysis
+AI_INSIGHTS_CACHE_TTL = 300  # 5 minutes for fresh AI insights
 MARKET_DATA_CACHE_TTL = 60  # 60 seconds for responsive market data
 FORCE_REFRESH_BYPASS = True  # Allow manual refresh to bypass cache
 

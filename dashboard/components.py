@@ -196,8 +196,35 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
                 if status.ai_risk_assessment:
                     risk_emoji = "⚠️" if status.ai_risk_assessment == "HIGH" else "⚡" if status.ai_risk_assessment == "MEDIUM" else "✅"
                     result += f" {risk_emoji} {status.ai_risk_assessment} Risk"
+                
+                # OPTIMIZED: Concise AI reasoning - extract key pattern and timeframe only
                 if status.ai_reasoning:
-                    result += f"\n💡 {html.escape(status.ai_reasoning)}"
+                    reasoning = status.ai_reasoning
+                    
+                    # Extract key pattern (first mentioned pattern)
+                    key_pattern = None
+                    patterns = ["Shooting Star", "Doji", "Hammer", "Hanging Man", "Engulfing", "MACD", "RSI", "Bollinger", "Support", "Resistance"]
+                    for pattern in patterns:
+                        if pattern in reasoning:
+                            key_pattern = pattern
+                            break
+                    
+                    # Extract timeframe (look for "1-2 weeks", "few days", etc.)
+                    timeframe = None
+                    import re
+                    timeframe_match = re.search(r'(\d+[-‒–—]\d+\s+(?:days?|weeks?|months?)|\d+\s+(?:days?|weeks?|months?)|few\s+(?:days?|weeks?))', reasoning.lower())
+                    if timeframe_match:
+                        timeframe = timeframe_match.group(1).title()
+                    
+                    # Concise summary
+                    summary_parts = []
+                    if key_pattern:
+                        summary_parts.append(f"{key_pattern}")
+                    if timeframe:
+                        summary_parts.append(f"{timeframe}")
+                    
+                    if summary_parts:
+                        result += f"\n💡 {' • '.join(summary_parts)}"
 
             # Confidence indicator (enhanced if AI boosted)
             conf_label = "AI Confidence" if status.ai_confidence and status.ai_confidence > status.confidence else "Confidence"
@@ -208,16 +235,33 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
             if status.last_updated:
                 timestamp_str = status.last_updated.strftime('%H:%M:%S')
                 
-                # Check if we have real-time data available
+                # Enhanced real-time data detection
                 try:
-                    from market_analysis.realtime_data_stream import get_realtime_price
-                    realtime_price = get_realtime_price(status.primary_symbol or "BTCUSDT")
-                    if realtime_price and realtime_price > 0:
+                    import time
+                    from datetime import datetime, timedelta
+                    
+                    # Check if data is very fresh (less than 30 seconds old)
+                    data_age = datetime.now() - status.last_updated
+                    is_fresh = data_age.total_seconds() < 30
+                    
+                    # Try to get real-time data for confirmation
+                    try:
+                        from market_analysis.realtime_data_stream import get_realtime_price
+                        realtime_price = get_realtime_price(status.primary_symbol or "BTCUSDT")
+                        has_realtime = realtime_price and realtime_price > 0
+                    except:
+                        has_realtime = False
+                    
+                    # Smart display based on data freshness and real-time availability
+                    if is_fresh and has_realtime:
                         result += f" • 🟢 Live {timestamp_str}"
+                    elif is_fresh:
+                        result += f" • 🟡 Fresh {timestamp_str}"
                     else:
-                        result += f" • 🟡 API {timestamp_str}"
-                except:
-                    result += f" • {timestamp_str}"
+                        result += f" • 🔵 API {timestamp_str}"
+                        
+                except Exception:
+                    result += f" • 📊 {timestamp_str}"
         else:
             # Fallback mode indicator
             result += f"\n📱 Basic Mode"
