@@ -9539,13 +9539,12 @@ All take profit targets have been achieved! 🎯"""
                 except Exception as e:
                     logger.error(f"❌ Error checking mirror positions: {e}")
             
-            # ENHANCED: Also check for orphaned orders (orders without positions)
-            # These can happen when positions are closed but orders remain
-            logger.info("🔍 Checking for orphaned orders that need monitoring...")
-            orphaned_monitors = await self._check_and_create_orphaned_order_monitors()
-            if orphaned_monitors > 0:
-                monitors_created += orphaned_monitors
-                logger.info(f"✅ Created {orphaned_monitors} monitors for orphaned orders")
+            # CLEANUP: Check for and cancel orphaned orders (orders without positions)
+            # Orders should not exist when there are no corresponding positions
+            logger.info("🧹 Checking for orphaned orders to clean up...")
+            orphaned_orders_cleaned = await self._cleanup_orphaned_orders()
+            if orphaned_orders_cleaned > 0:
+                logger.info(f"🧹 Cleaned up {orphaned_orders_cleaned} orphaned orders")
             
             # CRITICAL: Clean up orphaned monitors after position sync
             logger.info("🧹 Running orphaned monitor cleanup after position sync...")
@@ -9809,78 +9808,94 @@ All take profit targets have been achieved! 🎯"""
             logger.error(f"❌ Error detecting stale monitors: {e}")
             return 0
 
-    async def _check_and_create_orphaned_order_monitors(self) -> int:
+    async def _cleanup_orphaned_orders(self) -> int:
         """
-        Check for orphaned orders (orders without corresponding positions) and create monitors
-        This handles cases where positions might be closed but orders remain active
-        Returns the number of monitors created for orphaned orders
+        Cleanup orphaned orders (orders without corresponding positions)
+        Orders should not exist when there are no corresponding positions
+        Returns the number of orphaned orders cleaned up
         """
         try:
-            from clients.bybit_helpers import get_all_open_orders
+            from clients.bybit_helpers import get_all_open_orders, cancel_order, get_all_positions
             from config.settings import ENABLE_MIRROR_TRADING
             
-            monitors_created = 0
+            orders_cleaned = 0
+            
+            # Get all current positions for reference
+            main_positions = await get_all_positions()
+            main_position_keys = set()
+            if main_positions:
+                for pos in main_positions:
+                    if abs(float(pos.get('size', 0))) >= 0.000001:
+                        symbol = pos.get('symbol')
+                        side = "Buy" if float(pos.get('size', 0)) > 0 else "Sell"
+                        key = f"{symbol}_{side}"
+                        main_position_keys.add(key)
+            
+            mirror_position_keys = set()
+            if ENABLE_MIRROR_TRADING:
+                try:
+                    from execution.mirror_trader import bybit_client_2
+                    mirror_positions = await get_all_positions(client=bybit_client_2)
+                    if mirror_positions:
+                        for pos in mirror_positions:
+                            if abs(float(pos.get('size', 0))) >= 0.000001:
+                                symbol = pos.get('symbol')
+                                side = "Buy" if float(pos.get('size', 0)) > 0 else "Sell"
+                                key = f"{symbol}_{side}"
+                                mirror_position_keys.add(key)
+                except Exception as e:
+                    logger.warning(f"Could not check mirror positions for orphaned order cleanup: {e}")
             
             # Check main account orders
             try:
                 main_orders = await get_all_open_orders()
                 if main_orders:
                     for order in main_orders:
-                        if order.get('reduceOnly') and 'TP' in order.get('orderLinkId', ''):
+                        if order.get('reduceOnly'):  # TP/SL orders
                             symbol = order.get('symbol')
-                            # Determine side from order type and reduce only flag
-                            side = "Buy" if order.get('side') == "Sell" else "Sell"  # Opposite for reduce-only
-                            monitor_key = f"{symbol}_{side}_main"
+                            # Determine position side from order (opposite for reduce-only)
+                            side = "Buy" if order.get('side') == "Sell" else "Sell"
+                            position_key = f"{symbol}_{side}"
                             
-                            # Check if we already have a monitor for this
-                            if monitor_key not in self.position_monitors:
-                                logger.info(f"🔍 Found orphaned TP order for {symbol} {side} (main) - creating monitor")
-                                # Create a minimal position object for sync processing
-                                fake_position = {
-                                    'symbol': symbol,
-                                    'side': side,
-                                    'size': '0.001',  # Minimal size to trigger monitor creation
-                                    'avgPrice': order.get('price', '0')
-                                }
-                                result = await self._process_position_for_sync(fake_position, "main")
-                                if result == "created":
-                                    monitors_created += 1
+                            # If no corresponding position exists, cancel the order
+                            if position_key not in main_position_keys:
+                                logger.info(f"🧹 Cancelling orphaned order: {symbol} {order.get('side')} order {order.get('orderId')} (main)")
+                                try:
+                                    await cancel_order(order.get('orderId'), symbol)
+                                    orders_cleaned += 1
+                                except Exception as e:
+                                    logger.warning(f"Could not cancel orphaned order {order.get('orderId')}: {e}")
             except Exception as e:
                 logger.warning(f"Could not check main account orphaned orders: {e}")
             
-            # Check mirror account orders if enabled
+            # Check mirror account orders
             if ENABLE_MIRROR_TRADING:
                 try:
-                    from execution.mirror_trader import bybit_client_2
+                    from execution.mirror_trader import bybit_client_2, cancel_mirror_order
                     mirror_orders = await get_all_open_orders(client=bybit_client_2)
                     if mirror_orders:
                         for order in mirror_orders:
-                            if order.get('reduceOnly') and 'TP' in order.get('orderLinkId', ''):
+                            if order.get('reduceOnly'):  # TP/SL orders
                                 symbol = order.get('symbol')
-                                # Determine side from order type and reduce only flag
-                                side = "Buy" if order.get('side') == "Sell" else "Sell"  # Opposite for reduce-only
-                                monitor_key = f"{symbol}_{side}_mirror"
+                                # Determine position side from order (opposite for reduce-only)
+                                side = "Buy" if order.get('side') == "Sell" else "Sell"
+                                position_key = f"{symbol}_{side}"
                                 
-                                # Check if we already have a monitor for this
-                                if monitor_key not in self.position_monitors:
-                                    logger.info(f"🔍 Found orphaned TP order for {symbol} {side} (mirror) - creating monitor")
-                                    # Create a minimal position object for sync processing
-                                    fake_position = {
-                                        'symbol': symbol,
-                                        'side': side,
-                                        'size': '0.001',  # Minimal size to trigger monitor creation
-                                        'avgPrice': order.get('price', '0')
-                                    }
-                                    result = await self._process_position_for_sync(fake_position, "mirror")
-                                    if result == "created":
-                                        monitors_created += 1
+                                # If no corresponding position exists, cancel the order
+                                if position_key not in mirror_position_keys:
+                                    logger.info(f"🧹 Cancelling orphaned order: {symbol} {order.get('side')} order {order.get('orderId')} (mirror)")
+                                    try:
+                                        await cancel_mirror_order(order.get('orderId'), symbol)
+                                        orders_cleaned += 1
+                                    except Exception as e:
+                                        logger.warning(f"Could not cancel orphaned mirror order {order.get('orderId')}: {e}")
                 except Exception as e:
                     logger.warning(f"Could not check mirror account orphaned orders: {e}")
             
-            return monitors_created
+            return orders_cleaned
             
         except Exception as e:
-            logger.error(f"❌ Error checking orphaned orders: {e}")
+            logger.error(f"❌ Error cleaning up orphaned orders: {e}")
             return 0
 
     async def check_order_fills_directly(self, symbol: str, order_ids: List[str], client=None) -> Dict[str, Dict]:
