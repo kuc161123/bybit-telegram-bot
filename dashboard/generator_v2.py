@@ -843,7 +843,11 @@ class DashboardGenerator:
 
     def _calculate_sharpe_ratio(self, stats_data: Dict) -> float:
         """Calculate simplified Sharpe ratio"""
-        win_rate = float(stats_data.get('overall_win_rate', 0)) / 100
+        # Calculate win rate from actual stats data
+        total_trades = float(stats_data.get(STATS_TOTAL_TRADES, 0))
+        total_wins = float(stats_data.get(STATS_TOTAL_WINS, 0))
+        
+        win_rate = (total_wins / total_trades) if total_trades > 0 else 0
         total_wins_pnl = abs(float(stats_data.get('stats_total_wins_pnl', 0)))
         total_losses_pnl = abs(float(stats_data.get('stats_total_losses_pnl', 0)))
 
@@ -852,7 +856,7 @@ class DashboardGenerator:
         else:
             win_loss_ratio = 2.0 if total_wins_pnl > 0 else 0
 
-        # Sharpe approximation
+        # Sharpe approximation based on win rate and win/loss ratio
         if win_rate > 0.5 and win_loss_ratio > 1:
             return 1.0 + (win_rate - 0.5) * 2 + (win_loss_ratio - 1) * 0.5
         elif win_rate > 0.4:

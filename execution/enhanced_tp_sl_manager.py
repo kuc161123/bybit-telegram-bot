@@ -8642,23 +8642,35 @@ All take profit targets have been achieved! 🎯"""
             current_equity = safe_decimal_conversion(bot_data.get(STATS_TOTAL_PNL, Decimal("0")))
             peak_equity = safe_decimal_conversion(bot_data.get('stats_peak_equity', Decimal("0")))
             
+            # Initialize peak equity to 0 if this is the first trade or if current equity is higher
             if current_equity > peak_equity:
                 bot_data['stats_peak_equity'] = current_equity
                 peak_equity = current_equity
                 
-            if peak_equity > 0:
-                current_drawdown = ((peak_equity - current_equity) / peak_equity * 100)
+            # Calculate drawdown - handle the case where we start from 0
+            if peak_equity >= 0:  # Changed from > 0 to >= 0
+                if peak_equity == 0 and current_equity < 0:
+                    # Special case: Starting from 0 and going negative
+                    current_drawdown = abs(float(current_equity))
+                elif peak_equity > 0:
+                    # Normal case: Calculate percentage drawdown from peak
+                    current_drawdown = float((peak_equity - current_equity) / peak_equity * 100)
+                else:
+                    current_drawdown = 0
+                    
                 bot_data['stats_current_drawdown'] = current_drawdown
                 
-                max_drawdown = safe_decimal_conversion(bot_data.get('stats_max_drawdown', Decimal("0")))
+                max_drawdown = float(bot_data.get('stats_max_drawdown', 0))
                 if current_drawdown > max_drawdown:
                     bot_data['stats_max_drawdown'] = current_drawdown
+                    logger.info(f"📉 New max drawdown: {current_drawdown:.2f}%")
                     
             # Save updated stats
             with open(pkl_path, 'wb') as f:
                 pickle.dump(data, f)
                 
             logger.info(f"📊 Statistics updated for {symbol} {side}: Trade #{bot_data[STATS_TOTAL_TRADES]}, P&L: {pnl}, Total P&L: {bot_data[STATS_TOTAL_PNL]}")
+            logger.info(f"📊 Win Rate: {(bot_data[STATS_TOTAL_WINS]/bot_data[STATS_TOTAL_TRADES]*100):.1f}% ({bot_data[STATS_TOTAL_WINS]}W/{bot_data[STATS_TOTAL_LOSSES]}L), Max DD: {bot_data.get('stats_max_drawdown', 0):.1f}")
             
         except Exception as e:
             logger.error(f"Error updating position statistics: {e}")
