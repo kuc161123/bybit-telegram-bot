@@ -11,7 +11,7 @@ class DashboardKeyboards:
 
     @staticmethod
     def main_dashboard(has_positions: bool = False, has_mirror: bool = False) -> InlineKeyboardMarkup:
-        """Main dashboard keyboard with quick actions"""
+        """Simplified main dashboard keyboard with essential actions only"""
         keyboard = []
 
         # First row - Primary actions
@@ -21,39 +21,19 @@ class DashboardKeyboards:
         ]
         keyboard.append(first_row)
 
-        # Second row - Position and monitor management
+        # Second row - Essential monitoring
         second_row = [
             InlineKeyboardButton("📊 All Positions", callback_data="show_all_positions"),
-            InlineKeyboardButton("⚡ Monitors", callback_data="show_monitors"),
-            InlineKeyboardButton("📈 Stats", callback_data="show_statistics")
+            InlineKeyboardButton("⚡ Monitors", callback_data="show_monitors")
         ]
         keyboard.append(second_row)
 
-        # Third row - Additional features
-        additional_row = []
-        if has_positions:
-            additional_row.append(InlineKeyboardButton("🎯 P&L Details", callback_data="show_pnl_details"))
-        if not has_positions:
-            additional_row.append(InlineKeyboardButton("❓ Help", callback_data="show_help"))
-
-        if additional_row:
-            keyboard.append(additional_row)
-
-        # Fourth row - AI and alerts
-        fourth_row = [
-            InlineKeyboardButton("🤖 AI Insights", callback_data="ai_insights"),
-            InlineKeyboardButton("🔔 Alerts", callback_data="alerts_list"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="show_settings")
+        # Third row - Analytics and tips
+        third_row = [
+            InlineKeyboardButton("📊 Analytics", callback_data="show_analytics"),
+            InlineKeyboardButton("💡 Tips", callback_data="show_trading_tips")
         ]
-        keyboard.append(fourth_row)
-
-        # Fifth row - Additional features
-        fifth_row = []
-        if has_mirror:
-            fifth_row.append(InlineKeyboardButton("🪞 Mirror Details", callback_data="mirror_details"))
-        fifth_row.append(InlineKeyboardButton("📊 Analytics", callback_data="show_analytics"))
-        fifth_row.append(InlineKeyboardButton("💡 Tips", callback_data="show_trading_tips"))
-        keyboard.append(fifth_row)
+        keyboard.append(third_row)
 
         return InlineKeyboardMarkup(keyboard)
 
