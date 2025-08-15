@@ -9539,6 +9539,14 @@ All take profit targets have been achieved! 🎯"""
                 except Exception as e:
                     logger.error(f"❌ Error checking mirror positions: {e}")
             
+            # ENHANCED: Also check for orphaned orders (orders without positions)
+            # These can happen when positions are closed but orders remain
+            logger.info("🔍 Checking for orphaned orders that need monitoring...")
+            orphaned_monitors = await self._check_and_create_orphaned_order_monitors()
+            if orphaned_monitors > 0:
+                monitors_created += orphaned_monitors
+                logger.info(f"✅ Created {orphaned_monitors} monitors for orphaned orders")
+            
             # CRITICAL: Clean up orphaned monitors after position sync
             logger.info("🧹 Running orphaned monitor cleanup after position sync...")
             await self.cleanup_orphaned_monitors()
@@ -9560,7 +9568,10 @@ All take profit targets have been achieved! 🎯"""
             side = position.get('side')
             size = float(position.get('size', 0))
             
-            if size <= 0:
+            # ENHANCED: Monitor ALL positions with ANY size (including very small ones)
+            # Some positions might have tiny remaining size but still have active orders
+            if abs(size) < 0.000001:  # Only skip truly zero positions
+                logger.debug(f"⏭️ Skipping zero position: {symbol} {side} ({account_type}) - size: {size}")
                 return None
             
             # Always use account-aware key format
@@ -9749,7 +9760,7 @@ All take profit targets have been achieved! 🎯"""
             main_position_keys = set()
             if main_positions:
                 for pos in main_positions:
-                    if abs(float(pos.get('size', 0))) > 0.001:  # Only positions with size
+                    if abs(float(pos.get('size', 0))) >= 0.000001:  # Include tiny positions with size
                         symbol = pos.get('symbol')
                         side = "Buy" if float(pos.get('size', 0)) > 0 else "Sell"
                         key = f"{symbol}_{side}_main"
@@ -9763,7 +9774,7 @@ All take profit targets have been achieved! 🎯"""
                     mirror_positions = await get_all_positions(client=bybit_client_2)
                     if mirror_positions:
                         for pos in mirror_positions:
-                            if abs(float(pos.get('size', 0))) > 0.001:  # Only positions with size
+                            if abs(float(pos.get('size', 0))) >= 0.000001:  # Include tiny positions with size
                                 symbol = pos.get('symbol')
                                 side = "Buy" if float(pos.get('size', 0)) > 0 else "Sell"
                                 key = f"{symbol}_{side}_mirror"
@@ -9796,6 +9807,80 @@ All take profit targets have been achieved! 🎯"""
             
         except Exception as e:
             logger.error(f"❌ Error detecting stale monitors: {e}")
+            return 0
+
+    async def _check_and_create_orphaned_order_monitors(self) -> int:
+        """
+        Check for orphaned orders (orders without corresponding positions) and create monitors
+        This handles cases where positions might be closed but orders remain active
+        Returns the number of monitors created for orphaned orders
+        """
+        try:
+            from clients.bybit_helpers import get_all_open_orders
+            from config.settings import ENABLE_MIRROR_TRADING
+            
+            monitors_created = 0
+            
+            # Check main account orders
+            try:
+                main_orders = await get_all_open_orders()
+                if main_orders:
+                    for order in main_orders:
+                        if order.get('reduceOnly') and 'TP' in order.get('orderLinkId', ''):
+                            symbol = order.get('symbol')
+                            # Determine side from order type and reduce only flag
+                            side = "Buy" if order.get('side') == "Sell" else "Sell"  # Opposite for reduce-only
+                            monitor_key = f"{symbol}_{side}_main"
+                            
+                            # Check if we already have a monitor for this
+                            if monitor_key not in self.position_monitors:
+                                logger.info(f"🔍 Found orphaned TP order for {symbol} {side} (main) - creating monitor")
+                                # Create a minimal position object for sync processing
+                                fake_position = {
+                                    'symbol': symbol,
+                                    'side': side,
+                                    'size': '0.001',  # Minimal size to trigger monitor creation
+                                    'avgPrice': order.get('price', '0')
+                                }
+                                result = await self._process_position_for_sync(fake_position, "main")
+                                if result == "created":
+                                    monitors_created += 1
+            except Exception as e:
+                logger.warning(f"Could not check main account orphaned orders: {e}")
+            
+            # Check mirror account orders if enabled
+            if ENABLE_MIRROR_TRADING:
+                try:
+                    from execution.mirror_trader import bybit_client_2
+                    mirror_orders = await get_all_open_orders(client=bybit_client_2)
+                    if mirror_orders:
+                        for order in mirror_orders:
+                            if order.get('reduceOnly') and 'TP' in order.get('orderLinkId', ''):
+                                symbol = order.get('symbol')
+                                # Determine side from order type and reduce only flag
+                                side = "Buy" if order.get('side') == "Sell" else "Sell"  # Opposite for reduce-only
+                                monitor_key = f"{symbol}_{side}_mirror"
+                                
+                                # Check if we already have a monitor for this
+                                if monitor_key not in self.position_monitors:
+                                    logger.info(f"🔍 Found orphaned TP order for {symbol} {side} (mirror) - creating monitor")
+                                    # Create a minimal position object for sync processing
+                                    fake_position = {
+                                        'symbol': symbol,
+                                        'side': side,
+                                        'size': '0.001',  # Minimal size to trigger monitor creation
+                                        'avgPrice': order.get('price', '0')
+                                    }
+                                    result = await self._process_position_for_sync(fake_position, "mirror")
+                                    if result == "created":
+                                        monitors_created += 1
+                except Exception as e:
+                    logger.warning(f"Could not check mirror account orphaned orders: {e}")
+            
+            return monitors_created
+            
+        except Exception as e:
+            logger.error(f"❌ Error checking orphaned orders: {e}")
             return 0
 
     async def check_order_fills_directly(self, symbol: str, order_ids: List[str], client=None) -> Dict[str, Dict]:
