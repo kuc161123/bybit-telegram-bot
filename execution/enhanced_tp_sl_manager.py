@@ -9824,7 +9824,7 @@ All take profit targets have been achieved! 🎯"""
         Returns the number of orphaned orders cleaned up
         """
         try:
-            from clients.bybit_helpers import get_all_open_orders, cancel_order, get_all_positions
+            from clients.bybit_helpers import get_all_open_orders, cancel_order_with_retry, get_all_positions
             from config.settings import ENABLE_MIRROR_TRADING
             
             orders_cleaned = 0
@@ -9870,7 +9870,7 @@ All take profit targets have been achieved! 🎯"""
                             if position_key not in main_position_keys:
                                 logger.info(f"🧹 Cancelling orphaned order: {symbol} {order.get('side')} order {order.get('orderId')} (main)")
                                 try:
-                                    await cancel_order(order.get('orderId'), symbol)
+                                    await cancel_order_with_retry(symbol, order.get('orderId'))
                                     orders_cleaned += 1
                                 except Exception as e:
                                     logger.warning(f"Could not cancel orphaned order {order.get('orderId')}: {e}")
@@ -9894,7 +9894,7 @@ All take profit targets have been achieved! 🎯"""
                                 if position_key not in mirror_position_keys:
                                     logger.info(f"🧹 Cancelling orphaned order: {symbol} {order.get('side')} order {order.get('orderId')} (mirror)")
                                     try:
-                                        await cancel_mirror_order(order.get('orderId'), symbol)
+                                        await cancel_mirror_order(symbol, order.get('orderId'))
                                         orders_cleaned += 1
                                     except Exception as e:
                                         logger.warning(f"Could not cancel orphaned mirror order {order.get('orderId')}: {e}")
