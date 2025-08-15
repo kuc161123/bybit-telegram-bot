@@ -10249,7 +10249,7 @@ All take profit targets have been achieved! 🎯"""
             remaining_size = monitor_data.get('remaining_size', monitor_data.get('position_size', Decimal('0')))
             if isinstance(remaining_size, (int, float, str)):
                 remaining_size = Decimal(str(remaining_size))
-            closure_success = await self._close_remaining_position_market(monitor_data, remaining_size)
+            closure_success = await self._close_remaining_position_market_new(monitor_data, remaining_size)
             
             if closure_success:
                 logger.info("✅ Position closed successfully via market order")
@@ -10609,7 +10609,7 @@ def get_enhanced_tp_sl_manager():
             return False
 
     async def _close_remaining_position_market_new(self, monitor_data: Dict, remaining_size: Decimal) -> bool:
-        """Close remaining position with market order for Take Profit strategy"""
+        """Close remaining position with market order for TP1 strategy"""
         try:
             symbol = monitor_data["symbol"]
             side = monitor_data["side"]
@@ -10618,30 +10618,69 @@ def get_enhanced_tp_sl_manager():
             # Determine close side (opposite of original position)
             close_side = "Sell" if side == "Buy" else "Buy"
             
-            # Use appropriate client based on account type
-            from clients.bybit_client import bybit_client_1, bybit_client_2
-            client = bybit_client_2 if account_type == "mirror" else bybit_client_1
+            logger.info(f"🔴 Placing market order to close position: {remaining_size} {symbol} {close_side} ({account_type})")
             
-            # Place market order to close position
-            close_order = client.place_order(
-                category="linear",
-                symbol=symbol,
-                side=close_side,
-                orderType="Market",
-                qty=str(remaining_size),
-                reduceOnly=True,
-                timeInForce="GTC"
-            )
-            
-            if close_order and close_order.get("retCode") == 0:
-                logger.info(f"✅ Market close order placed: {remaining_size} {symbol} {close_side}")
-                return True
+            # Use appropriate helper function based on account type
+            if account_type == "mirror":
+                from execution.mirror_trader import place_mirror_order
+                close_result = await place_mirror_order(
+                    symbol=symbol,
+                    side=close_side,
+                    order_type="Market",
+                    quantity=float(remaining_size),
+                    reduce_only=True
+                )
             else:
-                logger.error(f"❌ Failed to place market close order: {close_order}")
+                from clients.bybit_helpers import place_order_with_retry
+                close_result = await place_order_with_retry(
+                    symbol=symbol,
+                    side=close_side,
+                    order_type="Market",
+                    qty=str(remaining_size),
+                    reduce_only=True,
+                    time_in_force="IOC"  # Immediate or Cancel for market orders
+                )
+            
+            if close_result and close_result.get("orderId"):
+                order_id = close_result["orderId"]
+                logger.info(f"✅ Market close order placed successfully: {order_id} - {remaining_size} {symbol} {close_side} ({account_type})")
+                
+                # Give the order a moment to execute
+                await asyncio.sleep(0.5)
+                
+                # Verify position was actually closed
+                if account_type == "mirror":
+                    from clients.bybit_helpers import get_all_positions
+                    from execution.mirror_trader import bybit_client_2
+                    positions = await get_all_positions(client=bybit_client_2)
+                else:
+                    from clients.bybit_helpers import get_position_info
+                    positions = await get_position_info(symbol)
+                
+                # Check if position still exists with significant size
+                position_still_open = False
+                if positions:
+                    for pos in positions:
+                        if pos.get('symbol') == symbol and pos.get('side') == side:
+                            pos_size = abs(float(pos.get('size', 0)))
+                            if pos_size > 0.001:  # Position still has significant size
+                                position_still_open = True
+                                logger.warning(f"⚠️ Position still open after market close: {pos_size} {symbol}")
+                                break
+                
+                if not position_still_open:
+                    logger.info(f"✅ Position successfully closed: {symbol} {side} ({account_type})")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Position may not be fully closed: {symbol} {side} ({account_type})")
+                    return False
+                    
+            else:
+                logger.error(f"❌ Failed to place market close order: {close_result}")
                 return False
                 
         except Exception as e:
-            logger.error(f"❌ Error placing market close order: {e}")
+            logger.error(f"❌ Error placing market close order for {symbol} {side} ({account_type}): {e}")
             return False
 
     async def _trigger_mirror_closure_new(self, monitor_data: Dict):
