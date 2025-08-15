@@ -3563,6 +3563,22 @@ class EnhancedTPSLManager:
 
             logger.info(f"🔄 STARTING TP REBALANCING for {symbol} {side} ({account_type.upper()}) - Phase: {phase}")
             logger.info(f"📊 Position size: {current_size} | Previous size: {monitor_data.get('last_known_size', 'Unknown')}")
+            
+            # CRITICAL DEBUG: Check actual position data from exchange to verify size format
+            try:
+                if account_type == 'mirror':
+                    actual_position = await get_position_info_for_account(symbol, 'mirror')
+                else:
+                    actual_position = await get_position_info(symbol)
+                
+                if actual_position:
+                    actual_size = actual_position.get('size', '0')
+                    logger.info(f"🔍 ACTUAL POSITION DATA: size='{actual_size}' (type: {type(actual_size)})")
+                    logger.info(f"🔍 POSITION DETAILS: side={actual_position.get('side')}, value=${float(actual_size) * float(actual_position.get('markPrice', 0)):.2f}")
+                else:
+                    logger.warning(f"⚠️ Could not fetch actual position data for {symbol}")
+            except Exception as e:
+                logger.error(f"❌ Error fetching position data for debug: {e}")
 
             # Note: This method is already called within an atomic lock from the caller
             # Additional locking here would cause deadlock, so we rely on the caller's lock
@@ -3671,6 +3687,9 @@ class EnhancedTPSLManager:
                 raw_new_qty = (current_size * tp_percentage) / Decimal("100")
                 
                 logger.info(f"💰 TP{tp_num} calculation: {current_size} × {tp_percentage}% = {raw_new_qty} (raw)")
+                logger.info(f"🔍 DEBUG: current_size type={type(current_size)}, value={current_size}")
+                logger.info(f"🔍 DEBUG: tp_percentage type={type(tp_percentage)}, value={tp_percentage}")
+                logger.info(f"🔍 DEBUG: raw_new_qty type={type(raw_new_qty)}, value={raw_new_qty}")
 
                 # Get instrument info to validate quantity step
                 try:
@@ -3681,16 +3700,33 @@ class EnhancedTPSLManager:
                         min_order_qty = Decimal(lot_size_filter.get("minOrderQty", "0.001"))
                         
                         logger.info(f"📊 Instrument info for {monitor_data['symbol']}: qtyStep={qty_step}, minOrderQty={min_order_qty}")
+                        
+                        # Check notional value requirements
+                        min_notional = Decimal(lot_size_filter.get("minNotionalValue", "5"))
+                        estimated_price = Decimal(str(tp_order.get("price", "0.1")))
+                        estimated_notional = raw_new_qty * estimated_price
+                        logger.info(f"📊 Notional check: {raw_new_qty} × {estimated_price} = ${estimated_notional} (min: ${min_notional})")
 
                         # Adjust quantity to step size with enhanced precision handling
                         new_qty = value_adjusted_to_step(raw_new_qty, qty_step)
                         logger.info(f"📊 Quantity adjustment: {raw_new_qty} -> {new_qty} (step: {qty_step})")
+                        
+                        # Verify final notional value
+                        final_notional = new_qty * estimated_price
+                        logger.info(f"📊 Final notional: {new_qty} × {estimated_price} = ${final_notional}")
                         
                         # CRITICAL FIX: Handle zero quantity due to step size issues
                         if new_qty == 0 and raw_new_qty > 0:
                             # If adjusted quantity is zero but raw is positive, use minimum step
                             new_qty = max(qty_step, min_order_qty)
                             logger.warning(f"⚠️ Quantity adjusted to zero, using minimum: {new_qty} (raw: {raw_new_qty}, step: {qty_step})")
+                        
+                        # CRITICAL FIX FOR CETUSUSDT: Check if quantity needs decimal formatting
+                        # Some symbols may require decimal format even with integer step size
+                        if new_qty == int(new_qty) and new_qty > 0:
+                            # Try formatting as decimal for API compatibility
+                            formatted_qty = f"{new_qty:.0f}"
+                            logger.info(f"🔧 Formatting integer quantity: {new_qty} -> '{formatted_qty}'")
 
                         # Skip if quantity too small or below minimum
                         if new_qty < min_order_qty:
