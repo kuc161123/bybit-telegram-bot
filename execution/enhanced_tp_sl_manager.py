@@ -3679,9 +3679,18 @@ class EnhancedTPSLManager:
                         lot_size_filter = instrument_info.get("lotSizeFilter", {})
                         qty_step = Decimal(lot_size_filter.get("qtyStep", "1"))
                         min_order_qty = Decimal(lot_size_filter.get("minOrderQty", "0.001"))
+                        
+                        logger.info(f"📊 Instrument info for {monitor_data['symbol']}: qtyStep={qty_step}, minOrderQty={min_order_qty}")
 
-                        # Adjust quantity to step size
+                        # Adjust quantity to step size with enhanced precision handling
                         new_qty = value_adjusted_to_step(raw_new_qty, qty_step)
+                        logger.info(f"📊 Quantity adjustment: {raw_new_qty} -> {new_qty} (step: {qty_step})")
+                        
+                        # CRITICAL FIX: Handle zero quantity due to step size issues
+                        if new_qty == 0 and raw_new_qty > 0:
+                            # If adjusted quantity is zero but raw is positive, use minimum step
+                            new_qty = max(qty_step, min_order_qty)
+                            logger.warning(f"⚠️ Quantity adjusted to zero, using minimum: {new_qty} (raw: {raw_new_qty}, step: {qty_step})")
 
                         # Skip if quantity too small or below minimum
                         if new_qty < min_order_qty:
@@ -3692,9 +3701,14 @@ class EnhancedTPSLManager:
                             logger.info(f"❌ Cancelled TP{tp_order.get('tp_number', i+1)} - quantity {new_qty} below minimum {min_order_qty}")
                             continue
                     else:
-                        # Fallback: use raw quantity but round to reasonable precision
-                        new_qty = raw_new_qty.quantize(Decimal("0.1"))
-                        if new_qty < Decimal("0.1"):
+                        # Fallback: use raw quantity but round to reasonable precision for the symbol
+                        # For most crypto pairs, quantities can be large integers
+                        if raw_new_qty >= Decimal("1"):
+                            new_qty = raw_new_qty.quantize(Decimal("1"))  # Round to whole number for large quantities
+                        else:
+                            new_qty = raw_new_qty.quantize(Decimal("0.001"))  # More precision for small quantities
+                        logger.info(f"📊 Fallback quantity adjustment: {raw_new_qty} -> {new_qty}")
+                        if new_qty < Decimal("0.001"):
                             if is_mirror_account:
                                 await self._cancel_order_mirror(monitor_data["symbol"], tp_order["order_id"])
                             else:
@@ -3703,9 +3717,13 @@ class EnhancedTPSLManager:
                             continue
                 except Exception as e:
                     logger.error(f"Error getting instrument info for {monitor_data['symbol']}: {e}")
-                    # Fallback: use raw quantity but round to reasonable precision
-                    new_qty = raw_new_qty.quantize(Decimal("0.1"))
-                    if new_qty < Decimal("0.1"):
+                    # Fallback: use raw quantity but round to reasonable precision for the symbol
+                    if raw_new_qty >= Decimal("1"):
+                        new_qty = raw_new_qty.quantize(Decimal("1"))  # Round to whole number for large quantities  
+                    else:
+                        new_qty = raw_new_qty.quantize(Decimal("0.001"))  # More precision for small quantities
+                    logger.info(f"📊 Error fallback quantity adjustment: {raw_new_qty} -> {new_qty}")
+                    if new_qty < Decimal("0.001"):
                         if is_mirror_account:
                             await self._cancel_order_mirror(monitor_data["symbol"], tp_order["order_id"])
                         else:
