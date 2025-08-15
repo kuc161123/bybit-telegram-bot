@@ -9951,70 +9951,84 @@ All take profit targets have been achieved! 🎯"""
         except Exception as e:
             logger.error(f"Error in enhanced monitoring for {monitor_key}: {e}")
 
-    async def _handle_tp_fill_enhanced(self, monitor_data: Dict, client=None):
+    async def _handle_tp1_final_closure(self, monitor_data: Dict, client=None):
         """
-        Enhanced TP fill handling with comprehensive features:
-        1. Move SL to breakeven with verification
-        2. Cancel unfilled limit orders
-        3. Send detailed alerts
+        TP1-Only Strategy: Complete position closure when TP1 target (85%) is reached.
+        This replaces the old breakeven logic with immediate 100% closure.
+        Supports both main and mirror accounts.
         """
-        from config.settings import CANCEL_LIMITS_ON_TP, VERIFY_BREAKEVEN_PLACEMENT
+        from config.settings import CANCEL_LIMITS_ON_TP1
         
         symbol = monitor_data['symbol']
         side = monitor_data['side']
         account_type = monitor_data.get('account_type', 'main')
         
-        logger.info(f"🎯 Handling TP fill for {symbol} {side} ({account_type})")
+        logger.info(f"🎯 TP1 TARGET REACHED - INITIATING COMPLETE CLOSURE: {symbol} {side} ({account_type.upper()})")
         
         try:
-            # 1. Move SL to breakeven
-            if not monitor_data.get('sl_moved_to_be'):
-                logger.info("📍 Moving SL to breakeven after TP...")
-                
-                # Use appropriate breakeven method based on settings
-                if BREAKEVEN_FAILSAFE_ENABLED:
-                    from execution.breakeven_failsafe import breakeven_failsafe
-                    success = await self._move_sl_to_breakeven(monitor_data)
-                else:
-                    success = await self._move_sl_to_breakeven_enhanced_v2(monitor_data)
-                
-                if success:
-                    monitor_data['sl_moved_to_be'] = True
-                    logger.info("✅ SL moved to breakeven successfully")
-                    
-                    # Verify if requested
-                    if VERIFY_BREAKEVEN_PLACEMENT:
-                        await asyncio.sleep(2)  # Brief delay for order to settle
-                        verified = await self._verify_breakeven_placement(monitor_data, client)
-                        if verified:
-                            logger.info("✅ Breakeven placement verified")
-                        else:
-                            logger.warning("⚠️ Breakeven placement could not be verified")
-                else:
-                    logger.error("❌ Failed to move SL to breakeven")
+            # Step 1: Emergency cancel ALL remaining orders (TP2/3/4 + any unfilled limits)
+            logger.info("🚫 STEP 1: Cancelling ALL remaining orders...")
+            await self._emergency_cancel_all_orders(monitor_data, client)
             
-            # 2. Cancel unfilled limit orders
-            if CANCEL_LIMITS_ON_TP1 and not monitor_data.get('limit_orders_cancelled'):  # Legacy constant name
-                logger.info("🚫 Cancelling unfilled limit orders...")
-                
-                try:
-                    cancelled_count = await self._cancel_unfilled_limit_orders(monitor_data)
-                    if cancelled_count and cancelled_count > 0:
-                        monitor_data['limit_orders_cancelled'] = True
-                        logger.info(f"✅ Cancelled {cancelled_count} unfilled limit orders")
-                    else:
-                        logger.info("ℹ️ No unfilled limit orders found to cancel")
-                except Exception as e:
-                    logger.error(f"❌ Error cancelling unfilled limit orders: {e}")
-                    # Don't crash the entire TP1 handling due to this error
+            # Step 2: Close 100% of remaining position via market order
+            logger.info("📈 STEP 2: Closing remaining position (100%)...")
+            remaining_size = monitor_data.get('remaining_size', monitor_data.get('position_size', Decimal('0')))
+            if isinstance(remaining_size, (int, float, str)):
+                remaining_size = Decimal(str(remaining_size))
+            closure_success = await self._close_remaining_position_market(monitor_data, remaining_size)
             
-            # 3. Update phase
-            if monitor_data.get('phase') != 'PROFIT_TAKING':
-                monitor_data['phase'] = 'PROFIT_TAKING'
-                monitor_data['phase_transition_time'] = time.time()
+            if closure_success:
+                logger.info("✅ Position closed successfully via market order")
+            else:
+                logger.error("❌ Failed to close remaining position - will retry")
+                # Retry once with fallback method
+                await asyncio.sleep(1)
+                closure_success = await self._ensure_position_fully_closed(monitor_data, client)
+            
+            # Step 3: Trigger mirror account closure if this is main account
+            if account_type == 'main':
+                logger.info("🪞 STEP 3: Triggering mirror account closure...")
+                await self._trigger_mirror_closure_tp1(monitor_data)
+            
+            # Step 4: Update monitor state to POSITION_CLOSED
+            logger.info("📋 STEP 4: Updating monitor state...")
+            monitor_data['phase'] = 'POSITION_CLOSED'
+            monitor_data['position_closed'] = True
+            monitor_data['tp1_closure_time'] = time.time()
+            monitor_data['closure_method'] = 'TP1_COMPLETE_CLOSURE'
+            
+            # Step 5: Send TP1 closure alert
+            logger.info("📢 STEP 5: Sending TP1 closure alerts...")
+            await self._send_tp1_closure_alert(monitor_data)
+            
+            # Step 6: Update performance statistics
+            logger.info("📊 STEP 6: Updating performance statistics...")
+            await self._update_position_statistics(monitor_data, closure_reason='TP1_HIT')
+            
+            # Step 7: Complete cleanup
+            logger.info("🧹 STEP 7: Completing cleanup...")
+            await self._complete_position_closure_cleanup(monitor_data)
+            
+            logger.info(f"✅ TP1-ONLY CLOSURE COMPLETE: {symbol} {side} ({account_type.upper()}) - Position 100% closed")
             
         except Exception as e:
-            logger.error(f"Error handling TP fill: {e}")
+            logger.error(f"❌ Error in TP1 final closure: {e}")
+            # Emergency fallback - try to close position anyway
+            try:
+                await self._ensure_position_fully_closed(monitor_data, client)
+                monitor_data['phase'] = 'POSITION_CLOSED'
+                monitor_data['closure_method'] = 'TP1_EMERGENCY_CLOSURE'
+                logger.warning("⚠️ Emergency closure completed despite errors")
+            except Exception as fallback_error:
+                logger.error(f"❌ Emergency closure also failed: {fallback_error}")
+
+    async def _handle_tp_fill_enhanced(self, monitor_data: Dict, client=None):
+        """
+        DEPRECATED: Legacy method replaced by _handle_tp1_final_closure for TP1-only strategy.
+        This method now redirects to the new TP1-only implementation.
+        """
+        logger.info("🔄 Redirecting to TP1-only closure method...")
+        await self._handle_tp1_final_closure(monitor_data, client)
 
     async def _adjust_sl_for_remaining_position(self, monitor_data: Dict, client=None):
         """
@@ -10475,6 +10489,124 @@ def get_enhanced_tp_sl_manager():
 
         except Exception as e:
             logger.error(f"Error sending Take Profit closure alert: {e}")
+
+    async def _trigger_mirror_closure_tp1(self, monitor_data: Dict):
+        """Trigger mirror account closure for TP1-only strategy"""
+        try:
+            if not ENABLE_MIRROR_TRADING:
+                return
+                
+            symbol = monitor_data["symbol"]
+            side = monitor_data["side"]
+            mirror_monitor_key = f"{symbol}_{side}_mirror"
+            
+            logger.info(f"🪞 Triggering mirror closure for TP1: {mirror_monitor_key}")
+            
+            # Find mirror monitor
+            if mirror_monitor_key in self.position_monitors:
+                mirror_monitor = self.position_monitors[mirror_monitor_key]
+                
+                # Trigger closure for mirror account
+                await self._handle_tp1_final_closure(mirror_monitor, None)
+                
+                logger.info(f"✅ Mirror TP1 closure triggered for {mirror_monitor_key}")
+            else:
+                logger.warning(f"⚠️ No mirror monitor found for {mirror_monitor_key}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error triggering mirror TP1 closure: {e}")
+
+    async def _send_tp1_closure_alert(self, monitor_data: Dict):
+        """Send TP1 closure alert for complete position closure"""
+        try:
+            from helpers.alerts_v2 import send_trade_alert
+            from config.settings import ENABLE_MIRROR_TRADING
+            
+            symbol = monitor_data["symbol"]
+            side = monitor_data["side"]
+            account_type = monitor_data.get("account_type", "main")
+            position_size = monitor_data.get("position_size", 0)
+            entry_price = monitor_data.get("actual_entry_price") or monitor_data.get("entry_price", 0)
+            
+            # Calculate closure price and P&L
+            current_price = monitor_data.get("current_price", 0)
+            if not current_price:
+                # Get current market price
+                from clients.bybit_helpers import get_current_price
+                current_price = await get_current_price(symbol)
+            
+            # Calculate P&L
+            if side.lower() == "buy":
+                pnl = (current_price - entry_price) * position_size
+            else:
+                pnl = (entry_price - current_price) * position_size
+            
+            pnl_percentage = (pnl / (entry_price * position_size)) * 100 if entry_price > 0 else 0
+            
+            # Find chat ID for alerts
+            chat_id = self._find_chat_id_for_position(monitor_data)
+            if not chat_id:
+                logger.warning("No chat ID found for TP1 closure alert")
+                return
+
+            # Create alert message
+            message = f"""🎯 <b>TP1 TARGET REACHED - POSITION CLOSED!</b>
+
+📊 <b>{symbol}</b> | {side.upper()} | {account_type.upper()}
+💰 <b>Entry:</b> ${entry_price:,.4f}
+🎯 <b>Exit:</b> ${current_price:,.4f}
+📏 <b>Size:</b> {position_size:,.4f}
+
+💵 <b>P&L:</b> ${pnl:+,.2f} ({pnl_percentage:+.2f}%)
+
+🏆 <b>TP1-Only Strategy:</b> Complete Closure
+• Position closed 100% at 85% target
+• All remaining orders cancelled
+• Risk-free profit secured
+{"• Mirror account: Synchronized" if account_type == "main" and ENABLE_MIRROR_TRADING else ""}
+
+✅ <b>Congratulations on reaching your profit target!</b>"""
+
+            # Send alert
+            await send_trade_alert(chat_id, message, f"tp1_closure_{account_type}")
+            logger.info(f"✅ TP1 closure alert sent for {symbol} {side} ({account_type})")
+
+        except Exception as e:
+            logger.error(f"❌ Error sending TP1 closure alert: {e}")
+
+    async def _complete_position_closure_cleanup(self, monitor_data: Dict):
+        """Complete cleanup after TP1 position closure"""
+        try:
+            symbol = monitor_data["symbol"]
+            side = monitor_data["side"]
+            account_type = monitor_data.get("account_type", "main")
+            monitor_key = f"{symbol}_{side}_{account_type}"
+            
+            logger.info(f"🧹 Completing position closure cleanup for {monitor_key}")
+            
+            # Mark final closure state
+            monitor_data["final_closure_time"] = time.time()
+            monitor_data["cleanup_completed"] = True
+            monitor_data["monitor_status"] = "COMPLETED"
+            
+            # Save final state to persistence
+            await self._save_monitor_data_pickle(monitor_data, force=True)
+            
+            # Remove from active monitoring
+            if monitor_key in self.position_monitors:
+                del self.position_monitors[monitor_key]
+                logger.info(f"🗑️ Removed {monitor_key} from active monitors")
+            
+            # Remove from indexes
+            self._remove_from_indexes(monitor_key, monitor_data)
+            
+            # Clean up any remaining state
+            monitor_data.clear()
+            
+            logger.info(f"✅ Position closure cleanup completed for {monitor_key}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error in position closure cleanup: {e}")
 
 # Global instance - use singleton pattern
 enhanced_tp_sl_manager = get_enhanced_tp_sl_manager()
