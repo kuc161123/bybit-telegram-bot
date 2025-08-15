@@ -2425,40 +2425,15 @@ class EnhancedTPSLManager:
                 # Trigger phase transition to PROFIT_TAKING
                 await self._transition_to_profit_taking(monitor_data)
                 
-                # SINGLE TP APPROACH: For single TP strategy, close position immediately when TP is hit
-                if tp_number == 1:  # Single TP approach - TP means complete closure
-                    logger.info(f"🎯 SINGLE TP APPROACH: TP hit detected - initiating immediate 100% closure")
+                # TP1-ONLY APPROACH: For TP1-only strategy, close position immediately when TP is hit
+                if tp_number == 1:  # TP1-only approach - TP means complete closure (no breakeven)
+                    logger.info(f"🎯 TP1-ONLY APPROACH: TP hit detected - initiating immediate 100% closure")
                     await self._handle_take_profit_final_closure(monitor_data, fill_percentage, current_size)
                     return  # Exit early since position is fully closed
                 
-                # Legacy: Trigger breakeven movement for multi-TP approach (not used in current system)
-                logger.info(f"🎯 Triggering breakeven movement after TP...")
-                # Get position data for breakeven
-                positions = await get_position_info_for_account(monitor_data["symbol"], monitor_data.get("account_type", "main"))
-                position = None
-                if positions:
-                    for pos in positions:
-                        if pos.get("side") == monitor_data["side"]:
-                            position = pos
-                            break
-                
-                if position:
-                    success = await self._move_sl_to_breakeven_enhanced_v2(
-                        monitor_data=monitor_data,
-                        position=position,
-                        is_tp1_trigger=True
-                    )
-                    if success:
-                        logger.info(f"✅ SL moved to breakeven successfully after TP")
-                        monitor_data["sl_moved_to_be"] = True
-                        # Send breakeven alert only if not already sent
-                        if not monitor_data.get("breakeven_alert_sent", False):
-                            await self._send_enhanced_breakeven_alert(monitor_data, "TP")
-                            monitor_data["breakeven_alert_sent"] = True
-                    else:
-                        logger.error(f"❌ Failed to move SL to breakeven after TP")
-                else:
-                    logger.error(f"❌ Could not find position data for breakeven movement")
+                # NOTE: Legacy breakeven logic removed for TP1-only strategy
+                # In TP1-only approach, any TP hit triggers immediate 100% closure
+                logger.info(f"🎯 TP1-ONLY: Skipping breakeven movement - immediate closure approach")
             
             # Send TP fill alert with correct TP number
             await self._send_tp_fill_alert_enhanced(monitor_data, fill_percentage, tp_number)
@@ -2575,68 +2550,24 @@ class EnhancedTPSLManager:
             # ENHANCED: Progressive SL Management with Breakeven Automation
             monitor_key = f"{monitor_data['symbol']}_{monitor_data['side']}"
 
-            # Check for TP breakeven trigger - now based on tp_hit flag
-            if (monitor_data.get("tp_hit", False) or monitor_data.get("tp1_hit", False)) and not monitor_data.get("sl_moved_to_be", False):
-                # Use atomic lock to prevent race conditions
-                if monitor_key not in self.breakeven_locks:
-                    self.breakeven_locks[monitor_key] = asyncio.Lock()
+            # TP1-ONLY STRATEGY: Skip breakeven logic completely for TP hits
+            # When TP is hit, the position should close immediately via _handle_tp1_final_closure
+            if (monitor_data.get("tp_hit", False) or monitor_data.get("tp1_hit", False)) and not monitor_data.get("position_closed", False):
+                logger.info(f"🎯 TP1-ONLY: TP hit detected for {monitor_key} - triggering immediate closure")
+                logger.info(f"🎯 TP1-ONLY: Skipping breakeven logic - using immediate closure strategy")
+                
+                # Trigger immediate closure instead of breakeven movement
+                await self._handle_tp1_final_closure(monitor_data)
+                return  # Exit early since position is fully closed
 
-                async with self.breakeven_locks[monitor_key]:
-                    # Double-check flag after acquiring lock
-                    if not monitor_data.get("sl_moved_to_be", False):
-                        logger.info(f"🔒 ENHANCED TP BREAKEVEN: {monitor_key} - TP has been hit")
-
-                        # First, transition to profit-taking phase and cleanup limit orders
-                        await self._transition_to_profit_taking(monitor_data)
-
-                        # Get fresh position data for breakeven calculation (account-aware)
-                        from clients.bybit_helpers import get_position_info_for_account
-                        account_type = monitor_data.get("account_type", "main")
-                        positions = await get_position_info_for_account(monitor_data["symbol"], account_type)
-                        position = None
-                        if positions:
-                            for pos in positions:
-                                if pos.get("side") == monitor_data["side"]:
-                                    position = pos
-                                    break
-
-                        if position:
-                            logger.info(f"📍 Position found for {account_type} account: {monitor_data['symbol']} {monitor_data['side']}")
-                            # ENHANCED: Use enhanced breakeven with full position management
-                            success = await self._move_sl_to_breakeven_enhanced_v2(
-                                monitor_data=monitor_data,
-                                position=position,
-                                is_tp1_trigger=True
-                            )
-
-                            if success:
-                                monitor_data["sl_moved_to_be"] = True
-                                logger.info(f"✅ ENHANCED TP breakeven completed for {monitor_key}")
-
-                                # Send enhanced breakeven alert only if not already sent
-                                if not monitor_data.get("breakeven_alert_sent", False):
-                                    await self._send_enhanced_breakeven_alert(monitor_data, "TP")
-                                    monitor_data["breakeven_alert_sent"] = True
-
-                                # Synchronize with mirror account
-                                await self._sync_breakeven_with_mirror(monitor_data)
-                            else:
-                                logger.error(f"❌ ENHANCED TP breakeven failed for {monitor_key}")
-                        else:
-                            logger.error(f"❌ CRITICAL: No position found for {account_type} account: {monitor_data['symbol']} {monitor_data['side']}")
-                            logger.error(f"   • This prevents breakeven movement and mirror sync!")
-                            logger.error(f"   • Positions fetched: {len(positions) if positions else 0}")
-
-            # TAKE PROFIT: When Take Profit hits (85%), close entire position immediately
-            # This handles both direct TP detection and fallback cases
-            elif (monitor_data.get("tp_hit", False) or monitor_data.get("tp1_hit", False)) and fill_percentage >= 85:
-                # Take Profit hit - close 100% of position and complete the trade
-                logger.info(f"🎯 TAKE PROFIT FINAL CLOSURE: Fill percentage {fill_percentage:.2f}% >= 85%, closing entire position")
-                await self._handle_take_profit_final_closure(monitor_data, fill_percentage, current_size)
-            # Fallback: Also check if SL moved to breakeven AND fill percentage >= 85% (legacy path)
+            # TP1-ONLY: Fallback when position reaches 85% fill (should use TP1-only closure)
+            elif fill_percentage >= 85:
+                logger.info(f"🎯 TP1-ONLY FALLBACK: Fill percentage {fill_percentage:.2f}% >= 85%, triggering immediate closure")
+                await self._handle_tp1_final_closure(monitor_data)
+            # Legacy fallback path (should not be reached in TP1-only strategy)
             elif monitor_data.get("sl_moved_to_be", False) and fill_percentage >= 85:
-                logger.info(f"🎯 TAKE PROFIT FALLBACK CLOSURE: SL at breakeven and fill percentage {fill_percentage:.2f}% >= 85%")
-                await self._handle_take_profit_final_closure(monitor_data, fill_percentage, current_size)
+                logger.info(f"🎯 LEGACY FALLBACK: Converting to TP1-only closure (fill: {fill_percentage:.2f}%)")
+                await self._handle_tp1_final_closure(monitor_data)
 
 
     def _count_filled_limit_orders(self, monitor_data: Dict) -> int:
