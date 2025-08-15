@@ -9635,6 +9635,8 @@ All take profit targets have been achieved! 🎯"""
                 
                 # DIRECT API: Get all orders for monitoring setup
                 try:
+                    from clients.bybit_helpers import get_all_open_orders
+                    
                     if account_type == "mirror":
                         from execution.mirror_trader import bybit_client_2
                         all_orders = await get_all_open_orders(client=bybit_client_2)
