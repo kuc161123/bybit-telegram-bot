@@ -818,7 +818,6 @@ async def _run_monitor_cleanup():
         
         # Clean up expired cache entries in the manager
         enhanced_tp_sl_manager._cleanup_execution_cache()
-        enhanced_tp_sl_manager._cleanup_monitoring_cache()
         
         logger.debug("✅ Monitor cleanup completed")
         return True

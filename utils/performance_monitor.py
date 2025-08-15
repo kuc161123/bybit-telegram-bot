@@ -150,9 +150,9 @@ class EnhancedPerformanceMonitor:
                 percent=self.process.memory_percent(),
                 available_mb=system_memory.available / 1024 / 1024,
                 gc_objects=len(gc.get_objects()),
-                gc_gen0=gc_stats[0]['count'] if gc_stats else 0,
-                gc_gen1=gc_stats[1]['count'] if len(gc_stats) > 1 else 0,
-                gc_gen2=gc_stats[2]['count'] if len(gc_stats) > 2 else 0
+                gc_gen0=gc_stats[0]['collections'] if gc_stats else 0,
+                gc_gen1=gc_stats[1]['collections'] if len(gc_stats) > 1 else 0,
+                gc_gen2=gc_stats[2]['collections'] if len(gc_stats) > 2 else 0
             )
         except Exception as e:
             logger.error(f"Error getting memory metrics: {e}")
