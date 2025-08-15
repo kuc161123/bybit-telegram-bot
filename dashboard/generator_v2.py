@@ -497,9 +497,9 @@ class DashboardGenerator:
                 else:
                     tp_orders.sort(key=lambda x: safe_float_order_price(x), reverse=True)
 
-                # Calculate TP profit (normalized for fair comparison between accounts)
+                # Calculate TP1 profit (TP1-only strategy: 100% of position closes at TP1)
                 if tp_orders:
-                    tp_order = tp_orders[0]
+                    tp_order = tp_orders[0]  # TP1 is the first (and only) TP
                     tp_price = safe_decimal_order_price(tp_order)
                     tp_qty = Decimal(str(tp_order.get('qty', 0)))
 
@@ -510,30 +510,26 @@ class DashboardGenerator:
                         else:
                             price_diff_per_unit = avg_price - tp_price
 
-                        # For fair comparison: normalize TP to conservative approach standard (85% of position)
-                        # This ensures both accounts show similar R:R ratios regardless of proportional sizing
-                        conservative_tp_percentage = Decimal('0.85')  # 85% is standard TP in conservative approach
-                        normalized_tp_qty = size * conservative_tp_percentage
-
-                        # Calculate profits using normalized quantities for fair comparison
-                        tp_profit += price_diff_per_unit * normalized_tp_qty
+                        # TP1-ONLY STRATEGY: Use full position size (100% closes at TP1)
+                        # No normalization needed since entire position closes at first TP
+                        tp_profit += price_diff_per_unit * size
                         tp_full_profit += price_diff_per_unit * size
 
-                # Calculate all TP profit (normalized for fair comparison between accounts)
-                for tp_order in tp_orders:
+                # TP1-ONLY STRATEGY: All TP profit is the same as TP1 profit (only one TP)
+                # Since there's only TP1, the "all TP profit" for this position equals TP1 profit for this position
+                if tp_orders:
+                    tp_order = tp_orders[0]  # TP1 is the only TP
                     tp_price = safe_decimal_order_price(tp_order)
-                    tp_qty = Decimal(str(tp_order.get('qty', 0)))
-
+                    
                     if tp_price > 0:  # Only calculate if valid price
                         # Calculate price difference per unit
                         if side == 'Buy':
                             price_diff_per_unit = tp_price - avg_price
                         else:
                             price_diff_per_unit = avg_price - tp_price
-
-                        # Use actual TP quantities but ensure fair comparison
-                        # The normalization happens at the TP1 level, total TP should use actual quantities
-                        all_tp_profit += price_diff_per_unit * tp_qty
+                        
+                        # TP1-ONLY: All TP profit equals TP1 profit (full position size)
+                        all_tp_profit += price_diff_per_unit * size
 
                 # Calculate SL loss (all variables as Decimal)
                 if sl_orders:
