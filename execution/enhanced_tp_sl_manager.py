@@ -9761,9 +9761,10 @@ All take profit targets have been achieved! 🎯"""
                 for pos in main_positions:
                     if abs(float(pos.get('size', 0))) >= 0.000001:  # Include tiny positions with size
                         symbol = pos.get('symbol')
-                        side = "Buy" if float(pos.get('size', 0)) > 0 else "Sell"
+                        side = pos.get('side')  # Use side directly from position data (consistent with sync)
                         key = f"{symbol}_{side}_main"
                         main_position_keys.add(key)
+                        logger.debug(f"🔍 Found main position: {key} (size: {pos.get('size')})")
             
             # Mirror account positions
             mirror_position_keys = set()
@@ -9775,14 +9776,20 @@ All take profit targets have been achieved! 🎯"""
                         for pos in mirror_positions:
                             if abs(float(pos.get('size', 0))) >= 0.000001:  # Include tiny positions with size
                                 symbol = pos.get('symbol')
-                                side = "Buy" if float(pos.get('size', 0)) > 0 else "Sell"
+                                side = pos.get('side')  # Use side directly from position data (consistent with sync)
                                 key = f"{symbol}_{side}_mirror"
                                 mirror_position_keys.add(key)
+                                logger.debug(f"🔍 Found mirror position: {key} (size: {pos.get('size')})")
                 except Exception as e:
                     logger.warning(f"Could not check mirror positions for stale detection: {e}")
             
             # Combine all valid position keys
             all_valid_keys = main_position_keys | mirror_position_keys
+            
+            logger.debug(f"🔍 Position key comparison:")
+            logger.debug(f"   📊 Found {len(main_position_keys)} main position keys: {main_position_keys}")
+            logger.debug(f"   🪞 Found {len(mirror_position_keys)} mirror position keys: {mirror_position_keys}")
+            logger.debug(f"   📋 Current monitor keys: {list(self.position_monitors.keys())}")
             
             # Check each monitor against actual positions
             for monitor_key, monitor_data in list(self.position_monitors.items()):
@@ -9790,6 +9797,8 @@ All take profit targets have been achieved! 🎯"""
                     # This monitor has no corresponding position
                     stale_monitors.append(monitor_key)
                     logger.info(f"🗑️ Detected stale monitor: {monitor_key} (no corresponding position)")
+                else:
+                    logger.debug(f"✅ Confirmed active monitor: {monitor_key}")
             
             # Remove stale monitors
             for stale_key in stale_monitors:
@@ -9827,7 +9836,7 @@ All take profit targets have been achieved! 🎯"""
                 for pos in main_positions:
                     if abs(float(pos.get('size', 0))) >= 0.000001:
                         symbol = pos.get('symbol')
-                        side = "Buy" if float(pos.get('size', 0)) > 0 else "Sell"
+                        side = pos.get('side')  # Use side directly from position data
                         key = f"{symbol}_{side}"
                         main_position_keys.add(key)
             
@@ -9840,7 +9849,7 @@ All take profit targets have been achieved! 🎯"""
                         for pos in mirror_positions:
                             if abs(float(pos.get('size', 0))) >= 0.000001:
                                 symbol = pos.get('symbol')
-                                side = "Buy" if float(pos.get('size', 0)) > 0 else "Sell"
+                                side = pos.get('side')  # Use side directly from position data
                                 key = f"{symbol}_{side}"
                                 mirror_position_keys.add(key)
                 except Exception as e:
