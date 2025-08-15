@@ -2706,9 +2706,12 @@ class EnhancedTPSLManager:
                     logger.warning(f"   Original TP orders: {list(tp_orders.keys())[:3]}...")
                     logger.warning(f"   Exchange order IDs: {list(fresh_order_ids)[:3]}...")
                     
-                    # Don't update monitor data if all orders were removed - might be false positive
-                    logger.warning(f"🛡️ Preserving original TP orders to prevent data loss")
-                    return tp_orders
+                    # CRITICAL FIX: When all orders are stale, clear them completely for fresh start
+                    logger.warning(f"🧹 CLEARING all stale TP orders - monitor has outdated data")
+                    logger.warning(f"   This will allow fresh TP orders to be created for current position")
+                    monitor_data["tp_orders"] = {}  # Clear all stale orders
+                    self.save_monitors_to_persistence(force=True, reason="all_tp_orders_stale")
+                    return {}
                 else:
                     # Update monitor data with validated orders
                     monitor_data["tp_orders"] = validated_tp_orders
@@ -3564,7 +3567,7 @@ class EnhancedTPSLManager:
             logger.info(f"🔄 STARTING TP REBALANCING for {symbol} {side} ({account_type.upper()}) - Phase: {phase}")
             logger.info(f"📊 Position size: {current_size} | Previous size: {monitor_data.get('last_known_size', 'Unknown')}")
             
-            # CRITICAL DEBUG: Check actual position data from exchange to verify size format
+            # CRITICAL VALIDATION: Check actual position data from exchange before proceeding
             try:
                 if account_type == 'mirror':
                     actual_position = await get_position_info_for_account(symbol, 'mirror')
@@ -3572,13 +3575,48 @@ class EnhancedTPSLManager:
                     actual_position = await get_position_info(symbol)
                 
                 if actual_position:
-                    actual_size = actual_position.get('size', '0')
-                    logger.info(f"🔍 ACTUAL POSITION DATA: size='{actual_size}' (type: {type(actual_size)})")
-                    logger.info(f"🔍 POSITION DETAILS: side={actual_position.get('side')}, value=${float(actual_size) * float(actual_position.get('markPrice', 0)):.2f}")
+                    actual_size = float(actual_position.get('size', '0'))
+                    actual_side = actual_position.get('side', '')
+                    logger.info(f"🔍 ACTUAL POSITION DATA: size={actual_size}, side={actual_side}")
+                    logger.info(f"🔍 MONITOR POSITION DATA: size={current_size}, side={side}")
+                    
+                    # CRITICAL CHECK: Validate position still exists and matches monitor data
+                    if actual_size == 0:
+                        logger.warning(f"⚠️ POSITION CLOSED: Monitor references closed position for {symbol} {side}")
+                        logger.info(f"🧹 Removing monitor for closed position: {symbol}_{side}_{account_type}")
+                        # Remove this monitor as the position is closed
+                        monitor_key = f"{symbol}_{side}_{account_type}"
+                        if monitor_key in self.position_monitors:
+                            del self.position_monitors[monitor_key]
+                        self.save_monitors_to_persistence(force=True, reason="position_closed")
+                        return False
+                    
+                    # CRITICAL CHECK: Validate position side matches
+                    if actual_side != side:
+                        logger.error(f"❌ SIDE MISMATCH: Monitor expects {side}, actual position is {actual_side}")
+                        logger.info(f"🧹 Removing monitor for mismatched position: {symbol}_{side}_{account_type}")
+                        monitor_key = f"{symbol}_{side}_{account_type}"
+                        if monitor_key in self.position_monitors:
+                            del self.position_monitors[monitor_key]
+                        self.save_monitors_to_persistence(force=True, reason="side_mismatch")
+                        return False
+                    
+                    # CRITICAL CHECK: Update monitor with actual position size if different
+                    if abs(float(current_size) - actual_size) > 0.1:  # Allow small rounding differences
+                        logger.warning(f"⚠️ SIZE MISMATCH: Monitor has {current_size}, actual is {actual_size}")
+                        logger.info(f"🔄 Updating monitor with actual position size: {actual_size}")
+                        monitor_data["position_size"] = actual_size
+                        monitor_data["remaining_size"] = actual_size
+                        current_size = Decimal(str(actual_size))
+                        self.save_monitors_to_persistence(force=True, reason="size_correction")
+                        
                 else:
-                    logger.warning(f"⚠️ Could not fetch actual position data for {symbol}")
+                    logger.error(f"❌ Could not fetch actual position data for {symbol} - cannot validate monitor")
+                    return False
+                    
             except Exception as e:
-                logger.error(f"❌ Error fetching position data for debug: {e}")
+                logger.error(f"❌ Error fetching position data for validation: {e}")
+                return False
 
             # Note: This method is already called within an atomic lock from the caller
             # Additional locking here would cause deadlock, so we rely on the caller's lock
@@ -3610,6 +3648,14 @@ class EnhancedTPSLManager:
                 tp_orders = await self._validate_and_refresh_tp_orders(monitor_data)
             
             logger.info(f"📋 Found {len(tp_orders)} validated TP orders to rebalance")
+            
+            # CRITICAL FIX: If no valid TP orders exist after validation, create fresh ones
+            if len(tp_orders) == 0:
+                logger.info(f"🔄 No existing TP orders found - will create fresh TP orders for current position")
+                # Clear any stale TP data and ensure fresh start
+                monitor_data["tp_orders"] = {}
+                monitor_data["phase"] = "BUILDING"  # Reset to building phase for fresh TP creation
+                self.save_monitors_to_persistence(force=True, reason="fresh_tp_creation")
             if not tp_orders:
                 logger.warning(f"⚠️ No valid TP orders found for {symbol} {side} after validation")
                 
@@ -3780,8 +3826,13 @@ class EnhancedTPSLManager:
                     # Place new order with adjusted quantity
                     order_side = "Sell" if monitor_data["side"] == "Buy" else "Buy"
 
-                    # Get position index for hedge mode
+                    # Get position index for hedge mode with enhanced error handling
                     position_idx = await get_correct_position_idx(monitor_data["symbol"], monitor_data["side"])
+                    logger.info(f"🎯 Position Index for {monitor_data['symbol']} {monitor_data['side']}: {position_idx}")
+                    
+                    # CRITICAL FIX: For Sell positions that might be in hedge mode, try position index 2
+                    if monitor_data["side"] == "Sell" and position_idx == 0:
+                        logger.warning(f"⚠️ Sell position using positionIdx=0, might need hedge mode (idx=2)")
 
                     # ENHANCED: Generate unique OrderLinkID to prevent duplicates
                     unique_order_link_id = self._generate_unique_order_link_id(
