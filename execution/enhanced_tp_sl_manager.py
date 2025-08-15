@@ -1,16 +1,34 @@
 #!/usr/bin/env python3
 """
-Enhanced TP/SL Manager - Implements Cornix-style monitoring with dynamic order management
-Replaces conditional orders with active monitoring and smart order placement
+Enhanced TP/SL Manager - High-Performance Trading Monitoring System
+Implements Cornix-style monitoring with dynamic order management and advanced performance optimizations
+
+August 2025 Performance Features:
+- Async pickle persistence with dirty flag optimization
+- Enhanced API caching with request deduplication  
+- Circuit breaker protection for API failures
+- Performance monitoring and adaptive optimization
+- Memory management with smart garbage collection
 """
 import asyncio
 import aiohttp
+import os
 from typing import Optional, Dict, List, Any
 import logging
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 import time
+
+# Performance optimization imports
+try:
+    from utils.enhanced_api_cache import get_api_cache, CacheMode, cached_position_check, cached_order_check
+    from utils.performance_manager import get_performance_manager, record_operation_time
+    from utils.async_pickle_persistence import get_async_persistence
+    PERFORMANCE_FEATURES_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"⚠️ Performance features not available: {e}")
+    PERFORMANCE_FEATURES_AVAILABLE = False
 
 from config.constants import *
 from config.constants import ENABLE_MIRROR_ALERTS  # Explicit import for mirror alerts
@@ -96,6 +114,22 @@ class EnhancedTPSLManager:
         self._api_mode = "direct"  # Always direct API calls
         
         # Initialize persistence task flag
+        
+        # AUGUST 2025 PERFORMANCE ENHANCEMENTS
+        self._performance_manager = None
+        self._api_cache = None
+        self._async_persistence = None
+        self._performance_features_enabled = PERFORMANCE_FEATURES_AVAILABLE
+        
+        if self._performance_features_enabled:
+            try:
+                self._performance_manager = get_performance_manager()
+                self._api_cache = get_api_cache()
+                self._async_persistence = get_async_persistence()
+                logger.info("✅ Performance features initialized successfully")
+            except Exception as e:
+                logger.warning(f"⚠️ Performance features initialization failed: {e}")
+                self._performance_features_enabled = False
         self._persistence_task_pending = False
         
         # Start periodic persistence flush task (if event loop is available)

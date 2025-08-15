@@ -229,11 +229,14 @@ async def enhanced_tp_sl_monitoring_loop():
                             if k.endswith('_main') or k.endswith('_mirror')}
             monitor_count = len(valid_monitors)
             
-            # Calculate dynamic sleep interval based on most urgent position
-            next_sleep_interval = 60  # Default to 60s if no monitors
+            # PERFORMANCE ENHANCEMENT: Adaptive monitoring intervals based on system load
+            next_sleep_interval = int(os.getenv('POSITION_MONITOR_INTERVAL', 12))  # Use env setting or default 12s
+            adaptive_monitoring = os.getenv('ENABLE_ADAPTIVE_MONITORING', 'true').lower() == 'true'
             
             if monitor_count > 0:
-                logger.info(f"🔍 Monitoring {monitor_count} positions")
+                # Reduce logging frequency for better performance
+                if loop_count % 10 == 1:  # Log every 10 cycles instead of every cycle
+                    logger.info(f"🔍 Monitoring {monitor_count} positions (adaptive: {adaptive_monitoring})")
                 
                 # PERFORMANCE OPTIMIZATION: Smart urgency-based grouping with API batching
                 urgency_groups = {
