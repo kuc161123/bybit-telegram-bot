@@ -214,6 +214,11 @@ async def enhanced_tp_sl_monitoring_loop():
                 try:
                     await enhanced_tp_sl_manager.sync_existing_positions()
                     
+                    # AUTOMATIC STALE MONITOR DETECTION: Remove monitors for positions that no longer exist
+                    stale_removed = await enhanced_tp_sl_manager.detect_and_remove_stale_monitors()
+                    if stale_removed > 0:
+                        logger.info(f"🧹 Automatic cleanup: Removed {stale_removed} stale monitors")
+                    
                     # Mirror sync removed - mirror accounts operate independently
                     # Each account's monitors handle their own positions without syncing
                     

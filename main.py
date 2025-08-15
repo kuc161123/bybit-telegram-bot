@@ -1065,11 +1065,11 @@ async def start_background_tasks():
                 else:
                     logger.info("🔕 Mirror account alerts: DISABLED - Preventing duplicate notifications")
                 
-                # Sync existing positions on startup
+                # Sync existing positions on startup with fresh monitor creation
                 try:
                     from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
-                    await enhanced_tp_sl_manager.sync_existing_positions()
-                    logger.info("✅ Initial position sync completed")
+                    await enhanced_tp_sl_manager.sync_existing_positions(fresh_start=True)
+                    logger.info("✅ Initial position sync completed with fresh monitors")
                 except Exception as sync_error:
                     logger.warning(f"Could not sync existing positions: {sync_error}")
             else:

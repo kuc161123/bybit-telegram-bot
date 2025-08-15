@@ -8450,9 +8450,22 @@ All take profit targets have been achieved! 🎯"""
             # Update remaining size to 0
             monitor_data["remaining_size"] = Decimal("0")
 
-            # Remove monitor_tasks entry
-            approach = "CONSERVATIVE"  # Conservative approach only
-            await self._remove_monitor_tasks_entry(symbol, side, chat_id, approach, "main")
+            # IMMEDIATE MONITOR CLEANUP: Remove monitor completely when position closes
+            monitor_key = f"{symbol}_{side}_{account_type}"
+            if monitor_key in self.position_monitors:
+                logger.info(f"🧹 IMMEDIATE CLEANUP: Removing monitor for closed position {monitor_key}")
+                del self.position_monitors[monitor_key]
+                
+                # Force save to persistence to prevent stale monitors
+                self.save_monitors_to_persistence(force=True, reason=f"position_closed_{closure_reason}")
+                
+                # Also remove from monitor_tasks if it exists
+                approach = "CONSERVATIVE"  # Conservative approach only
+                await self._remove_monitor_tasks_entry(symbol, side, chat_id, approach, account_type)
+                
+                logger.info(f"✅ Monitor cleanup complete for {monitor_key} ({closure_reason})")
+            else:
+                logger.warning(f"⚠️ Monitor {monitor_key} not found for cleanup")
 
         except Exception as e:
             logger.error(f"Error handling position closure: {e}")
@@ -9467,13 +9480,25 @@ All take profit targets have been achieved! 🎯"""
         except Exception as e:
             logger.error(f"❌ Error creating dashboard monitor entry: {e}")
 
-    async def sync_existing_positions(self):
+    async def sync_existing_positions(self, fresh_start=False):
         """
         Sync existing positions and create monitors for positions without them
         This ensures all positions are monitored even after bot restarts
         Includes both main and mirror account positions
+        
+        Args:
+            fresh_start: If True, clears all existing monitors first (bot restart)
         """
         try:
+            # CRITICAL: Fresh start cleanup for bot restart
+            if fresh_start:
+                logger.info("🔄 FRESH START: Clearing all existing monitors for clean bot restart")
+                old_count = len(self.position_monitors)
+                self.position_monitors.clear()
+                if old_count > 0:
+                    logger.info(f"🧹 Cleared {old_count} existing monitors")
+                self.save_monitors_to_persistence(force=True, reason="fresh_start_cleanup")
+            
             logger.info("🔄 Starting position sync for Enhanced TP/SL monitoring")
             
             monitors_created = 0
@@ -9703,6 +9728,74 @@ All take profit targets have been achieved! 🎯"""
         except Exception as e:
             logger.error(f"❌ Error processing position for sync: {e}")
             return None
+
+    async def detect_and_remove_stale_monitors(self) -> int:
+        """
+        Detect and remove monitors for positions that no longer exist
+        Returns the number of stale monitors removed
+        """
+        try:
+            logger.debug("🔍 Scanning for stale monitors...")
+            stale_monitors = []
+            
+            # Get all current positions from both accounts
+            from clients.bybit_helpers import get_all_positions
+            from config.settings import ENABLE_MIRROR_TRADING
+            
+            # Main account positions
+            main_positions = await get_all_positions()
+            main_position_keys = set()
+            if main_positions:
+                for pos in main_positions:
+                    if abs(float(pos.get('size', 0))) > 0.001:  # Only positions with size
+                        symbol = pos.get('symbol')
+                        side = "Buy" if float(pos.get('size', 0)) > 0 else "Sell"
+                        key = f"{symbol}_{side}_main"
+                        main_position_keys.add(key)
+            
+            # Mirror account positions
+            mirror_position_keys = set()
+            if ENABLE_MIRROR_TRADING:
+                try:
+                    from execution.mirror_trader import bybit_client_2
+                    mirror_positions = await get_all_positions(client=bybit_client_2)
+                    if mirror_positions:
+                        for pos in mirror_positions:
+                            if abs(float(pos.get('size', 0))) > 0.001:  # Only positions with size
+                                symbol = pos.get('symbol')
+                                side = "Buy" if float(pos.get('size', 0)) > 0 else "Sell"
+                                key = f"{symbol}_{side}_mirror"
+                                mirror_position_keys.add(key)
+                except Exception as e:
+                    logger.warning(f"Could not check mirror positions for stale detection: {e}")
+            
+            # Combine all valid position keys
+            all_valid_keys = main_position_keys | mirror_position_keys
+            
+            # Check each monitor against actual positions
+            for monitor_key, monitor_data in list(self.position_monitors.items()):
+                if monitor_key not in all_valid_keys:
+                    # This monitor has no corresponding position
+                    stale_monitors.append(monitor_key)
+                    logger.info(f"🗑️ Detected stale monitor: {monitor_key} (no corresponding position)")
+            
+            # Remove stale monitors
+            for stale_key in stale_monitors:
+                if stale_key in self.position_monitors:
+                    del self.position_monitors[stale_key]
+                    logger.info(f"🧹 Removed stale monitor: {stale_key}")
+            
+            # Save if any were removed
+            if stale_monitors:
+                self.save_monitors_to_persistence(force=True, reason="stale_monitor_cleanup")
+                logger.info(f"✅ Removed {len(stale_monitors)} stale monitors")
+            
+            return len(stale_monitors)
+            
+        except Exception as e:
+            logger.error(f"❌ Error detecting stale monitors: {e}")
+            return 0
+
     async def check_order_fills_directly(self, symbol: str, order_ids: List[str], client=None) -> Dict[str, Dict]:
         """
         Enhanced order fill detection using direct API status checks
