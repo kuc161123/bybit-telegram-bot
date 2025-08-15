@@ -256,23 +256,13 @@ def format_tp_hit_alert(symbol: str, side: str, approach: str,
     approach_emoji = {"conservative": "🛡️", "ggshot": "📸", "fast": "⚡"}.get(approach.lower(), "🎯")
     profit_emoji = "💰" if pnl >= 0 else "📉"
     
-    message = f"""{profit_emoji} <b>{tp_text} HIT - PROFIT TAKEN!</b>
-━━━━━━━━━━━━━━━━━━━━━━
-<b>📊 Trade Details:</b>
-• Symbol: {symbol} {side_emoji} {side}
-• Approach: {approach_emoji} {approach.capitalize()}
-• Account: {account_emoji} {account_type}
+    message = f"""{profit_emoji} <b>TP HIT - PROFIT TAKEN!</b>
+
+{account_emoji} <b>{symbol}</b> {side_emoji} {side} • {approach_emoji} {approach.capitalize()}
 
 <b>{profit_emoji} Profit: ${pnl:,.2f} ({pnl_percent:+.2f}%)</b>
-• Entry: ${format_price(entry_price)}
-• Exit: ${format_price(exit_price)}
-• Filled: {format_decimal_or_na(filled_qty)}
-• Remaining: {format_decimal_or_na(remaining_size)}
-
-<b>🔍 Detection Details:</b>
-• Method: {detection_method.replace('_', ' ').title()}
-• Confidence: {fill_confidence} ✅
-• Check Interval: 2s (Enhanced) ⚡"""
+• Entry: ${format_price(entry_price)} → Exit: ${format_price(exit_price)}
+• Size: {format_decimal_or_na(filled_qty)}"""
 
     if cancelled_orders:
         message += f"\n\n<b>❌ Cancelled Orders:</b>\n"
@@ -340,33 +330,22 @@ def format_sl_hit_alert(symbol: str, side: str, approach: str,
     position_duration = additional_info.get("position_duration_minutes")
     realized_pnl = additional_info.get("realized_pnl", pnl)
     
-    message = f"""🛡️ <b>STOP LOSS HIT - POSITION CLOSED</b>
-━━━━━━━━━━━━━━━━━━━━━━
-<b>📊 Trade Details:</b>
-• Symbol: {symbol} {side_emoji} {side}
-• Approach: {approach_emoji} {approach.capitalize()}
-• Account: {account_emoji} {account_type}
+    message = f"""🛡️ <b>STOP LOSS HIT - RISK MANAGED</b>
+
+{account_emoji} <b>{symbol}</b> {side_emoji} {side} • {approach_emoji} {approach.capitalize()}
 
 <b>📉 Loss: ${pnl:,.2f} ({pnl_percent:.2f}%)</b>
-• Entry: ${format_price(entry_price)}
-• Exit: ${format_price(exit_price)}
+• Entry: ${format_price(entry_price)} → Exit: ${format_price(exit_price)}
 • Size: {format_decimal_or_na(position_size)}"""
 
     if position_duration:
         if position_duration < 60:
-            duration_text = f"{position_duration} minutes ⏱️"
+            duration_text = f"{position_duration}m"
         else:
             hours = position_duration // 60
             mins = position_duration % 60
-            duration_text = f"{hours}h {mins}m ⏱️"
-        message += f"\n• Duration: {duration_text}"
-
-    message += f"""
-
-<b>🔍 Detection Details:</b>
-• Method: {detection_method.replace('_', ' ').title()}
-• Confidence: {fill_confidence} ✅
-• Check Interval: 2s (Enhanced) ⚡"""
+            duration_text = f"{hours}h {mins}m"
+        message += f" • Duration: {duration_text}"
 
     if cancelled_orders:
         message += f"\n\n<b>❌ Cancelled Orders:</b>\n"
@@ -444,44 +423,9 @@ def format_limit_filled_alert(symbol: str, side: str, approach: str,
 
     filled_count = additional_info.get("filled_count", 1)
     if filled_count > 1:
-        message += f"\n• Total Filled: {filled_count}/{total_limits} 📈"
-        message += f"\n• Avg Entry: ${format_price(avg_entry)} 📊"
-
-    message += f"""
-
-<b>📊 Position Status:</b>
-• Current Size: {format_decimal_or_na(position_size)} 📦
-• Remaining Limits: {total_limits - filled_count} ⏳"""
-
-    # Add detection details
-    message += f"""
-
-<b>🔍 Detection Details:</b>
-• Method: {detection_method.replace('_', ' ').title()}
-• Confidence: {fill_confidence} ✅
-• Check Interval: 2s (Enhanced) ⚡"""
-
-    # Add rebalancing note for conservative approach
-    if approach == "conservative":
-        message += """
-
-<b>🔄 Next Actions:</b>
-• Position will be automatically rebalanced 🎯
-• TP/SL quantities adjusted to maintain 85/5/5/5 📊
-• SL will cover full position size 🛡️"""
-
-    # Add system status
-    message += f"""
-
-<b>⚙️ System Status:</b>
-• Enhanced TP/SL: Active ✅
-• Direct Order Checks: Enabled 🔍
-• Auto-Rebalancing: {'Active ✅' if approach == 'conservative' else 'N/A ❌'}"""
-
-    # Add mirror sync status if applicable
-    if account_type == "MIRROR" or additional_info.get("has_mirror"):
-        mirror_synced = additional_info.get("mirror_synced", True)
-        message += f"\n• Mirror Sync: {'Completed ✅' if mirror_synced else 'Pending ⏳'}"
+        message += f"\n• Progress: {filled_count}/{total_limits} filled • Avg: ${format_price(avg_entry)}"
+    
+    message += f"\n• Size: {format_decimal_or_na(position_size)} • Remaining: {total_limits - filled_count} limits"
 
     return message.strip()
 

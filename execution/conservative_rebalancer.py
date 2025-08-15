@@ -556,14 +556,11 @@ async def rebalance_conservative_on_limit_fill(chat_data=None, symbol=None, fill
                         quantities_text += f"• TP{i+1}: {qty} ({percentage}%)\n"
 
                     message = (
-                        f"🔄 <b>Auto-Rebalancer Activated</b>\n\n"
-                        f"📊 <b>{symbol}</b> Conservative position rebalanced\n"
-                        f"📈 Position Size: {total_size}\n\n"
-                        f"<b>📋 NEW QUANTITIES:</b>\n"
+                        f"🔄 <b>Position Rebalanced</b>\n\n"
+                        f"📊 <b>{symbol}</b> • Size: {total_size}\n\n"
+                        f"<b>📋 TP Quantities:</b>\n"
                         f"{quantities_text}\n"
-                        f"✅ Adjusted {rebalanced_count} TP orders\n"
-                        f"🔒 <b>TRIGGER PRICES UNCHANGED</b>\n"
-                        f"⚡ Only quantities modified - prices preserved"
+                        f"✅ {rebalanced_count} TPs adjusted • 🔒 Prices unchanged"
                     )
                     await ctx_app.bot.send_message(
                         chat_id=chat_id,
@@ -941,15 +938,11 @@ async def rebalance_conservative_on_tp_hit(chat_data=None, symbol=None, tp_numbe
                         quantities_text += f"• TP{tp_num}: {qty}\n"
 
                     message = (
-                        f"🔄 <b>Auto-Rebalancer Activated</b>\n\n"
-                        f"📊 <b>{symbol}</b> rebalanced after TP{tp_number} hit\n"
-                        f"📈 Remaining Position: {remaining_size}\n\n"
-                        f"<b>📋 NEW TP QUANTITIES:</b>\n"
+                        f"🔄 <b>TP{tp_number} Rebalanced</b>\n\n"
+                        f"📊 <b>{symbol}</b> • Remaining: {remaining_size}\n\n"
+                        f"<b>📋 TP Quantities:</b>\n"
                         f"{quantities_text}\n"
-                        f"✅ Adjusted {rebalanced_count} TP orders\n"
-                        f"🛡️ SL quantity adjusted to match position\n"
-                        f"🔒 <b>TRIGGER PRICES UNCHANGED</b>\n"
-                        f"⚡ Only quantities modified to match position"
+                        f"✅ {rebalanced_count} TPs + SL adjusted • 🔒 Prices unchanged"
                     )
 
                     await ctx_app.bot.send_message(

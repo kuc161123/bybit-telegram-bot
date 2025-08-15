@@ -3014,19 +3014,13 @@ async def handle_execute_trade(update: Update, context: ContextTypes.DEFAULT_TYP
             if isinstance(result, dict):
                 if result.get("success"):
                     result_msg = (
-                        f"✅ <b>Trade Executed Successfully!</b>\n\n"
-                        f"📊 <b>Orders Placed:</b>\n"
+                        f"✅ <b>Trade Executed!</b>\n\n"
+                        f"📊 <b>Orders:</b>\n"
                     )
                     for order in result.get("orders_placed", []):
                         result_msg += f"• {order}\n"
 
-                    # Fast approach removed - this condition no longer applies
-                    if False and result.get("entry_price"):
-                        result_msg += f"\n📈 <b>Entry Price:</b> {format_price(result.get('entry_price'))}"
-                        result_msg += f"\n📊 <b>Position Size:</b> {format_decimal_or_na(result.get('position_size'))}"
-
-                    result_msg += f"\n\n🔄 Automatic monitoring has been started"
-                    result_msg += f"\n🛡️ All orders are protected from cleanup"
+                    result_msg += f"\n🔄 Monitoring started • 🛡️ Orders protected"
                 else:
                     result_msg = f"❌ <b>Trade Execution Failed</b>\n\n{escape(result.get('error', 'Unknown error'))}"
             else:
@@ -3238,19 +3232,13 @@ async def handle_modify_trade(update: Update, context: ContextTypes.DEFAULT_TYPE
             if isinstance(result, dict):
                 if result.get("success"):
                     result_msg = (
-                        f"✅ <b>Trade Executed Successfully!</b>\n\n"
-                        f"📊 <b>Orders Placed:</b>\n"
+                        f"✅ <b>Trade Executed!</b>\n\n"
+                        f"📊 <b>Orders:</b>\n"
                     )
                     for order in result.get("orders_placed", []):
                         result_msg += f"• {order}\n"
 
-                    # Fast approach removed - this condition no longer applies
-                    if False and result.get("entry_price"):
-                        result_msg += f"\n📈 <b>Entry Price:</b> {format_price(result.get('entry_price'))}"
-                        result_msg += f"\n📊 <b>Position Size:</b> {format_decimal_or_na(result.get('position_size'))}"
-
-                    result_msg += f"\n\n🔄 Automatic monitoring has been started"
-                    result_msg += f"\n🛡️ All orders are protected from cleanup"
+                    result_msg += f"\n🔄 Monitoring started • 🛡️ Orders protected"
                 else:
                     result_msg = f"❌ <b>Trade Execution Failed</b>\n\n{escape(result.get('error', 'Unknown error'))}"
             else:
