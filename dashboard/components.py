@@ -77,28 +77,9 @@ Health: {mirror.health_emoji} {mirror.health_score:.0f}%"""
 
     @staticmethod
     def positions_summary(positions: List[PositionSummary], limit: int = 5) -> str:
-        """Generate positions summary table"""
-        if not positions:
-            return "<b>📈 ACTIVE POSITIONS</b>\nNo active positions\n"
-
-        total = len(positions)
-        display_positions = positions[:limit]
-
-        result = f"<b>📈 ACTIVE POSITIONS</b> ({total} Total)\n\n"
-
-        for pos in display_positions:
-            pnl_str = f"{'+' if pos.unrealized_pnl >= 0 else ''}{format_number(pos.unrealized_pnl)}"
-            # Use enhanced symbol display with account indicator
-            result += f"{pos.direction_emoji} <b>{pos.full_symbol_display}</b>\n"
-            result += f"   Size: {format_number(pos.size)}\n"
-            result += f"   P&L: {pnl_str} {pos.pnl_emoji}\n"
-            if pos != display_positions[-1]:  # Add spacing between positions
-                result += "\n"
-
-        if total > limit:
-            result += f"\n<i>... and {total - limit} more positions</i>\n"
-
-        return result
+        """Generate positions summary table - DISABLED for cleaner dashboard"""
+        # Return empty string to remove from dashboard
+        return ""
 
     @staticmethod
     def performance_summary(metrics: PerformanceMetrics, expanded: bool = False) -> str:
@@ -299,10 +280,9 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
 
     @staticmethod
     def quick_actions_grid() -> str:
-        """Generate quick actions grid"""
-        return """<b>⚡ QUICK ACTIONS</b>
-📊 Trade • 📋 Positions • 📈 Stats
-🔔 Alerts • 🤖 AI • ⚙️ Settings"""
+        """Generate quick actions grid - DISABLED for cleaner dashboard"""
+        # Return empty string to remove from dashboard
+        return ""
 
     @staticmethod
     def divider() -> str:
