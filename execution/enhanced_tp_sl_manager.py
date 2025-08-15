@@ -2099,16 +2099,21 @@ class EnhancedTPSLManager:
 
             # Fallback to position size monitoring (legacy method)
             # Check if position size changed (indicating order fill)
-            if current_size != monitor_data["remaining_size"]:
+            stored_remaining_size = monitor_data.get("remaining_size", Decimal("0"))
+            
+            # ENHANCED LOGGING: Always log current vs stored size for debugging
+            logger.info(f"📊 Position check for {monitor_key}: current={current_size}, stored={stored_remaining_size}")
+            
+            if current_size != stored_remaining_size:
                 logger.debug(f"🔄 Size change detected for {monitor_key}: current={current_size}, stored={monitor_data['remaining_size']}")
                 # Position size changed
                 if current_size == 0:
                     # Position closed completely - check if it was SL or TP
                     await self._handle_position_closure(monitor_data, position)
-                elif current_size < monitor_data["remaining_size"]:
+                elif current_size < stored_remaining_size:
                     # CRITICAL: Check if this is a real reduction or initial fill
                     # If remaining_size is 0 or we haven't processed initial fill yet
-                    if monitor_data.get("remaining_size", 0) == 0 or not monitor_data.get("initial_fill_processed", False):
+                    if stored_remaining_size == 0 or not monitor_data.get("initial_fill_processed", False):
                         logger.info(f"🔍 Initial position fill detected for {monitor_key}: size={current_size}")
                         monitor_data["remaining_size"] = current_size
                         # Only update position_size if it's smaller than current_size
@@ -2123,11 +2128,14 @@ class EnhancedTPSLManager:
                         except Exception as e:
                             logger.error(f"Error saving after initial fill detection: {e}")
                         
+                        # CRITICAL FIX: Trigger initial TP rebalancing for the actual position size
+                        logger.info(f"🎯 Triggering initial TP rebalancing for {monitor_key} - Position size: {current_size}")
+                        await self._adjust_all_orders_for_partial_fill(monitor_data, current_size)
                         return
                     
                     # Also check if this is the first time we're seeing a real position
-                    if not monitor_data.get("initial_fill_processed", False) and current_size > monitor_data["remaining_size"]:
-                        logger.info(f"🔍 Position increased (initial fills) for {monitor_key}: {monitor_data['remaining_size']} -> {current_size}")
+                    if not monitor_data.get("initial_fill_processed", False) and current_size > stored_remaining_size:
+                        logger.info(f"🔍 Position increased (initial fills) for {monitor_key}: {stored_remaining_size} -> {current_size}")
                         monitor_data["remaining_size"] = current_size
                         monitor_data["position_size"] = max(current_size, monitor_data.get("position_size", 0))
                         monitor_data["initial_fill_processed"] = True
@@ -2135,7 +2143,7 @@ class EnhancedTPSLManager:
                         return
                     
                     # Position reduced - TP or partial fill
-                    size_diff = monitor_data["remaining_size"] - current_size
+                    size_diff = stored_remaining_size - current_size
 
                     # Simple sanity check: If the size difference is larger than the position, ignore it
                     if size_diff > monitor_data.get("position_size", Decimal('999999')):
@@ -2177,9 +2185,9 @@ class EnhancedTPSLManager:
                         # Use the size before reduction as last_known_size
                         monitor_data["last_known_size"] = monitor_data["remaining_size"] + size_diff
                     await self._handle_conservative_position_change(monitor_data, current_size, fill_percentage)
-                elif current_size > monitor_data["remaining_size"]:
+                elif current_size > stored_remaining_size:
                     # Position increased - additional limit orders filled (conservative approach)
-                    size_diff = current_size - monitor_data["remaining_size"]
+                    size_diff = current_size - stored_remaining_size
                     logger.info(f"📈 Position size increased by {size_diff} - additional limit orders filled")
 
                     # Use atomic lock to prevent race conditions during order adjustment
@@ -2306,6 +2314,30 @@ class EnhancedTPSLManager:
 
             # Update order statuses based on current open orders
             await self._update_order_statuses(symbol, side)
+
+            # FALLBACK CHECK: Ensure TP orders match current position size
+            # This is a safety net in case the size comparison logic above missed a change
+            try:
+                tp_orders = monitor_data.get("tp_orders", {})
+                if tp_orders and current_size > 0:
+                    # Check if any TP order has wrong quantity
+                    needs_rebalancing = False
+                    for tp_order in tp_orders.values():
+                        if isinstance(tp_order, dict):
+                            tp_qty = Decimal(str(tp_order.get("quantity", "0")))
+                            # For single TP approach, TP should equal full position size
+                            if abs(tp_qty - current_size) > Decimal("0.001"):  # Allow small rounding differences
+                                logger.info(f"🎯 FALLBACK: TP quantity mismatch detected - TP: {tp_qty}, Position: {current_size}")
+                                needs_rebalancing = True
+                                break
+                    
+                    if needs_rebalancing:
+                        logger.info(f"🔄 FALLBACK: Triggering TP rebalancing for {monitor_key}")
+                        # Update remaining_size to current size first
+                        monitor_data["remaining_size"] = current_size
+                        await self._adjust_all_orders_for_partial_fill(monitor_data, current_size)
+            except Exception as e:
+                logger.debug(f"Error in fallback TP check: {e}")
 
             # Update last check time
             monitor_data["last_check"] = time.time()
