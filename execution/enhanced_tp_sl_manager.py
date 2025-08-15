@@ -41,7 +41,7 @@ from config.settings import (
 )
 from clients.bybit_helpers import (
     place_order_with_retry, cancel_order_with_retry,
-    get_position_info, get_position_info_for_account, get_open_orders, amend_order_with_retry,
+    get_position_info, get_position_info_for_account, get_open_orders, get_all_open_orders, amend_order_with_retry,
     get_correct_position_idx, get_current_price, get_instrument_info, api_call_with_retry,
     get_all_positions
 )
