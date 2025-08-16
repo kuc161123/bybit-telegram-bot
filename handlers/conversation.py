@@ -33,6 +33,7 @@ from risk.calculations import calculate_risk_reward_ratio
 from dashboard.keyboards_analytics import *
 from shared import msg_manager
 from clients.bybit_helpers import protect_symbol_from_cleanup, protect_trade_group_from_cleanup  # ENHANCED: Import protection functions
+from market_analysis.market_conditions_analyzer import market_conditions_analyzer
 
 # Ensure TRADING_APPROACH is defined
 try:
@@ -309,6 +310,49 @@ async def symbol_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error(f"Error protecting symbol: {e}")
         # Continue anyway, this is not critical for trade setup
 
+    # MARKET CONDITIONS: Analyze volatility and liquidity for optimal R:R
+    try:
+        await edit_last_message(
+            context, chat_id,
+            f"{get_emoji('loading')} Analyzing market conditions for optimal R:R...",
+            None
+        )
+        
+        conditions_analysis = await market_conditions_analyzer.analyze_trading_conditions(user_input)
+        
+        # Store analysis for later use
+        context.chat_data["market_conditions"] = conditions_analysis
+        
+        # Show conditions analysis if not excellent
+        if conditions_analysis["overall_condition"] not in ["excellent", "good"]:
+            conditions_msg = market_conditions_analyzer.format_conditions_message(conditions_analysis)
+            
+            # Add proceed anyway option
+            conditions_msg += "\n\n<b>Do you want to proceed with this trade?</b>"
+            
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Proceed Anyway", callback_data="conv_proceed_conditions")],
+                [InlineKeyboardButton("⏰ Wait for Better Conditions", callback_data="conv_wait_conditions")],
+                [InlineKeyboardButton("🔄 Choose Different Symbol", callback_data=f"conv_back:{SYMBOL}")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation")]
+            ])
+            
+            await edit_last_message(context, chat_id, conditions_msg, keyboard)
+            
+            # If conditions are poor/avoid, wait for user decision
+            if conditions_analysis["wait_recommended"]:
+                return SYMBOL  # Stay in symbol state to handle callback
+        
+        # Log conditions for monitoring
+        logger.info(f"Market conditions for {user_input}: {conditions_analysis['overall_condition']} "
+                   f"(Vol: {conditions_analysis['volatility']['level']}, "
+                   f"Liq: {conditions_analysis['liquidity']['level']}, "
+                   f"Timing: {conditions_analysis['timing']['timing_quality']})")
+        
+    except Exception as e:
+        logger.error(f"Error analyzing market conditions: {e}")
+        # Continue without conditions check if analysis fails
+
     # Store symbol with multiple key formats for compatibility
     context.chat_data["symbol"] = user_input
     context.chat_data[SYMBOL] = user_input
@@ -348,6 +392,92 @@ async def symbol_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await edit_last_message(context, chat_id, side_msg, side_keyboard)
     return SIDE
+
+# =============================================
+# MARKET CONDITIONS HANDLER
+# =============================================
+
+async def handle_market_conditions_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle market conditions callback responses"""
+    query = update.callback_query
+    try:
+        await query.answer()
+    except:
+        pass
+
+    if not query.data:
+        return SYMBOL
+    
+    chat_id = query.message.chat.id
+    
+    # Handle different condition responses
+    if query.data == "conv_proceed_conditions":
+        # User wants to proceed despite poor conditions
+        logger.info(f"User proceeding despite market conditions: {context.chat_data.get('symbol')}")
+        
+        # Continue to side selection
+        symbol = context.chat_data.get(SYMBOL, "Unknown")
+        
+        side_msg = (
+            f"✅ <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
+            f"⚠️ <i>Proceeding despite sub-optimal conditions</i>\n\n"
+            f"📈 <b>Step 2 of 7: Trade Direction</b>\n\n"
+            f"Choose your trading direction:"
+        )
+        
+        side_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"📈 LONG (Buy)", callback_data="conv_side:Buy")],
+            [InlineKeyboardButton(f"📉 SHORT (Sell)", callback_data="conv_side:Sell")],
+            [InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{SYMBOL}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation")]
+        ])
+        
+        await query.edit_message_text(
+            side_msg,
+            parse_mode=ParseMode.HTML,
+            reply_markup=side_keyboard
+        )
+        return SIDE
+        
+    elif query.data == "conv_wait_conditions":
+        # User wants to wait for better conditions
+        logger.info(f"User waiting for better conditions on {context.chat_data.get('symbol')}")
+        
+        wait_msg = (
+            f"⏰ <b>Waiting for Better Conditions</b>\n\n"
+            f"Trade setup cancelled. Try again when:\n"
+            f"• Market volatility increases (2-5% range)\n"
+            f"• Liquidity improves (>$50M volume)\n"
+            f"• Trading sessions overlap (13:00-16:00 UTC)\n\n"
+            f"💡 <b>Tip:</b> Monitor major pairs (BTC, ETH) for best liquidity\n\n"
+            f"Type /trade to start a new setup when ready."
+        )
+        
+        await query.edit_message_text(wait_msg, parse_mode=ParseMode.HTML)
+        return ConversationHandler.END
+        
+    elif query.data.startswith("conv_back:"):
+        # Handle back navigation
+        target_state = query.data.split(":")[1]
+        if target_state == str(SYMBOL):
+            # Go back to symbol input
+            symbol_msg = (
+                f"📝 <b>Step 1 of 7: Symbol Entry</b>\n\n"
+                f"Enter the trading symbol (e.g., BTCUSDT):"
+            )
+            
+            symbol_keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation")]
+            ])
+            
+            await query.edit_message_text(
+                symbol_msg,
+                parse_mode=ParseMode.HTML,
+                reply_markup=symbol_keyboard
+            )
+            return SYMBOL
+    
+    return SYMBOL
 
 # =============================================
 # SIDE HANDLER
@@ -2756,6 +2886,28 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
                 entry_price, tp_price, sl_price, margin, leverage, side
             )
 
+        # Add market conditions info if available
+        market_conditions_info = ""
+        if "market_conditions" in context.chat_data:
+            conditions = context.chat_data["market_conditions"]
+            condition_emoji = "🟢" if conditions["overall_condition"] in ["excellent", "good"] else "🟡" if conditions["overall_condition"] == "moderate" else "🔴"
+            expected_rr = conditions["recommendations"]["expected_rr_impact"]
+            rr_impact_text = "Enhanced R:R" if expected_rr == "enhanced" else "Normal R:R" if expected_rr == "normal" else "Reduced R:R"
+            
+            market_conditions_info = (
+                f"\n📊 <b>MARKET CONDITIONS:</b>\n"
+                f"• <b>Overall:</b> {condition_emoji} {conditions['overall_condition'].upper()}\n"
+                f"• <b>Volatility:</b> {conditions['volatility']['level']} ({conditions['volatility']['percentage']}%)\n"
+                f"• <b>Liquidity:</b> {conditions['liquidity']['volume_24h_formatted']}\n"
+                f"• <b>Expected Impact:</b> {rr_impact_text}\n"
+            )
+            
+            # Add warnings if any
+            if conditions["recommendations"].get("warnings"):
+                market_conditions_info += "<b>⚠️ Warnings:</b>\n"
+                for warning in conditions["recommendations"]["warnings"][:2]:  # Show max 2 warnings
+                    market_conditions_info += f"{warning}\n"
+
         # Add GGShot indicator if applicable
         ggshot_info = ""
         if approach == "ggshot":
@@ -2783,6 +2935,7 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         confirmation_msg += (
             f"{rr_info}"
             f"{rr_warning}"
+            f"{market_conditions_info}"
             f"{pnl_preview}\n"
             f"🛡️ <b>Protection:</b> All orders will be protected from cleanup\n\n"
         )
