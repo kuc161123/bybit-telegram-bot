@@ -461,14 +461,39 @@ class TradeExecutor:
             self.logger.info(f"   TP Levels: {len(tp_prices)}")
             self.logger.info(f"   SL: {sl_price}")
 
+            # Import weighted allocation config
+            from config.constants import LIMIT_ORDER_ALLOCATION, MARKET_ORDER_PERCENTAGE
+            
             # Calculate position sizes
             total_position_size = margin_amount * leverage
             avg_limit_price = sum(limit_prices) / len(limit_prices) if limit_prices else tp_prices[0]
             total_qty = total_position_size / avg_limit_price
-
-            # Distribute quantity across limit orders
-            qty_per_limit = total_qty / len(limit_prices) if limit_prices else total_qty
-            qty_per_limit = value_adjusted_to_step(qty_per_limit, qty_step)
+            
+            # Calculate market and limit allocations
+            market_qty = total_qty * MARKET_ORDER_PERCENTAGE
+            limit_total_qty = total_qty * (Decimal("1") - MARKET_ORDER_PERCENTAGE)
+            
+            # Distribute quantity across limit orders using weighted allocation
+            limit_quantities = []
+            if len(limit_prices) > 0:
+                # First order is market (if enabled), rest are limits
+                market_qty = value_adjusted_to_step(market_qty, qty_step) if MARKET_ORDER_PERCENTAGE > 0 else Decimal("0")
+                
+                # Calculate each limit order quantity based on weighted allocation
+                for i, allocation in enumerate(LIMIT_ORDER_ALLOCATION[:len(limit_prices)-1] if market_qty > 0 else LIMIT_ORDER_ALLOCATION[:len(limit_prices)]):
+                    limit_qty = limit_total_qty * allocation
+                    limit_qty = value_adjusted_to_step(limit_qty, qty_step)
+                    limit_quantities.append(limit_qty)
+                
+                # Log the weighted allocation
+                self.logger.info(f"📊 WEIGHTED ALLOCATION:")
+                self.logger.info(f"   Market: {MARKET_ORDER_PERCENTAGE*100:.0f}% = {market_qty} qty")
+                for i, qty in enumerate(limit_quantities, 1):
+                    alloc_pct = LIMIT_ORDER_ALLOCATION[i-1] if i-1 < len(LIMIT_ORDER_ALLOCATION) else LIMIT_ORDER_ALLOCATION[-1]
+                    self.logger.info(f"   Limit {i}: {alloc_pct*100:.0f}% = {qty} qty")
+            
+            # For compatibility with existing code
+            qty_per_limit = limit_quantities[0] if limit_quantities else total_qty
 
             # FIXED: Calculate final SL quantity early for later use
             final_sl_qty = value_adjusted_to_step(total_qty, qty_step)
@@ -554,17 +579,30 @@ class TradeExecutor:
                 'risk_reward_ratio': 0
             }
 
-            # FIXED: Place limit orders with automatic position mode detection and proper quantity rounding
+            # FIXED: Place orders with weighted allocation
             for i, limit_price in enumerate(limit_prices, 1):
-                # MODIFIED: First order is MARKET, others remain LIMIT
+                # Determine order type and quantity based on weighted allocation
                 if i == 1:
-                    self.logger.info(f"📝 Placing MARKET order (was limit order 1)")
-                    order_type = "Market"
+                    if MARKET_ORDER_PERCENTAGE > 0:
+                        self.logger.info(f"📝 Placing MARKET order ({MARKET_ORDER_PERCENTAGE*100:.0f}% allocation)")
+                        order_type = "Market"
+                        order_qty = market_qty
+                    else:
+                        # No market order, first is limit
+                        self.logger.info(f"📝 Placing limit order {i} at {limit_price}")
+                        order_type = "Limit"
+                        order_qty = limit_quantities[0] if limit_quantities else qty_per_limit
                 else:
-                    self.logger.info(f"📝 Placing limit order {i} at {limit_price}")
-                    order_type = "Limit"
+                    # Subsequent orders are always limits
+                    limit_index = i - 2 if MARKET_ORDER_PERCENTAGE > 0 else i - 1
+                    if limit_index < len(limit_quantities):
+                        self.logger.info(f"📝 Placing limit order {i} at {limit_price}")
+                        order_type = "Limit"
+                        order_qty = limit_quantities[limit_index]
+                    else:
+                        continue  # Skip if no allocation
 
-                self.logger.info(f"🔧 Order {i} quantity: {qty_per_limit} (step: {qty_step})")
+                self.logger.info(f"🔧 Order {i} quantity: {order_qty} (weighted allocation)")
 
                 # Create orderLinkId for group tracking
                 order_link_id = f"{BOT_PREFIX}CONS_{trade_group_id}_LIMIT{i}"

@@ -19,8 +19,27 @@ CONSERVATIVE_TP_PERCENTAGES = TP_PERCENTAGES_CONSERVATIVE  # Alias for compatibi
 # Default TP percentages
 TP_PERCENTAGES = TP_PERCENTAGES_CONSERVATIVE
 
-# Limit order allocation for conservative approach (3 equal parts)
-LIMIT_ORDER_ALLOCATION = [Decimal("0.333"), Decimal("0.333"), Decimal("0.334")]
+# Limit order allocation for conservative approach
+# ORIGINAL: Equal allocation (25% market, 25% each limit)
+# LIMIT_ORDER_ALLOCATION = [Decimal("0.333"), Decimal("0.333"), Decimal("0.334")]
+
+# WEIGHTED ALLOCATION: Favors deeper limits for better R:R
+# This gives more weight to lower entry prices (better for longs)
+# Market: Handled separately (not in this array)
+# Limit 1: 20% of limit orders
+# Limit 2: 35% of limit orders  
+# Limit 3: 45% of limit orders
+LIMIT_ORDER_ALLOCATION = [Decimal("0.20"), Decimal("0.35"), Decimal("0.45")]
+
+# Alternative weighted allocations (uncomment to use):
+# AGGRESSIVE: Even more weight to deeper limits
+# LIMIT_ORDER_ALLOCATION = [Decimal("0.15"), Decimal("0.30"), Decimal("0.55")]
+
+# BALANCED: Moderate weighting
+# LIMIT_ORDER_ALLOCATION = [Decimal("0.25"), Decimal("0.35"), Decimal("0.40")]
+
+# Market order percentage (rest goes to limits)
+MARKET_ORDER_PERCENTAGE = Decimal("0.10")  # 10% market, 90% limits (was 25%/75%)
 
 # Bot Identification
 BOT_PREFIX = "BOT_"  # Prefix for bot-initiated orders to distinguish from external trades

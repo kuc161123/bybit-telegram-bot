@@ -508,6 +508,19 @@ async def handle_approach_callback(update: Update, context: ContextTypes.DEFAULT
         # Conservative approach - ask for 3 limit order prices
         trade_group_id = context.chat_data.get(CONSERVATIVE_TRADE_GROUP_ID, "Unknown")
 
+        # Import allocation settings
+        from config.constants import MARKET_ORDER_PERCENTAGE, LIMIT_ORDER_ALLOCATION
+        
+        # Calculate actual percentages
+        market_pct = float(MARKET_ORDER_PERCENTAGE * 100)
+        limit_pcts = [float(alloc * 100) for alloc in LIMIT_ORDER_ALLOCATION]
+        
+        # Calculate total limit percentage
+        total_limit_pct = 100 - market_pct
+        
+        # Scale limit percentages to match the allocation weights
+        scaled_limit_pcts = [pct * total_limit_pct / 100 for pct in limit_pcts]
+        
         limit_msg = (
             f"✅ <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
             f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
@@ -515,8 +528,12 @@ async def handle_approach_callback(update: Update, context: ContextTypes.DEFAULT
             f"✅ <b>Trade Group:</b> {trade_group_id} 🛡️\n\n"
             f"📊 <b>Step 4 of 8: Limit Order Prices</b>\n\n"
             f"Enter 3 limit order prices (one per message):\n"
-            f"💡 Each order will use 33.33% of your capital\n"
-            f"💡 Enter them in order of preference\n"
+            f"💡 <b>Weighted Allocation:</b>\n"
+            f"   • Market: {market_pct:.0f}% of capital\n"
+            f"   • Limit 1: {scaled_limit_pcts[0]:.0f}%\n"
+            f"   • Limit 2: {scaled_limit_pcts[1]:.0f}%\n"
+            f"   • Limit 3: {scaled_limit_pcts[2]:.0f}%\n"
+            f"💡 Enter deeper limits for better average entry\n"
             f"🛡️ All orders will be protected from cleanup\n\n"
             f"Enter <b>Limit Order #1</b> price:"
         )
@@ -2812,6 +2829,19 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         if approach == "ggshot":
             ggshot_info = f"🤖 <b>AI Extracted:</b> Conservative Limits strategy detected\n"
 
+        # Import allocation settings
+        from config.constants import MARKET_ORDER_PERCENTAGE, LIMIT_ORDER_ALLOCATION
+        
+        # Calculate actual percentages
+        market_pct = float(MARKET_ORDER_PERCENTAGE * 100)
+        limit_pcts = [float(alloc * 100) for alloc in LIMIT_ORDER_ALLOCATION]
+        
+        # Calculate total limit percentage
+        total_limit_pct = 100 - market_pct
+        
+        # Scale limit percentages to match the allocation weights
+        scaled_limit_pcts = [pct * total_limit_pct / 100 for pct in limit_pcts]
+        
         confirmation_msg = (
             f"🚀 <b>CONSERVATIVE TRADE CONFIRMATION</b> 🚀\n"
             f"{'═' * 35}\n\n"
@@ -2821,10 +2851,11 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
             f"{ggshot_info}"
             f"{merge_info}"
             f"🛡️ <b>Trade Group:</b> <code>{trade_group_id}</code> 🛡️\n\n"
-            f"📊 <b>LIMIT ORDERS (33.33% each):</b>\n"
-            f"• <b>Limit #1:</b> <code>{format_price(limit1_price)}</code> 🛡️\n"
-            f"• <b>Limit #2:</b> <code>{format_price(limit2_price)}</code> 🛡️\n"
-            f"• <b>Limit #3:</b> <code>{format_price(limit3_price)}</code> 🛡️\n\n"
+            f"📊 <b>ORDER ALLOCATION (Weighted):</b>\n"
+            f"• <b>Market Order:</b> {market_pct:.0f}% of capital\n"
+            f"• <b>Limit #1:</b> <code>{format_price(limit1_price)}</code> ({scaled_limit_pcts[0]:.0f}%)\n"
+            f"• <b>Limit #2:</b> <code>{format_price(limit2_price)}</code> ({scaled_limit_pcts[1]:.0f}%)\n"
+            f"• <b>Limit #3:</b> <code>{format_price(limit3_price)}</code> ({scaled_limit_pcts[2]:.0f}%)\n\n"
             f"🎯 <b>TAKE PROFIT:</b>\n"
             f"• <b>TP (100%):</b> <code>{format_price(tp_price)}</code> 🛡️\n\n"
             f"🛡️ <b>Stop Loss:</b> <code>{format_price(sl_price)}</code> 🛡️\n"
