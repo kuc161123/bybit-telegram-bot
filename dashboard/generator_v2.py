@@ -64,6 +64,15 @@ class DashboardGenerator:
                 dashboard_data.mirror_account
             ))
             sections.append("")
+            
+            # API Key Status
+            try:
+                from utils.api_key_info import format_api_key_dashboard_section
+                api_key_section = await format_api_key_dashboard_section()
+                sections.append(api_key_section)
+                sections.append("")
+            except Exception as e:
+                logger.warning(f"Could not add API key status: {e}")
 
             # P&L Analysis
             sections.append(self.components.pnl_analysis_table(
