@@ -55,8 +55,8 @@ async def check_existing_positions(symbol: str) -> PositionCollisionResult:
         # Import here to avoid circular imports
         from clients.bybit_helpers import get_all_positions
         try:
-            from clients.bybit_client import bybit_client_2
-            has_mirror = True
+            from execution.mirror_trader import bybit_client_2, ENABLE_MIRROR_TRADING
+            has_mirror = ENABLE_MIRROR_TRADING and bybit_client_2 is not None
         except ImportError:
             has_mirror = False
             logger.debug("Mirror account not configured")

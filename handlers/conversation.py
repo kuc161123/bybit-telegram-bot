@@ -3343,6 +3343,52 @@ async def execute_both_trades(update: Update, context: ContextTypes.DEFAULT_TYPE
     symbol = context.chat_data.get(SYMBOL, "Unknown")
     side = context.chat_data.get(SIDE, "Buy")
     leverage = context.chat_data.get(LEVERAGE, 10)
+    
+    # POSITION COLLISION DETECTION - Check for existing positions before executing both trades
+    try:
+        from utils.position_collision_detector import check_existing_positions
+        
+        collision_result = await check_existing_positions(symbol)
+        
+        if collision_result.has_collision:
+            logger.warning(f"Position collision detected in execute_both_trades for {symbol}: {collision_result.total_positions} existing positions")
+            
+            collision_msg = collision_result.formatted_summary + "\n\n"
+            collision_msg += "🤔 <b>How would you like to proceed?</b>"
+            
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("❌ Cancel Trade", callback_data="collision_cancel"),
+                    InlineKeyboardButton("⚠️ Continue Anyway", callback_data="collision_continue_both")
+                ],
+                [InlineKeyboardButton("🔄 Close Existing First", callback_data="collision_close_existing")],
+                [InlineKeyboardButton("🔙 Back to Confirmation", callback_data="back_to_confirmation")]
+            ])
+            
+            try:
+                await query.edit_message_text(
+                    collision_msg,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard
+                )
+                
+                context.chat_data["collision_detected"] = True
+                context.chat_data["collision_result"] = collision_result
+                context.chat_data["collision_both_trades"] = True  # Mark this as both trades execution
+                
+                return WAITING_FOR_COLLISION_CHOICE
+                
+            except Exception as e:
+                logger.error(f"Failed to show collision warning in execute_both_trades: {e}")
+                # Continue with trade execution if we can't show warning
+                pass
+        else:
+            logger.info(f"No position collision detected for {symbol} in execute_both_trades - proceeding")
+            
+    except Exception as e:
+        logger.error(f"Position collision check failed in execute_both_trades for {symbol}: {e}")
+        logger.warning("Continuing both trades execution despite collision check failure")
     total_margin = context.chat_data.get(MARGIN_AMOUNT)
     if total_margin is None:
         total_margin = context.chat_data.get("margin_amount", Decimal("0"))
@@ -4643,7 +4689,7 @@ async def handle_collision_callbacks(update: Update, context: ContextTypes.DEFAU
             
             return ConversationHandler.END
             
-        elif query.data == "collision_continue":
+        elif query.data == "collision_continue" or query.data == "collision_continue_both":
             # User chose to continue with the trade anyway
             logger.warning(f"User chose to continue trade despite position collision for {symbol}")
             
