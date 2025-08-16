@@ -2653,13 +2653,41 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
 
         # Calculate R:R ratio
         rr_info = ""
+        rr_warning = ""
+        show_rr_improvement = False
         try:
             if entry_price and tp_price and sl_price:
                 rr_result = calculate_risk_reward_ratio(entry_price, tp_price, sl_price, side)
                 if rr_result and 'ratio' in rr_result:
                     ratio_raw = rr_result.get('ratio', '1:0')
+                    decimal_ratio = rr_result.get('decimal_ratio', 0)
                     rating = rr_result.get('rating', '⚪ UNKNOWN')
-                    rr_info = f"\n⚖️ <b>Risk:Reward:</b> {ratio_raw} ({rating})"
+                    risk_pct = rr_result.get('risk_percent', 0)
+                    reward_pct = rr_result.get('reward_percent', 0)
+                    
+                    # Format R:R info with more detail
+                    rr_info = (
+                        f"\n⚖️ <b>RISK/REWARD ANALYSIS:</b>\n"
+                        f"• <b>R:R Ratio:</b> {ratio_raw} ({rating})\n"
+                        f"• <b>Risk:</b> {risk_pct:.1f}% (to SL)\n"
+                        f"• <b>Reward:</b> {reward_pct:.1f}% (to TP)\n"
+                    )
+                    
+                    # Add warning for poor R:R
+                    if decimal_ratio < 1.0:
+                        rr_warning = (
+                            f"\n⚠️ <b>WARNING: POOR RISK/REWARD!</b> ⚠️\n"
+                            f"• Current R:R is {ratio_raw} (risking more than potential reward)\n"
+                            f"• Consider adjusting TP further or tightening SL\n"
+                            f"• Recommended minimum: 1.5:1\n"
+                        )
+                        show_rr_improvement = True
+                    elif decimal_ratio < 1.5:
+                        rr_warning = (
+                            f"\n⚡ <b>MARGINAL RISK/REWARD</b>\n"
+                            f"• Current R:R is {ratio_raw}\n"
+                            f"• Consider targeting 1.5:1 or better\n"
+                        )
         except Exception as e:
             logger.error(f"Error calculating R:R ratio: {e}")
 
@@ -2695,11 +2723,17 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
             confirmation_msg += f" ({percentage}%)"
 
         confirmation_msg += (
-            f"{rr_info}\n"
+            f"{rr_info}"
+            f"{rr_warning}"
             f"{pnl_preview}\n"
             f"🛡️ <b>Protection:</b> All orders will be protected from cleanup\n\n"
-            f"⚠️ <b>Ready to execute this trade?</b>"
         )
+        
+        # Add appropriate call to action based on R:R
+        if show_rr_improvement:
+            confirmation_msg += f"⚠️ <b>Proceed with POOR R:R or adjust parameters?</b>"
+        else:
+            confirmation_msg += f"✅ <b>Ready to execute this trade?</b>"
 
     else:  # conservative approach
         trade_group_id = context.chat_data.get(CONSERVATIVE_TRADE_GROUP_ID, "Unknown")
@@ -2708,6 +2742,49 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         limit3_price = context.chat_data.get(LIMIT_ENTRY_3_PRICE, Decimal("0"))
         tp_price = context.chat_data.get(TP_PRICE, Decimal("0"))
         sl_price = context.chat_data.get(SL_PRICE, Decimal("0"))
+        
+        # Calculate average entry price for conservative trades
+        avg_entry = (limit1_price + limit2_price + limit3_price) / 3 if all([limit1_price, limit2_price, limit3_price]) else limit1_price
+        
+        # Calculate R:R ratio for conservative trades
+        rr_info = ""
+        rr_warning = ""
+        show_rr_improvement = False
+        try:
+            if avg_entry and tp_price and sl_price:
+                rr_result = calculate_risk_reward_ratio(avg_entry, tp_price, sl_price, side)
+                if rr_result and 'ratio' in rr_result:
+                    ratio_raw = rr_result.get('ratio', '1:0')
+                    decimal_ratio = rr_result.get('decimal_ratio', 0)
+                    rating = rr_result.get('rating', '⚪ UNKNOWN')
+                    risk_pct = rr_result.get('risk_percent', 0)
+                    reward_pct = rr_result.get('reward_percent', 0)
+                    
+                    # Format R:R info with more detail
+                    rr_info = (
+                        f"\n⚖️ <b>RISK/REWARD ANALYSIS:</b>\n"
+                        f"• <b>R:R Ratio:</b> {ratio_raw} ({rating})\n"
+                        f"• <b>Risk:</b> {risk_pct:.1f}% (to SL)\n"
+                        f"• <b>Reward:</b> {reward_pct:.1f}% (to TP)\n"
+                    )
+                    
+                    # Add warning for poor R:R
+                    if decimal_ratio < 1.0:
+                        rr_warning = (
+                            f"\n⚠️ <b>WARNING: POOR RISK/REWARD!</b> ⚠️\n"
+                            f"• Current R:R is {ratio_raw} (risking more than potential reward)\n"
+                            f"• Consider adjusting TP further or tightening SL\n"
+                            f"• Recommended minimum: 1.5:1\n"
+                        )
+                        show_rr_improvement = True
+                    elif decimal_ratio < 1.5:
+                        rr_warning = (
+                            f"\n⚡ <b>MARGINAL RISK/REWARD</b>\n"
+                            f"• Current R:R is {ratio_raw}\n"
+                            f"• Consider targeting 1.5:1 or better\n"
+                        )
+        except Exception as e:
+            logger.error(f"Error calculating R:R ratio for conservative trade: {e}")
 
         # Check if merge will happen
         merge_info = ""
@@ -2761,20 +2838,36 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
             confirmation_msg += f" ({percentage}%)"
 
         confirmation_msg += (
-            f"\n\n"
-            f"🛡️ <b>Protection:</b> Trade group and all orders protected from cleanup\n\n"
+            f"{rr_info}"
+            f"{rr_warning}"
+            f"\n🛡️ <b>Protection:</b> Trade group and all orders protected from cleanup\n\n"
             f"⚠️ <b>Special Rule:</b> If TP1 hits before limits fill,\n"
             f"all remaining orders will be cancelled.\n\n"
-            f"⚠️ <b>Ready to execute this conservative trade?</b>"
         )
+        
+        # Add appropriate call to action based on R:R
+        if show_rr_improvement:
+            confirmation_msg += f"⚠️ <b>Proceed with POOR R:R or adjust parameters?</b>"
+        else:
+            confirmation_msg += f"✅ <b>Ready to execute this conservative trade?</b>"
 
-    confirmation_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 EXECUTE TRADE", callback_data="confirm_execute_trade")],
-        [
-            InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation"),
-            InlineKeyboardButton("🔧 Modify", callback_data="modify_trade")
-        ]
-    ])
+    # Customize buttons based on R:R warning
+    if show_rr_improvement:
+        confirmation_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚠️ EXECUTE ANYWAY", callback_data="confirm_execute_trade")],
+            [
+                InlineKeyboardButton("🔧 Adjust TP/SL", callback_data="modify_trade"),
+                InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation")
+            ]
+        ])
+    else:
+        confirmation_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🚀 EXECUTE TRADE", callback_data="confirm_execute_trade")],
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation"),
+                InlineKeyboardButton("🔧 Modify", callback_data="modify_trade")
+            ]
+        ])
 
     await edit_last_message(context, chat_id, confirmation_msg, confirmation_keyboard)
     return CONFIRMATION
