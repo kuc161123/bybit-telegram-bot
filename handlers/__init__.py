@@ -46,9 +46,7 @@ from .conversation import (
     handle_ggshot_limit_1_input, handle_ggshot_limit_2_input, handle_ggshot_limit_3_input,
     handle_ggshot_tp_1_input,
     # NEW: Position collision handlers
-    handle_collision_callbacks,
-    # NEW: Market conditions handlers
-    handle_market_conditions_callback
+    handle_collision_callbacks
 )
 
 # Import position close handlers
@@ -81,9 +79,6 @@ def setup_enhanced_conversation_handlers(app):
             ],
             states={
                 SYMBOL: [
-                    CallbackQueryHandler(handle_market_conditions_callback, pattern="^conv_proceed_conditions$"),
-                    CallbackQueryHandler(handle_market_conditions_callback, pattern="^conv_wait_conditions$"),
-                    CallbackQueryHandler(handle_market_conditions_callback, pattern="^conv_back:"),
                     MessageHandler(filters.TEXT & ~filters.COMMAND, symbol_handler)
                 ],
                 SIDE: [
