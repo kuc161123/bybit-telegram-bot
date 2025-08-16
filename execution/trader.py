@@ -518,6 +518,10 @@ class TradeExecutor:
             mirror_qty_per_limit = qty_per_limit  # Default to same quantity
             mirror_final_sl_qty = final_sl_qty    # Default to same SL quantity
             mirror_total_qty = total_qty           # Default to same total quantity
+            
+            # Calculate mirror weighted quantities
+            mirror_market_qty = Decimal("0")
+            mirror_limit_quantities = []
 
             if MIRROR_TRADING_AVAILABLE and is_mirror_trading_enabled():
                 mirror_results["enabled"] = True
@@ -536,25 +540,44 @@ class TradeExecutor:
                             mirror_position_size = mirror_margin_amount * leverage
                             mirror_total_qty = mirror_position_size / avg_limit_price
 
-                            # Distribute quantity across limit orders
-                            mirror_qty_per_limit = mirror_total_qty / len(limit_prices) if limit_prices else mirror_total_qty
-                            mirror_qty_per_limit = value_adjusted_to_step(mirror_qty_per_limit, qty_step)
+                            # Apply weighted allocation for mirror account
+                            if MARKET_ORDER_PERCENTAGE > 0:
+                                mirror_market_qty = mirror_total_qty * MARKET_ORDER_PERCENTAGE
+                                mirror_market_qty = value_adjusted_to_step(mirror_market_qty, qty_step)
+                            
+                            # Calculate weighted limit quantities for mirror
+                            remaining_mirror_qty = mirror_total_qty * (Decimal("1") - MARKET_ORDER_PERCENTAGE)
+                            for alloc in LIMIT_ORDER_ALLOCATION:
+                                limit_qty = remaining_mirror_qty * alloc
+                                limit_qty = value_adjusted_to_step(limit_qty, qty_step)
+                                mirror_limit_quantities.append(limit_qty)
 
                             # Calculate final SL quantity for mirror
                             mirror_final_sl_qty = value_adjusted_to_step(mirror_total_qty, qty_step)
 
-                            # Log the proportional calculation
-                            self.logger.info(f"🪞 MIRROR: Using proportional margin calculation")
+                            # Log the proportional calculation with weighted allocation
+                            self.logger.info(f"🪞 MIRROR: Using proportional margin calculation with weighted allocation")
                             self.logger.info(f"   Main margin: ${margin_amount:.2f} | Mirror margin: ${mirror_margin_amount:.2f}")
-                            self.logger.info(f"   Main qty/limit: {qty_per_limit} | Mirror qty/limit: {mirror_qty_per_limit}")
+                            self.logger.info(f"   Main market qty: {market_qty} | Mirror market qty: {mirror_market_qty}")
+                            self.logger.info(f"   Main limit qtys: {limit_quantities} | Mirror limit qtys: {mirror_limit_quantities}")
                             self.logger.info(f"   Main SL qty: {final_sl_qty} | Mirror SL qty: {mirror_final_sl_qty}")
 
                             # Store mirror margin info for summary
                             chat_data["mirror_margin_amount"] = str(mirror_margin_amount)
                             chat_data["mirror_position_size"] = str(mirror_final_sl_qty)
+                        else:
+                            # If no percentage-based margin, use same weighted allocation as main
+                            if market_qty > 0:
+                                mirror_market_qty = market_qty
+                            if limit_quantities:
+                                mirror_limit_quantities = limit_quantities.copy()
                 except Exception as e:
                     self.logger.error(f"Error calculating proportional mirror margin: {e}")
-                    # Continue with default values on error
+                    # Fallback to main account weighted quantities on error
+                    if market_qty > 0:
+                        mirror_market_qty = market_qty
+                    if limit_quantities:
+                        mirror_limit_quantities = limit_quantities.copy()
 
             # Initialize execution data for tracking
             execution_data = {
@@ -612,7 +635,7 @@ class TradeExecutor:
                     "symbol": symbol,
                     "side": side,
                     "order_type": order_type,
-                    "qty": str(qty_per_limit),
+                    "qty": str(order_qty),  # Use weighted quantity
                     "order_link_id": order_link_id
                 }
 
@@ -681,11 +704,22 @@ class TradeExecutor:
                             # Create unique order link ID to avoid duplicates
                             unique_order_link_id = self._generate_unique_order_link_id(f"{order_link_id}_MIRROR")
 
+                            # Determine mirror order quantity based on weighted allocation
+                            if order_type == "Market":
+                                mirror_order_qty = mirror_market_qty if mirror_market_qty > 0 else mirror_qty_per_limit
+                            else:
+                                # Get the appropriate limit quantity for mirror
+                                limit_index = i - 2 if MARKET_ORDER_PERCENTAGE > 0 else i - 1
+                                if limit_index < len(mirror_limit_quantities):
+                                    mirror_order_qty = mirror_limit_quantities[limit_index]
+                                else:
+                                    mirror_order_qty = mirror_qty_per_limit  # Fallback
+                            
                             if order_type == "Market":
                                 mirror_result = await mirror_market_order(
                                     symbol=symbol,
                                     side=side,
-                                    qty=str(mirror_qty_per_limit),  # Use proportional quantity
+                                    qty=str(mirror_order_qty),  # Use weighted quantity
                                     position_idx=position_idx,
                                     order_link_id=unique_order_link_id
                                 )
@@ -693,7 +727,7 @@ class TradeExecutor:
                                 mirror_result = await mirror_limit_order(
                                     symbol=symbol,
                                     side=side,
-                                    qty=str(mirror_qty_per_limit),  # Use proportional quantity
+                                    qty=str(mirror_order_qty),  # Use weighted quantity
                                     price=str(limit_price),
                                     position_idx=position_idx,
                                     order_link_id=unique_order_link_id
