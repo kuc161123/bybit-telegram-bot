@@ -612,7 +612,10 @@ class DashboardGenerator:
             # Calculate ratios (simplified)
             sharpe_ratio = self._calculate_sharpe_ratio(bot_data)
             sortino_ratio = sharpe_ratio * 1.3  # Simplified
-            max_drawdown = float(bot_data.get('stats_max_drawdown', 5.2))
+            # Try to get percentage drawdown first, fallback to dollar amount converted to rough percentage
+            max_drawdown = float(bot_data.get('stats_max_drawdown_percentage', 
+                                             bot_data.get('stats_max_drawdown', 0) / 100 if bot_data.get('stats_max_drawdown', 0) > 100 
+                                             else bot_data.get('stats_max_drawdown', 5.2)))
 
             # Recovery factor
             recovery_factor = float(total_pnl) / max_drawdown if max_drawdown > 0 and total_pnl > 0 else 0.0
