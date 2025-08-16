@@ -1029,8 +1029,8 @@ class TradeExecutor:
                 # FIXED: Use single Take Profit for R:R calculation (closes 100% of position)
                 max_reward = (avg_entry - tp_prices[0]) * final_sl_qty if tp_prices else 0
 
-            # FIXED: Correct risk-reward ratio formula (risk/reward, not reward/risk)
-            risk_reward_ratio = abs(risk_amount) / abs(max_reward) if max_reward > 0 else 0
+            # FIXED: Correct risk-reward ratio formula (reward/risk for proper 1:X display)
+            risk_reward_ratio = abs(max_reward) / abs(risk_amount) if risk_amount > 0 else 0
 
             # Calculate position value
             position_value = avg_entry * final_sl_qty
@@ -2149,8 +2149,8 @@ class TradeExecutor:
                 # FIXED: Use single Take Profit for R:R calculation (closes 100% of position)
                 max_reward = (avg_entry - tp_prices[0]) * final_sl_qty if tp_prices else 0
 
-            # FIXED: Correct risk-reward ratio formula (risk/reward, not reward/risk)
-            risk_reward_ratio = abs(risk_amount) / abs(max_reward) if max_reward > 0 else 0
+            # FIXED: Correct risk-reward ratio formula (reward/risk for proper 1:X display)
+            risk_reward_ratio = abs(max_reward) / abs(risk_amount) if risk_amount > 0 else 0
 
             # Calculate position value
             position_value = avg_entry * final_sl_qty
