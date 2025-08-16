@@ -1277,14 +1277,21 @@ class TradeExecutor:
                 message += f"\n📋 <b>CONSERVATIVE APPROACH EXPLAINED</b>\n"
                 message += f"────────────────────────────────────\n"
 
-                # Entry strategy
-                message += f"<b>🔹 Entry Strategy (3 Limit Orders):</b>\n"
-                for i, price in enumerate(limit_prices[:3], 1):
-                    qty_per_order = final_sl_qty / 3
-                    value_per_order = qty_per_order * price
-                    message += f"   {i}. ${format_price(price)} • {format_decimal_or_na(qty_per_order, 4)} • ${value_per_order:.2f}\n"
-                message += f"   ➤ Averages entry across price range\n"
-                message += f"   ➤ Reduces timing risk\n\n"
+                # Entry strategy with weighted allocation
+                message += f"<b>🔹 Entry Strategy (Weighted Allocation):</b>\n"
+                
+                # Show market order if applicable
+                if MARKET_ORDER_PERCENTAGE > 0:
+                    market_value = market_qty * avg_entry
+                    message += f"   • Market: {format_decimal_or_na(market_qty, 4)} ({float(MARKET_ORDER_PERCENTAGE*100):.0f}%) • ${market_value:.2f}\n"
+                
+                # Show limit orders with weighted allocation
+                for i, (price, qty) in enumerate(zip(limit_prices[:3], limit_quantities), 1):
+                    value_per_order = qty * price
+                    pct = float(LIMIT_ORDER_ALLOCATION[i-1] * 100)
+                    message += f"   {i}. ${format_price(price)} • {format_decimal_or_na(qty, 4)} ({pct:.0f}%) • ${value_per_order:.2f}\n"
+                message += f"   ➤ Weighted for better average entry\n"
+                message += f"   ➤ Improves R:R ratio\n\n"
 
                 # Single TP strategy
                 message += f"<b>🔹 Take Profit Target (100%):</b>\n"
