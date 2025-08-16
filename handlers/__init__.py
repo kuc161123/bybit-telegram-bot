@@ -44,7 +44,9 @@ from .conversation import (
     margin_conservative_handler,
     # NEW: Streamlined GGShot flow handlers
     handle_ggshot_limit_1_input, handle_ggshot_limit_2_input, handle_ggshot_limit_3_input,
-    handle_ggshot_tp_1_input
+    handle_ggshot_tp_1_input,
+    # NEW: Position collision handlers
+    handle_collision_callbacks
 )
 
 # Import position close handlers
@@ -56,11 +58,11 @@ from .position_close_handler import (
 logger = logging.getLogger(__name__)
 
 # ENHANCED: Conversation states with GGShot screenshot strategy and conservative margin selection
-SYMBOL, SIDE, APPROACH_SELECTION, SCREENSHOT_UPLOAD, PRIMARY_ENTRY, LIMIT_ENTRIES, TAKE_PROFITS, STOP_LOSS, LEVERAGE, MARGIN, CONFIRMATION, GGSHOT_EDIT_VALUES, MARGIN_CONSERVATIVE = range(13)
+SYMBOL, SIDE, APPROACH_SELECTION, SCREENSHOT_UPLOAD, PRIMARY_ENTRY, LIMIT_ENTRIES, TAKE_PROFITS, STOP_LOSS, LEVERAGE, MARGIN, CONFIRMATION, GGSHOT_EDIT_VALUES, MARGIN_CONSERVATIVE, WAITING_FOR_COLLISION_CHOICE = range(14)
 
 # Additional states for streamlined GGShot flow
-GGSHOT_LIMIT_FLOW_1, GGSHOT_LIMIT_FLOW_2, GGSHOT_LIMIT_FLOW_3 = range(13, 16)
-GGSHOT_TP_FLOW_1 = 16  # Single TP flow only
+GGSHOT_LIMIT_FLOW_1, GGSHOT_LIMIT_FLOW_2, GGSHOT_LIMIT_FLOW_3 = range(14, 17)
+GGSHOT_TP_FLOW_1 = 17  # Single TP flow only
 
 def setup_enhanced_conversation_handlers(app):
     """Setup enhanced conversation handlers for conservative approach trading"""
@@ -149,6 +151,11 @@ def setup_enhanced_conversation_handlers(app):
                 GGSHOT_TP_FLOW_1: [
                     CallbackQueryHandler(handle_ggshot_callbacks, pattern="^ggshot_"),
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ggshot_tp_1_input)
+                ],
+                # NEW: Position collision detection state
+                WAITING_FOR_COLLISION_CHOICE: [
+                    CallbackQueryHandler(handle_collision_callbacks, pattern="^collision_"),
+                    CallbackQueryHandler(handle_back_callback, pattern="^back_to_confirmation$")
                 ]
             },
             fallbacks=[

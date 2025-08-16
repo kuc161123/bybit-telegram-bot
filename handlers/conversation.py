@@ -21,6 +21,10 @@ import time
 from config.constants import *
 # Explicit import to ensure availability
 from config.constants import TRADING_APPROACH
+
+# Define conversation state constant to avoid circular import
+# This matches the value defined in handlers/__init__.py (14th index = 13)
+WAITING_FOR_COLLISION_CHOICE = 13
 from config.settings import LLM_PROVIDER
 from utils.formatters import get_emoji, format_decimal_or_na, format_price, create_risk_meter, progress_bar
 from utils.helpers import initialize_chat_data, get_field_emoji_and_name, safe_decimal_conversion
@@ -2913,6 +2917,57 @@ async def handle_execute_trade(update: Update, context: ContextTypes.DEFAULT_TYP
     symbol = context.chat_data.get(SYMBOL, "Unknown")
     both_trades = context.chat_data.get("ggshot_both_trades", False)
 
+    # POSITION COLLISION DETECTION - Check for existing positions on both main and mirror accounts
+    try:
+        # Import position collision detector
+        from utils.position_collision_detector import check_existing_positions
+        
+        # Check for existing positions on both accounts
+        collision_result = await check_existing_positions(symbol)
+        
+        if collision_result.has_collision:
+            logger.warning(f"Position collision detected for {symbol}: {collision_result.total_positions} existing positions")
+            
+            # Show collision warning with user options
+            collision_msg = collision_result.formatted_summary + "\n\n"
+            collision_msg += "🤔 <b>How would you like to proceed?</b>"
+            
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("❌ Cancel Trade", callback_data="collision_cancel"),
+                    InlineKeyboardButton("⚠️ Continue Anyway", callback_data="collision_continue")
+                ],
+                [InlineKeyboardButton("🔄 Close Existing First", callback_data="collision_close_existing")],
+                [InlineKeyboardButton("🔙 Back to Confirmation", callback_data="back_to_confirmation")]
+            ])
+            
+            try:
+                await query.edit_message_text(
+                    collision_msg,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard
+                )
+                
+                # Store collision state for handling user choice
+                context.chat_data["collision_detected"] = True
+                context.chat_data["collision_result"] = collision_result
+                
+                # Return and wait for user choice
+                return WAITING_FOR_COLLISION_CHOICE
+                
+            except Exception as e:
+                logger.error(f"Failed to show collision warning: {e}")
+                # Continue with trade execution if we can't show warning
+                pass
+        else:
+            logger.info(f"No position collision detected for {symbol} - proceeding with trade")
+            
+    except Exception as e:
+        logger.error(f"Position collision check failed for {symbol}: {e}")
+        # Continue with trade execution on error (fail-safe behavior)
+        logger.warning("Continuing trade execution despite collision check failure")
+
     # Both trades option removed - only conservative approach supported
 
     # Show execution message
@@ -4552,3 +4607,272 @@ async def send_error_and_retry(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
     # Escape HTML special characters in error message
     safe_error_msg = escape(error_msg) if error_msg else "Unknown error"
     await edit_last_message(context, chat_id, f"❌ {safe_error_msg}", error_keyboard)
+
+# =============================================
+# POSITION COLLISION DETECTION HANDLERS
+# =============================================
+
+async def handle_collision_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle position collision detection user choices"""
+    query = update.callback_query
+    await query.answer()
+    
+    chat_id = query.message.chat.id
+    symbol = context.chat_data.get(SYMBOL, "Unknown")
+    
+    try:
+        if query.data == "collision_cancel":
+            # User chose to cancel the trade
+            logger.info(f"User cancelled trade due to position collision for {symbol}")
+            
+            cancel_msg = (
+                f"❌ <b>Trade Cancelled</b>\n\n"
+                f"📊 {symbol} trade cancelled due to existing positions.\n\n"
+                f"💡 You can close existing positions first and try again.\n"
+                f"Or use /trade to start a new setup."
+            )
+            
+            await query.edit_message_text(
+                cancel_msg,
+                parse_mode=ParseMode.HTML
+            )
+            
+            # Clear collision state
+            context.chat_data.pop("collision_detected", None)
+            context.chat_data.pop("collision_result", None)
+            
+            return ConversationHandler.END
+            
+        elif query.data == "collision_continue":
+            # User chose to continue with the trade anyway
+            logger.warning(f"User chose to continue trade despite position collision for {symbol}")
+            
+            # Clear collision state
+            context.chat_data.pop("collision_detected", None)
+            context.chat_data.pop("collision_result", None)
+            
+            # Continue with the original trade execution logic
+            # Import and call the original execute trade logic directly
+            from execution.trader import execute_trade_logic
+            
+            continue_msg = (
+                f"⚠️ <b>Continuing Trade Execution...</b>\n\n"
+                f"📊 {symbol} trade proceeding despite existing positions.\n"
+                f"🔄 Please wait while orders are placed..."
+            )
+            
+            await query.edit_message_text(
+                continue_msg,
+                parse_mode=ParseMode.HTML
+            )
+            
+            # Execute the trade using the same logic as handle_execute_trade
+            try:
+                # Get required data
+                approach = context.chat_data.get(TRADING_APPROACH, "conservative")
+                
+                # Create config for trade execution
+                cfg = context.chat_data.copy() if context.chat_data else {}
+                cfg["_temp_chat_id"] = chat_id
+                
+                # Map required keys (same as in handle_execute_trade)
+                if not cfg.get('LEVERAGE') and cfg.get('leverage'):
+                    cfg['LEVERAGE'] = cfg.get('leverage')
+                if not cfg.get('MARGIN_AMOUNT') and cfg.get('margin_amount_usdt'):
+                    cfg['MARGIN_AMOUNT'] = cfg.get('margin_amount_usdt')
+                if not cfg.get('SYMBOL') and cfg.get('symbol'):
+                    cfg['SYMBOL'] = cfg.get('symbol')
+                if not cfg.get('SIDE') and cfg.get('side'):
+                    cfg['SIDE'] = cfg.get('side')
+                if not cfg.get('TP1_PRICE') and cfg.get('tp1_price'):
+                    cfg['TP1_PRICE'] = cfg.get('tp1_price')
+                if not cfg.get('SL_PRICE') and cfg.get('sl_price'):
+                    cfg['SL_PRICE'] = cfg.get('sl_price')
+                
+                logger.info(f"Executing {approach} trade for {symbol} despite collision warning")
+                
+                # Execute the trade
+                result = await execute_trade_logic(context.application, chat_id, cfg)
+                
+                # Handle result (same as handle_execute_trade)
+                from utils.alert_helpers import format_trade_execution_alert
+                # send_message_with_retry is already defined in this file
+                
+                enhanced_message = format_trade_execution_alert(result, approach)
+                if enhanced_message:
+                    await send_message_with_retry(
+                        context.bot,
+                        chat_id,
+                        enhanced_message,
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    # Fallback message
+                    if isinstance(result, dict) and result.get("success"):
+                        result_msg = (
+                            f"✅ <b>Trade Executed!</b>\n\n"
+                            f"📊 <b>Orders:</b>\n"
+                        )
+                        for order in result.get("orders_placed", []):
+                            result_msg += f"• {order}\n"
+                        result_msg += f"\n🔄 Monitoring started • 🛡️ Orders protected"
+                    else:
+                        result_msg = f"❌ <b>Trade Execution Failed</b>\n\n{escape(result.get('error', 'Unknown error'))}"
+                    
+                    await send_message_with_retry(
+                        context.bot,
+                        chat_id,
+                        result_msg,
+                        parse_mode=ParseMode.HTML
+                    )
+                
+                logger.info(f"✅ {approach} trade execution completed despite collision warning")
+                
+            except Exception as e:
+                logger.error(f"Error executing trade after collision continue: {e}", exc_info=True)
+                error_msg = (
+                    f"❌ <b>Trade Execution Failed</b>\n\n"
+                    f"Error: {escape(str(e))}\n\n"
+                    f"Please try again or contact support."
+                )
+                await send_message_with_retry(
+                    context.bot,
+                    chat_id,
+                    error_msg,
+                    parse_mode=ParseMode.HTML
+                )
+            
+            return ConversationHandler.END
+            
+        elif query.data == "collision_close_existing":
+            # User chose to close existing positions first
+            logger.info(f"User chose to close existing positions for {symbol}")
+            
+            close_msg = (
+                f"🔄 <b>Close Existing Positions</b>\n\n"
+                f"📊 This feature will close existing {symbol} positions before placing new trade.\n\n"
+                f"⚠️ <b>This functionality is under development.</b>\n\n"
+                f"📱 <b>Manual Options:</b>\n"
+                f"• Use /dashboard to view and manually close positions\n"
+                f"• Use position management commands\n"
+                f"• Then return here to place your trade\n\n"
+                f"💡 Or choose 'Continue Anyway' to trade with existing positions."
+            )
+            
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 Open Dashboard", callback_data="open_dashboard")],
+                [
+                    InlineKeyboardButton("⚠️ Continue Anyway", callback_data="collision_continue"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="collision_cancel")
+                ]
+            ])
+            
+            await query.edit_message_text(
+                close_msg,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard
+            )
+            
+            return WAITING_FOR_COLLISION_CHOICE  # Stay in same state
+            
+        elif query.data == "open_dashboard":
+            # User wants to open dashboard to manually manage positions
+            from handlers.commands import dashboard_command
+            
+            # Send dashboard
+            await dashboard_command(update, context)
+            
+            # Keep the collision message available
+            remind_msg = (
+                f"📊 <b>Dashboard opened above.</b>\n\n"
+                f"After managing your {symbol} positions, you can:\n"
+                f"• Return here and choose 'Continue Anyway'\n"
+                f"• Or start a fresh /trade setup\n\n"
+                f"🤔 <b>How would you like to proceed now?</b>"
+            )
+            
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("⚠️ Continue Anyway", callback_data="collision_continue"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="collision_cancel")
+                ],
+                [InlineKeyboardButton("🔄 Refresh Position Check", callback_data="collision_refresh")]
+            ])
+            
+            await query.edit_message_text(
+                remind_msg,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard
+            )
+            
+            return WAITING_FOR_COLLISION_CHOICE  # Stay in same state
+            
+        elif query.data == "collision_refresh":
+            # User wants to refresh the position check
+            logger.info(f"User requested position refresh for {symbol}")
+            
+            # Clear position cache and re-check
+            from utils.position_collision_detector import clear_position_cache, check_existing_positions
+            clear_position_cache(symbol)
+            
+            # Re-check positions
+            collision_result = await check_existing_positions(symbol)
+            
+            if collision_result.has_collision:
+                # Still have positions
+                refresh_msg = collision_result.formatted_summary + "\n\n"
+                refresh_msg += f"🔄 <b>Refreshed:</b> Still {collision_result.total_positions} position(s) detected.\n\n"
+                refresh_msg += "🤔 <b>How would you like to proceed?</b>"
+                
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("❌ Cancel Trade", callback_data="collision_cancel"),
+                        InlineKeyboardButton("⚠️ Continue Anyway", callback_data="collision_continue")
+                    ],
+                    [InlineKeyboardButton("📊 Open Dashboard", callback_data="open_dashboard")],
+                    [InlineKeyboardButton("🔄 Refresh Again", callback_data="collision_refresh")]
+                ])
+                
+            else:
+                # No more positions detected
+                refresh_msg = (
+                    f"✅ <b>Positions Cleared!</b>\n\n"
+                    f"📊 No existing {symbol} positions detected.\n\n"
+                    f"🚀 <b>Ready to proceed with trade execution.</b>"
+                )
+                
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🚀 Execute Trade", callback_data="collision_continue")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="collision_cancel")]
+                ])
+            
+            await query.edit_message_text(
+                refresh_msg,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard
+            )
+            
+            return WAITING_FOR_COLLISION_CHOICE  # Stay in same state
+        
+        else:
+            # Unknown callback data
+            logger.warning(f"Unknown collision callback: {query.data}")
+            return WAITING_FOR_COLLISION_CHOICE
+    
+    except Exception as e:
+        logger.error(f"Error handling collision callback {query.data}: {e}", exc_info=True)
+        
+        error_msg = (
+            f"❌ <b>Error Processing Request</b>\n\n"
+            f"Please try again or use /trade to start fresh."
+        )
+        
+        try:
+            await query.edit_message_text(
+                error_msg,
+                parse_mode=ParseMode.HTML
+            )
+        except:
+            pass
+        
+        return ConversationHandler.END
