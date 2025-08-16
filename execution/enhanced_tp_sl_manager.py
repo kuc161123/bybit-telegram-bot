@@ -5032,10 +5032,7 @@ class EnhancedTPSLManager:
                 
                 logger.info(f"✅ Fallback cancellation complete: {cancelled_count} orders cancelled")
             
-            # CRITICAL: Also trigger mirror account cancellation if this is main account
-            if account_type == "main" and ENABLE_MIRROR_TRADING:
-                logger.info(f"🪞 MIRROR: Main account TP hit - cancelling ALL mirror account orders for {symbol}")
-                await self._cleanup_mirror_position_orders_comprehensive(symbol, side)
+            # Each account is now independent - removed mirror dependency
                 
         except Exception as e:
             logger.error(f"Error in emergency order cancellation: {e}")
@@ -5491,8 +5488,7 @@ All take profit targets have been achieved! 🎯"""
                     except Exception as e:
                         logger.error(f"Error cancelling limit order {limit_order['order_id'][:8]}...: {e}")
 
-            # CRITICAL FIX: Clean up mirror account orders
-            await self._cleanup_mirror_position_orders(symbol, side)
+            # Each account manages its own cleanup independently - removed mirror dependency
 
             # CRITICAL: Reset all stale data to prevent contamination of next trade
             await self._reset_stale_monitor_data(monitor_data, symbol, side, account_type)
@@ -9153,11 +9149,7 @@ All take profit targets have been achieved! 🎯"""
                         # Step 3: Send final closure alert
                         await self._send_take_profit_closure_alert_new(monitor_data, fill_percentage)
                         
-                        # Step 4: Trigger mirror account closure if this is main account
-                        if account_type == "main":
-                            await self._trigger_mirror_closure_new(monitor_data)
-                        
-                        # Step 5: Mark monitor as completed and clean up
+                        # Step 4: Mark monitor as completed and clean up (removed mirror dependency - each account is independent)
                         await self._complete_position_closure_new(monitor_data)
                         
                     else:
@@ -10317,28 +10309,23 @@ All take profit targets have been achieved! 🎯"""
                 await asyncio.sleep(1)
                 closure_success = await self._ensure_position_fully_closed(monitor_data, client)
             
-            # Step 3: Trigger mirror account closure if this is main account
-            if account_type == 'main':
-                logger.info("🪞 STEP 3: Triggering mirror account closure...")
-                await self._trigger_mirror_closure_tp1(monitor_data)
-            
-            # Step 4: Update monitor state to POSITION_CLOSED
-            logger.info("📋 STEP 4: Updating monitor state...")
+            # Step 3: Update monitor state to POSITION_CLOSED (removed mirror dependency - each account is independent)
+            logger.info("📋 STEP 3: Updating monitor state...")
             monitor_data['phase'] = 'POSITION_CLOSED'
             monitor_data['position_closed'] = True
             monitor_data['tp1_closure_time'] = time.time()
             monitor_data['closure_method'] = 'TP1_COMPLETE_CLOSURE'
             
-            # Step 5: Send TP1 closure alert
-            logger.info("📢 STEP 5: Sending TP1 closure alerts...")
+            # Step 4: Send TP1 closure alert
+            logger.info("📢 STEP 4: Sending TP1 closure alerts...")
             await self._send_tp1_closure_alert(monitor_data)
             
-            # Step 6: Update performance statistics
-            logger.info("📊 STEP 6: Updating performance statistics...")
+            # Step 5: Update performance statistics
+            logger.info("📊 STEP 5: Updating performance statistics...")
             await self._update_position_statistics(monitor_data, closure_reason='TP1_HIT')
             
-            # Step 7: Complete cleanup
-            logger.info("🧹 STEP 7: Completing cleanup...")
+            # Step 6: Complete cleanup
+            logger.info("🧹 STEP 6: Completing cleanup...")
             await self._complete_position_closure_cleanup(monitor_data)
             
             logger.info(f"✅ TP1-ONLY CLOSURE COMPLETE: {symbol} {side} ({account_type.upper()}) - Position 100% closed")
@@ -10851,7 +10838,7 @@ def get_enhanced_tp_sl_manager():
 💡 <b>Strategy:</b> Take Profit Only
 • Target: 85% → 100% closure
 • Risk management: Complete
-{"• Mirror account: Synchronized" if account_type == "main" and ENABLE_MIRROR_TRADING else ""}
+• Account: Independent operation
 
 🏆 <b>Congratulations on reaching your profit target!</b>"""
 
@@ -10934,7 +10921,7 @@ def get_enhanced_tp_sl_manager():
 • Position closed 100% at 85% target
 • All remaining orders cancelled
 • Risk-free profit secured
-{"• Mirror account: Synchronized" if account_type == "main" and ENABLE_MIRROR_TRADING else ""}
+• Account: Independent operation
 
 ✅ <b>Congratulations on reaching your profit target!</b>"""
 
