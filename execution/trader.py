@@ -1088,8 +1088,37 @@ class TradeExecutor:
                         self.logger.warning(f"⚠️ SL order failed")
                         errors.append("SL order placement failed")
 
-            # Calculate risk metrics
-            avg_entry = sum(limit_prices) / len(limit_prices) if limit_prices else tp_prices[0]
+            # Calculate risk metrics with WEIGHTED average entry
+            # Use weighted allocation for accurate R:R calculation
+            if limit_prices and market_qty > 0:
+                # Calculate weighted average with market and limit orders
+                total_weight = Decimal("0")
+                weighted_sum = Decimal("0")
+                
+                # Add market component (10% at market price)
+                if MARKET_ORDER_PERCENTAGE > 0:
+                    # Use first limit as proxy for market price (close enough)
+                    market_price = limit_prices[0] if limit_prices else tp_prices[0]
+                    weighted_sum += market_price * MARKET_ORDER_PERCENTAGE
+                    total_weight += MARKET_ORDER_PERCENTAGE
+                
+                # Add limit orders with weighted allocation
+                remaining_weight = Decimal("1") - MARKET_ORDER_PERCENTAGE
+                for i, limit_price in enumerate(limit_prices):
+                    if i < len(LIMIT_ORDER_ALLOCATION):
+                        weight = LIMIT_ORDER_ALLOCATION[i] * remaining_weight
+                        weighted_sum += limit_price * weight
+                        total_weight += weight
+                
+                if total_weight > 0:
+                    avg_entry = weighted_sum / total_weight
+                    self.logger.info(f"📊 Using weighted average entry for R:R: ${avg_entry:.2f}")
+                else:
+                    # Fallback to simple average
+                    avg_entry = sum(limit_prices) / len(limit_prices)
+            else:
+                # Fallback if no weighted allocation
+                avg_entry = sum(limit_prices) / len(limit_prices) if limit_prices else tp_prices[0]
             # FIXED: Use the properly rounded sl_qty for calculations
             final_sl_qty = value_adjusted_to_step(total_qty, qty_step)
             if side == "Buy":

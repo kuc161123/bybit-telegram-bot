@@ -2801,8 +2801,45 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
         tp_price = context.chat_data.get(TP_PRICE, Decimal("0"))
         sl_price = context.chat_data.get(SL_PRICE, Decimal("0"))
         
-        # Calculate average entry price for conservative trades
-        avg_entry = (limit1_price + limit2_price + limit3_price) / 3 if all([limit1_price, limit2_price, limit3_price]) else limit1_price
+        # Calculate WEIGHTED average entry price for conservative trades
+        from config.constants import MARKET_ORDER_PERCENTAGE, LIMIT_ORDER_ALLOCATION
+        
+        # Get market price for weighted calculation
+        try:
+            from utils.cache import get_current_price_cached
+            market_price = await get_current_price_cached(symbol)
+        except:
+            # Fallback to first limit if can't get market price
+            market_price = limit1_price if limit1_price > 0 else Decimal("0")
+        
+        # Calculate weighted average with new allocation
+        if all([limit1_price, limit2_price, limit3_price]) and market_price > 0:
+            total_weight = Decimal("0")
+            weighted_sum = Decimal("0")
+            
+            # Add market order component (10% weight)
+            if MARKET_ORDER_PERCENTAGE > 0:
+                weighted_sum += market_price * MARKET_ORDER_PERCENTAGE
+                total_weight += MARKET_ORDER_PERCENTAGE
+            
+            # Add limit orders with weighted allocation
+            remaining_weight = Decimal("1") - MARKET_ORDER_PERCENTAGE
+            limit_prices = [limit1_price, limit2_price, limit3_price]
+            for i, limit_price in enumerate(limit_prices):
+                if i < len(LIMIT_ORDER_ALLOCATION):
+                    weight = LIMIT_ORDER_ALLOCATION[i] * remaining_weight
+                    weighted_sum += limit_price * weight
+                    total_weight += weight
+            
+            if total_weight > 0:
+                avg_entry = weighted_sum / total_weight
+                logger.info(f"📊 Using weighted average entry for R:R: ${avg_entry:.2f}")
+            else:
+                # Fallback to simple average
+                avg_entry = (limit1_price + limit2_price + limit3_price) / 3
+        else:
+            # Fallback to simple average if not all prices available
+            avg_entry = (limit1_price + limit2_price + limit3_price) / 3 if all([limit1_price, limit2_price, limit3_price]) else limit1_price
         
         # Calculate R:R ratio for conservative trades
         rr_info = ""
