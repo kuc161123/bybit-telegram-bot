@@ -3,12 +3,15 @@
 Reusable UI components for the dashboard
 """
 import html
+import logging
 from typing import List, Optional, Tuple
 from decimal import Decimal
 from dashboard.models import (
     AccountSummary, PnLAnalysis, PositionSummary,
     PerformanceMetrics, MarketStatus, DashboardData
 )
+
+logger = logging.getLogger(__name__)
 from utils.formatters import format_number
 
 
@@ -391,6 +394,40 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
         result += recommendation
         
         return result
+    
+    @staticmethod
+    def trade_recommendations(status: 'MarketStatus') -> str:
+        """Generate timeframe-specific trade recommendations"""
+        try:
+            from market_analysis.trade_recommendation_engine import trade_recommendation_engine
+            
+            # Convert MarketStatus to dict for recommendation engine
+            status_dict = {
+                'sentiment_score': status.sentiment_score if hasattr(status, 'sentiment_score') else 50,
+                'momentum_score': getattr(status, 'momentum_score', 0),
+                'trend_strength': getattr(status, 'trend_strength', 0),
+                'market_structure_1h': getattr(status, 'market_structure_1h', None),
+                'market_structure_4h': getattr(status, 'market_structure_4h', None),
+                'market_structure_1d': getattr(status, 'market_structure_1d', None),
+                'structure_bias_1h': getattr(status, 'structure_bias_1h', None),
+                'structure_bias_4h': getattr(status, 'structure_bias_4h', None),
+                'structure_bias_1d': getattr(status, 'structure_bias_1d', None),
+                'volatility_level': status.volatility if hasattr(status, 'volatility') else 'Normal',
+                'volatility_percentage': getattr(status, 'volatility_percentage', 2.0),
+                'volume_profile': getattr(status, 'volume_profile', 'Normal'),
+                'volume_ratio': getattr(status, 'volume_ratio', 1.0),
+                'volume_trend': getattr(status, 'volume_trend', 'stable'),
+            }
+            
+            # Get recommendations
+            recommendations = trade_recommendation_engine.get_recommendations(status_dict)
+            
+            # Format for display
+            return trade_recommendation_engine.format_recommendations_for_display(recommendations)
+            
+        except Exception as e:
+            logger.error(f"Error generating trade recommendations: {e}")
+            return ""
     
     @staticmethod
     def divider() -> str:
