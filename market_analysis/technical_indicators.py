@@ -49,6 +49,7 @@ class TechnicalIndicators:
     # Higher Level Analysis
     trend_strength: Optional[float] = None  # -100 to 100
     volatility_percentile: Optional[float] = None  # 0 to 100
+    volatility_percentage: Optional[float] = None  # Actual volatility % (enhanced calculation)
     momentum_score: Optional[float] = None  # -100 to 100
     volume_strength: Optional[float] = None  # 0 to 100
     
@@ -118,9 +119,31 @@ class TechnicalAnalysisEngine:
             
             # Calculate volatility indicators
             atr_14 = self._calculate_atr(highs, lows, closes, 14)
-            if atr_14:
-                volatility_pct = (atr_14 / current_price) * 100 if current_price > 0 else 0
-                logger.debug(f"ATR-14 for {symbol}: {atr_14:.6f} (volatility: {volatility_pct:.2f}%)")
+            
+            # Calculate multiple volatility metrics for accuracy
+            volatility_pct = None
+            if atr_14 and current_price > 0:
+                # Standard ATR-based volatility (daily expected move)
+                atr_volatility = (atr_14 / current_price) * 100
+                
+                # Calculate historical volatility (standard deviation based)
+                returns = []
+                for i in range(1, min(24, len(closes))):  # Use last 24 hours
+                    if closes[i-1] > 0:
+                        returns.append((closes[i] - closes[i-1]) / closes[i-1])
+                
+                if returns and len(returns) > 1:
+                    # Annualized volatility (crypto trades 24/7, so 365 days)
+                    hourly_std = statistics.stdev(returns)
+                    daily_volatility = hourly_std * math.sqrt(24) * 100  # Daily volatility %
+                    
+                    # Combine ATR and historical volatility for more accuracy
+                    volatility_pct = (atr_volatility * 0.7 + daily_volatility * 0.3)
+                    logger.debug(f"Volatility for {symbol} - ATR: {atr_volatility:.2f}%, Historical: {daily_volatility:.2f}%, Combined: {volatility_pct:.2f}%")
+                else:
+                    volatility_pct = atr_volatility
+                    logger.debug(f"Volatility for {symbol} - ATR only: {atr_volatility:.2f}%")
+            
             bb_upper, bb_lower, bb_width = self._calculate_bollinger_bands(closes, 20, 2.0)
             
             # Calculate momentum indicators
@@ -193,6 +216,7 @@ class TechnicalAnalysisEngine:
                 # Higher Level Analysis
                 trend_strength=trend_strength,
                 volatility_percentile=volatility_percentile,
+                volatility_percentage=volatility_pct,  # Add the enhanced volatility calculation
                 momentum_score=momentum_score,
                 volume_strength=volume_strength,
                 
@@ -241,12 +265,16 @@ class TechnicalAnalysisEngine:
     
     def _calculate_atr(self, highs: List[float], lows: List[float], 
                       closes: List[float], period: int) -> Optional[float]:
-        """Calculate Average True Range"""
+        """Calculate Average True Range using Wilder's smoothing method"""
         if len(highs) < period + 1:
             return None
         
         true_ranges = []
         for i in range(1, len(highs)):
+            # True Range is the maximum of:
+            # 1. Current High - Current Low
+            # 2. Abs(Current High - Previous Close)
+            # 3. Abs(Current Low - Previous Close)
             tr1 = highs[i] - lows[i]
             tr2 = abs(highs[i] - closes[i-1])
             tr3 = abs(lows[i] - closes[i-1])
@@ -255,7 +283,15 @@ class TechnicalAnalysisEngine:
         if len(true_ranges) < period:
             return None
         
-        return statistics.mean(true_ranges[-period:])
+        # Use Wilder's smoothing method for more accuracy
+        # First ATR is simple average
+        atr = statistics.mean(true_ranges[:period])
+        
+        # Apply Wilder's smoothing for subsequent values
+        for i in range(period, len(true_ranges)):
+            atr = ((atr * (period - 1)) + true_ranges[i]) / period
+        
+        return atr
     
     def _calculate_bollinger_bands(self, data: List[float], period: int, 
                                  deviation: float) -> Tuple[Optional[float], Optional[float], Optional[float]]:

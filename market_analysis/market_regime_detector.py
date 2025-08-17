@@ -97,11 +97,12 @@ class MarketRegimeDetector:
             "strong_downtrend": -2.0
         }
         
+        # Updated thresholds for crypto markets (which are naturally more volatile)
         self.volatility_thresholds = {
-            "very_low": 0.5,           # % ATR
-            "low": 1.5,
-            "normal": 3.0,
-            "high": 5.0
+            "very_low": 1.0,           # % daily volatility (< 1% is very low for crypto)
+            "low": 2.0,                # 1-2% daily volatility is low for crypto
+            "normal": 4.0,             # 2-4% is normal for crypto
+            "high": 7.0                # 4-7% is high, >7% is very high
         }
         
         self.momentum_thresholds = {
@@ -262,12 +263,18 @@ class MarketRegimeDetector:
         indicators: TechnicalIndicators,
         market_data: MarketData
     ) -> VolatilityLevel:
-        """Classify volatility level based on ATR and price movements"""
-        if not indicators.atr_14 or market_data.current_price <= 0:
-            return VolatilityLevel.NORMAL
+        """Classify volatility level based on enhanced volatility calculation or ATR"""
         
-        # Calculate ATR as percentage of current price
-        atr_pct = (indicators.atr_14 / market_data.current_price) * 100
+        # First try to use the enhanced volatility percentage if available
+        if hasattr(indicators, 'volatility_percentage') and indicators.volatility_percentage is not None:
+            atr_pct = indicators.volatility_percentage
+            logger.debug(f"Using enhanced volatility for classification: {atr_pct:.2f}%")
+        # Fallback to standard ATR calculation
+        elif indicators.atr_14 and market_data.current_price > 0:
+            atr_pct = (indicators.atr_14 / market_data.current_price) * 100
+            logger.debug(f"Using ATR-based volatility for classification: {atr_pct:.2f}%")
+        else:
+            return VolatilityLevel.NORMAL
         
         if atr_pct < self.volatility_thresholds["very_low"]:
             return VolatilityLevel.VERY_LOW

@@ -605,11 +605,17 @@ class MarketStatusEngine:
         # Determine analysis depth
         analysis_depth = "Comprehensive" if technical_indicators.confidence > 80 else "Standard" if technical_indicators.confidence > 50 else "Basic"
         
-        # Calculate volatility percentage if ATR is available
+        # Use the enhanced volatility calculation from technical indicators
         volatility_percentage = None
-        if technical_indicators.atr_14 and market_data.current_price > 0:
+        
+        # First check if technical indicators already calculated it
+        if hasattr(technical_indicators, 'volatility_percentage') and technical_indicators.volatility_percentage:
+            volatility_percentage = technical_indicators.volatility_percentage
+            logger.debug(f"Using enhanced volatility for {symbol}: {volatility_percentage:.2f}%")
+        # Fallback to simple ATR calculation if needed
+        elif technical_indicators.atr_14 and market_data.current_price > 0:
             volatility_percentage = (technical_indicators.atr_14 / market_data.current_price) * 100
-            logger.debug(f"Volatility calculation for {symbol}: ATR={technical_indicators.atr_14:.6f}, Price={market_data.current_price:.2f}, Vol%={volatility_percentage:.2f}%")
+            logger.debug(f"Using simple ATR volatility for {symbol}: {volatility_percentage:.2f}%")
         
         # Get support and resistance levels
         support_level = technical_indicators.major_support if hasattr(technical_indicators, 'major_support') else None
