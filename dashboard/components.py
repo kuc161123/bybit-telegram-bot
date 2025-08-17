@@ -159,20 +159,30 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
                 result += f"{structure_emoji} Structure: {status.market_structure}\n"
             
             # Display multi-timeframe structures if available
+            has_structure = False
             if hasattr(status, 'market_structure_1h') and status.market_structure_1h:
+                has_structure = True
                 # 1-hour structure
                 emoji_1h = "🔺" if "Bullish" in str(status.structure_bias_1h) else "🔻" if "Bearish" in str(status.structure_bias_1h) else "⚖️"
                 result += f"{emoji_1h} Structure (1h): {status.market_structure_1h}\n"
                 
             if hasattr(status, 'market_structure_4h') and status.market_structure_4h:
+                has_structure = True
                 # 4-hour structure
                 emoji_4h = "🔺" if "Bullish" in str(status.structure_bias_4h) else "🔻" if "Bearish" in str(status.structure_bias_4h) else "⚖️"
                 result += f"{emoji_4h} Structure (4h): {status.market_structure_4h}\n"
                 
             if hasattr(status, 'market_structure_1d') and status.market_structure_1d:
+                has_structure = True
                 # Daily structure
                 emoji_1d = "🔺" if "Bullish" in str(status.structure_bias_1d) else "🔻" if "Bearish" in str(status.structure_bias_1d) else "⚖️"
                 result += f"{emoji_1d} Structure (D): {status.market_structure_1d}\n"
+            
+            # Add structure explanation and recommendation if we have structure data
+            if has_structure:
+                explanation = ComponentBuilder._get_structure_explanation(status)
+                if explanation:
+                    result += f"\n{explanation}\n"
 
             # NEW: Funding Rate (for perpetuals)
             if status.funding_rate is not None:
@@ -301,6 +311,70 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
         # Return empty string to remove from dashboard
         return ""
 
+    @staticmethod
+    def _get_structure_explanation(status: 'MarketStatus') -> str:
+        """Generate brief explanation and trading recommendation based on market structure"""
+        
+        # Get structure patterns for all timeframes
+        structures = []
+        if hasattr(status, 'market_structure_1h') and status.market_structure_1h:
+            structures.append(('1h', status.market_structure_1h, status.structure_bias_1h))
+        if hasattr(status, 'market_structure_4h') and status.market_structure_4h:
+            structures.append(('4h', status.market_structure_4h, status.structure_bias_4h))
+        if hasattr(status, 'market_structure_1d') and status.market_structure_1d:
+            structures.append(('D', status.market_structure_1d, status.structure_bias_1d))
+        
+        if not structures:
+            return ""
+        
+        # Analyze alignment
+        bullish_count = sum(1 for _, _, bias in structures if bias and "Bullish" in str(bias))
+        bearish_count = sum(1 for _, _, bias in structures if bias and "Bearish" in str(bias))
+        
+        # Generate pattern explanations
+        explanations = []
+        for tf, pattern, bias in structures:
+            if pattern == "HH-HL":
+                explanations.append(f"{tf}: Uptrend (higher highs/lows)")
+            elif pattern == "LH-LL":
+                explanations.append(f"{tf}: Downtrend (lower highs/lows)")
+            elif pattern == "Expanding":
+                explanations.append(f"{tf}: Increasing volatility")
+            elif pattern == "Contracting":
+                explanations.append(f"{tf}: Consolidating")
+            elif pattern == "Consolidation":
+                explanations.append(f"{tf}: Sideways")
+        
+        # Generate recommendation based on confluence
+        recommendation = ""
+        if bullish_count == len(structures) and bullish_count > 0:
+            recommendation = "💡 <b>Strong Buy Signal</b> - All timeframes bullish\n📈 Look for long entries on pullbacks"
+        elif bearish_count == len(structures) and bearish_count > 0:
+            recommendation = "💡 <b>Strong Sell Signal</b> - All timeframes bearish\n📉 Look for short entries on rallies"
+        elif bullish_count > bearish_count:
+            recommendation = "💡 <b>Bullish Bias</b> - Favor longs\n⚠️ Watch for support levels"
+        elif bearish_count > bullish_count:
+            recommendation = "💡 <b>Bearish Bias</b> - Favor shorts\n⚠️ Watch resistance levels"
+        else:
+            # Check for specific patterns
+            has_contracting = any("Contracting" in str(p) for _, p, _ in structures)
+            has_expanding = any("Expanding" in str(p) for _, p, _ in structures)
+            
+            if has_contracting and has_expanding:
+                recommendation = "💡 <b>Mixed Signals</b> - Breakout imminent\n⚡ Wait for directional confirmation"
+            elif has_expanding:
+                recommendation = "💡 <b>High Volatility</b> - Use wider stops\n🎯 Good for range trading"
+            elif has_contracting:
+                recommendation = "💡 <b>Low Volatility</b> - Breakout setup\n⏳ Prepare for explosive move"
+            else:
+                recommendation = "💡 <b>Neutral</b> - No clear direction\n⏸️ Wait for better setup"
+        
+        # Combine explanations
+        result = "📖 <i>" + " | ".join(explanations) + "</i>\n"
+        result += recommendation
+        
+        return result
+    
     @staticmethod
     def divider() -> str:
         """Generate a section divider"""
