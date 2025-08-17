@@ -415,7 +415,7 @@ async def show_risk_analysis(query, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Risk recommendations
     text += "\n🛡️ <b>Risk Management Tips:</b>\n"
-    text += "• Never risk more than 2% per trade\n"
+    text += "• Never risk more than 1% per trade\n"
     text += "• Use stop losses on all positions\n"
     text += "• Diversify across uncorrelated assets\n"
 

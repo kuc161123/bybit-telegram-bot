@@ -37,12 +37,12 @@ def fix_performance_stats():
         
         # Default to a reasonable estimate if not found
         if account_balance is None:
-            # Estimate from trades (assume 2% risk per trade average)
+            # Estimate from trades (assume 1% risk per trade average)
             total_trades = bot_data.get('stats_total_trades_initiated', 25)
             max_dd = abs(float(bot_data.get('stats_max_drawdown', 288)))
             if total_trades > 0 and max_dd > 0:
-                # Rough estimate: if max DD is from ~10 losing trades at 2% each
-                account_balance = max_dd * 5  # Assumes 20% max drawdown
+                # Rough estimate: if max DD is from ~10 losing trades at 1% each
+                account_balance = max_dd * 10  # Assumes 10% max drawdown
             else:
                 account_balance = 10000  # Default $10k account
         

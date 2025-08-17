@@ -58,7 +58,7 @@ The Trade Logging System provides comprehensive tracking of all trade operations
       "timestamp": "2025-06-26T10:00:00Z",
       "order_type": "Market",
       "leverage": 10,
-      "risk_percentage": "2"
+      "risk_percentage": "1"
     },
     "tp_orders": [
       {
@@ -150,7 +150,7 @@ trade_key = await log_trade_entry(
     order_type="Market",
     chat_id="123456",
     leverage=10,
-    risk_percentage=Decimal("2")
+    risk_percentage=Decimal("1")
 )
 
 # Log TP order

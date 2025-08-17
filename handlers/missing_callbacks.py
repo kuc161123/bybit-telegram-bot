@@ -336,7 +336,7 @@ async def trade_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.edit_message_text(
         "🎯 Trade Settings\n\n"
         "Default Leverage: 10x\n"
-        "Default Risk: 2%\n"
+        "Default Risk: 1%\n"
         "Auto TP: Enabled ✅\n"
         "Auto SL: Enabled ✅\n"
         "Trailing Stop: Disabled ❌\n\n"
@@ -451,7 +451,7 @@ async def show_trading_tips(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.edit_message_text(
         "🎯 Trading Tips\n\n"
         "• Always use stop loss\n"
-        "• Risk only 1-2% per trade\n"
+        "• Risk only 1% per trade\n"
         "• Trade with the trend\n"
         "• Avoid overtrading\n"
         "• Keep a trading journal\n\n"

@@ -255,7 +255,7 @@ async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 <b>Trading Defaults</b>
 ├ Default Leverage: 10x
-├ Default Risk: 2%
+├ Default Risk: 1%
 ├ Auto TP: Enabled ✅
 └ Auto SL: Enabled ✅
 

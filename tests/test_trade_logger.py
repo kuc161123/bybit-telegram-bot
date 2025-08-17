@@ -44,7 +44,7 @@ async def demonstrate_trade_logging():
         order_type="Market",
         chat_id="123456",
         leverage=10,
-        risk_percentage=Decimal("2")
+        risk_percentage=Decimal("1")
     )
     
     print(f"✅ Trade logged with key: {trade_key}")

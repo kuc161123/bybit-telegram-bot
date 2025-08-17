@@ -69,7 +69,7 @@ class BacktestingFramework:
         self.current_capital = initial_capital
         self.trades: List[BacktestTrade] = []
         self.historical_data: Dict[str, List] = {}
-        self.position_size_pct = 0.02  # 2% risk per trade
+        self.position_size_pct = 0.01  # 1% risk per trade
         self.max_concurrent_trades = 5
         self.commission_rate = 0.0006  # 0.06% taker fee
         

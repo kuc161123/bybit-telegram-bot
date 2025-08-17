@@ -491,7 +491,7 @@ def calculate_optimal_position_size(account_balance: Decimal, risk_percent: Deci
     
     Args:
         account_balance: Available account balance
-        risk_percent: Percentage of account to risk (e.g., 2.0 for 2%)
+        risk_percent: Percentage of account to risk (e.g., 1.0 for 1%)
         entry_price: Entry price
         sl_price: Stop loss price
         side: Trade side

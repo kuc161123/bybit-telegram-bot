@@ -84,7 +84,7 @@ Create `config/trading_constants.py`:
 # Trading constants
 MIN_POSITION_SIZE = Decimal("0.001")
 MAX_LEVERAGE = 100
-DEFAULT_RISK_PERCENTAGE = Decimal("2")
+DEFAULT_RISK_PERCENTAGE = Decimal("1")
 PRICE_DECIMAL_PLACES = {
     "BTC": 1,
     "ETH": 2,

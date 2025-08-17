@@ -73,12 +73,12 @@ class TestBacktestingFramework:
     def test_position_sizing(self):
         """Test position sizing calculations"""
         framework = BacktestingFramework(initial_capital=10000)
-        framework.position_size_pct = 0.02  # 2% risk
+        framework.position_size_pct = 0.01  # 1% risk
         
         position_size = framework._calculate_position_size(100000)  # BTC price
         
-        # Should be 2% of capital divided by price
-        expected_size = (10000 * 0.02) / 100000
+        # Should be 1% of capital divided by price
+        expected_size = (10000 * 0.01) / 100000
         assert abs(position_size - expected_size) < 0.0001
     
     def test_stop_loss_take_profit_calculation(self):
