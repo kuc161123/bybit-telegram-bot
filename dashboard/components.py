@@ -152,10 +152,27 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
                     result += f" ({status.volume_ratio:.1f}x avg)"
                 result += "\n"
 
-            # NEW: Market Structure
+            # NEW: Market Structure - Multi-timeframe display
             if status.market_structure:
+                # Display single structure for backward compatibility
                 structure_emoji = "🔺" if status.structure_bias == "Bullish" else "🔻" if status.structure_bias == "Bearish" else "⚖️"
                 result += f"{structure_emoji} Structure: {status.market_structure}\n"
+            
+            # Display multi-timeframe structures if available
+            if hasattr(status, 'market_structure_1h') and status.market_structure_1h:
+                # 1-hour structure
+                emoji_1h = "🔺" if "Bullish" in str(status.structure_bias_1h) else "🔻" if "Bearish" in str(status.structure_bias_1h) else "⚖️"
+                result += f"{emoji_1h} Structure (1h): {status.market_structure_1h}\n"
+                
+            if hasattr(status, 'market_structure_4h') and status.market_structure_4h:
+                # 4-hour structure
+                emoji_4h = "🔺" if "Bullish" in str(status.structure_bias_4h) else "🔻" if "Bearish" in str(status.structure_bias_4h) else "⚖️"
+                result += f"{emoji_4h} Structure (4h): {status.market_structure_4h}\n"
+                
+            if hasattr(status, 'market_structure_1d') and status.market_structure_1d:
+                # Daily structure
+                emoji_1d = "🔺" if "Bullish" in str(status.structure_bias_1d) else "🔻" if "Bearish" in str(status.structure_bias_1d) else "⚖️"
+                result += f"{emoji_1d} Structure (D): {status.market_structure_1d}\n"
 
             # NEW: Funding Rate (for perpetuals)
             if status.funding_rate is not None:

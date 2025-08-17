@@ -76,6 +76,14 @@ class EnhancedMarketStatus:
     funding_bias: Optional[str] = None  # "Bullish", "Bearish", "Neutral"
     open_interest_change_24h: Optional[float] = None  # Percentage change
     
+    # NEW: Multi-timeframe market structure
+    market_structure_1h: Optional[str] = None  # 1-hour structure pattern
+    structure_bias_1h: Optional[str] = None    # 1-hour structure bias
+    market_structure_4h: Optional[str] = None  # 4-hour structure pattern
+    structure_bias_4h: Optional[str] = None    # 4-hour structure bias
+    market_structure_1d: Optional[str] = None  # Daily structure pattern
+    structure_bias_1d: Optional[str] = None    # Daily structure bias
+    
     # NEW: AI Recommendation fields (GPT-4 Enhanced)
     ai_recommendation: Optional[str] = None  # "BUY", "HOLD", "SELL"
     ai_reasoning: Optional[str] = None  # Brief explanation
@@ -618,10 +626,33 @@ class MarketStatusEngine:
             else:
                 volume_profile = "Normal"
         
-        # Determine market structure
+        # Determine market structure - keep existing for backward compatibility
         market_structure, structure_bias = self._analyze_market_structure(
             technical_indicators, market_data.current_price
         )
+        
+        # NEW: Analyze multi-timeframe market structure
+        market_structure_1h, structure_bias_1h = None, None
+        market_structure_4h, structure_bias_4h = None, None
+        market_structure_1d, structure_bias_1d = None, None
+        
+        # Analyze 1-hour structure
+        if hasattr(market_data, 'kline_1h') and market_data.kline_1h:
+            market_structure_1h, structure_bias_1h = technical_analysis_engine.analyze_market_structure_timeframe(
+                market_data.kline_1h, "1h"
+            )
+        
+        # Analyze 4-hour structure  
+        if hasattr(market_data, 'kline_4h') and market_data.kline_4h:
+            market_structure_4h, structure_bias_4h = technical_analysis_engine.analyze_market_structure_timeframe(
+                market_data.kline_4h, "4h"
+            )
+        
+        # Analyze daily structure
+        if hasattr(market_data, 'kline_1d') and market_data.kline_1d:
+            market_structure_1d, structure_bias_1d = technical_analysis_engine.analyze_market_structure_timeframe(
+                market_data.kline_1d, "1d"
+            )
         
         # Determine funding bias
         funding_bias = None
@@ -715,6 +746,14 @@ class MarketStatusEngine:
             funding_rate=market_data.funding_rate,
             funding_bias=funding_bias,
             open_interest_change_24h=open_interest_change_24h,
+            
+            # NEW: Multi-timeframe market structure
+            market_structure_1h=market_structure_1h,
+            structure_bias_1h=structure_bias_1h,
+            market_structure_4h=market_structure_4h,
+            structure_bias_4h=structure_bias_4h,
+            market_structure_1d=market_structure_1d,
+            structure_bias_1d=structure_bias_1d,
             
             # NEW: AI Recommendation fields (GPT-4 Enhanced)
             ai_recommendation=ai_recommendation,

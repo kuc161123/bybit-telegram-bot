@@ -605,6 +605,136 @@ class TechnicalAnalysisEngine:
         resistance_levels = resistance_levels[:5]
         
         return support_levels, resistance_levels, major_support, major_resistance
+    
+    def detect_swing_points(self, highs: List[float], lows: List[float], lookback: int = 5) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Detect swing highs and swing lows in price data
+        
+        Args:
+            highs: List of high prices
+            lows: List of low prices
+            lookback: Number of candles to look before and after for pivot detection
+            
+        Returns:
+            Tuple of (swing_highs, swing_lows) where each is a list of dicts with 'index' and 'price'
+        """
+        swing_highs = []
+        swing_lows = []
+        
+        if len(highs) < lookback * 2 + 1:
+            return swing_highs, swing_lows
+        
+        for i in range(lookback, len(highs) - lookback):
+            # Check for swing high
+            is_swing_high = True
+            for j in range(1, lookback + 1):
+                if highs[i] <= highs[i - j] or highs[i] <= highs[i + j]:
+                    is_swing_high = False
+                    break
+            
+            if is_swing_high:
+                swing_highs.append({'index': i, 'price': highs[i]})
+            
+            # Check for swing low
+            is_swing_low = True
+            for j in range(1, lookback + 1):
+                if lows[i] >= lows[i - j] or lows[i] >= lows[i + j]:
+                    is_swing_low = False
+                    break
+            
+            if is_swing_low:
+                swing_lows.append({'index': i, 'price': lows[i]})
+        
+        return swing_highs, swing_lows
+    
+    def analyze_market_structure_timeframe(self, kline_data: List, timeframe: str = "1h") -> Tuple[str, str]:
+        """
+        Analyze market structure for a specific timeframe
+        
+        Args:
+            kline_data: List of kline data [timestamp, open, high, low, close, volume]
+            timeframe: Timeframe identifier (1h, 4h, 1d)
+            
+        Returns:
+            Tuple of (structure_pattern, structure_bias)
+            structure_pattern: "HH-HL", "LH-LL", "Consolidation", etc.
+            structure_bias: "Bullish", "Bearish", "Neutral"
+        """
+        if not kline_data or len(kline_data) < 20:
+            return "Insufficient Data", "Neutral"
+        
+        try:
+            # Extract price data
+            highs = [float(candle[2]) for candle in kline_data]
+            lows = [float(candle[3]) for candle in kline_data]
+            
+            # Adjust lookback based on timeframe
+            lookback_map = {
+                "1h": 5,   # 5 candles for 1-hour
+                "4h": 4,   # 4 candles for 4-hour
+                "1d": 3,   # 3 candles for daily
+                "D": 3     # Alternative daily notation
+            }
+            lookback = lookback_map.get(timeframe, 5)
+            
+            # Detect swing points
+            swing_highs, swing_lows = self.detect_swing_points(highs, lows, lookback)
+            
+            # Need at least 2 swing highs and 2 swing lows for structure analysis
+            if len(swing_highs) < 2 or len(swing_lows) < 2:
+                return "Forming", "Neutral"
+            
+            # Get the last two swing highs and lows
+            last_high = swing_highs[-1]['price']
+            prev_high = swing_highs[-2]['price']
+            last_low = swing_lows[-1]['price']
+            prev_low = swing_lows[-2]['price']
+            
+            # Determine structure pattern
+            higher_high = last_high > prev_high
+            higher_low = last_low > prev_low
+            lower_high = last_high < prev_high
+            lower_low = last_low < prev_low
+            
+            # Classify structure
+            if higher_high and higher_low:
+                structure_pattern = "HH-HL"
+                structure_bias = "Bullish"
+            elif lower_high and lower_low:
+                structure_pattern = "LH-LL"
+                structure_bias = "Bearish"
+            elif higher_high and lower_low:
+                structure_pattern = "Expanding"
+                structure_bias = "Volatile"
+            elif lower_high and higher_low:
+                structure_pattern = "Contracting"
+                structure_bias = "Consolidating"
+            else:
+                # Mixed signals or equal highs/lows
+                structure_pattern = "Consolidation"
+                structure_bias = "Neutral"
+            
+            # Additional confirmation from recent price action
+            recent_closes = [float(candle[4]) for candle in kline_data[-10:]]
+            if recent_closes:
+                trend = (recent_closes[-1] - recent_closes[0]) / recent_closes[0] * 100
+                
+                # Adjust bias based on recent trend
+                if abs(trend) < 1:  # Less than 1% change
+                    structure_bias = "Neutral"
+                elif trend > 5 and structure_bias != "Bearish":
+                    structure_bias = "Strong Bullish"
+                elif trend < -5 and structure_bias != "Bullish":
+                    structure_bias = "Strong Bearish"
+            
+            logger.debug(f"Market structure for {timeframe}: {structure_pattern} ({structure_bias})")
+            logger.debug(f"Swing analysis - HH: {higher_high}, HL: {higher_low}, LH: {lower_high}, LL: {lower_low}")
+            
+            return structure_pattern, structure_bias
+            
+        except Exception as e:
+            logger.error(f"Error analyzing market structure for {timeframe}: {e}")
+            return "Error", "Neutral"
 
 # Global instance
 technical_analysis_engine = TechnicalAnalysisEngine()

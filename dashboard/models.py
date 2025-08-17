@@ -209,6 +209,14 @@ class MarketStatus:
     # NEW: Market Structure
     market_structure: Optional[str] = None  # "HH-HL", "LH-LL", etc.
     structure_bias: Optional[str] = None  # "Bullish", "Bearish", "Neutral"
+    
+    # NEW: Multi-timeframe market structure
+    market_structure_1h: Optional[str] = None  # 1-hour structure pattern
+    structure_bias_1h: Optional[str] = None    # 1-hour structure bias
+    market_structure_4h: Optional[str] = None  # 4-hour structure pattern
+    structure_bias_4h: Optional[str] = None    # 4-hour structure bias
+    market_structure_1d: Optional[str] = None  # Daily structure pattern
+    structure_bias_1d: Optional[str] = None    # Daily structure bias
 
     # NEW: Funding and Open Interest (for perpetuals)
     funding_rate: Optional[float] = None  # Percentage

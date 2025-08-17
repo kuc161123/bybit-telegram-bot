@@ -718,6 +718,14 @@ class DashboardGenerator:
                 # NEW: Market Structure
                 market_structure=getattr(enhanced_status, 'market_structure', None),
                 structure_bias=getattr(enhanced_status, 'structure_bias', None),
+                
+                # NEW: Multi-timeframe market structure
+                market_structure_1h=getattr(enhanced_status, 'market_structure_1h', None),
+                structure_bias_1h=getattr(enhanced_status, 'structure_bias_1h', None),
+                market_structure_4h=getattr(enhanced_status, 'market_structure_4h', None),
+                structure_bias_4h=getattr(enhanced_status, 'structure_bias_4h', None),
+                market_structure_1d=getattr(enhanced_status, 'market_structure_1d', None),
+                structure_bias_1d=getattr(enhanced_status, 'structure_bias_1d', None),
 
                 # NEW: Funding and Open Interest
                 funding_rate=getattr(enhanced_status, 'funding_rate', None),
