@@ -200,7 +200,7 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
             
             # Add structure explanation and recommendation if we have structure data
             if has_structure:
-                explanation = ComponentBuilder._get_structure_explanation(status)
+                explanation = DashboardComponents._get_structure_explanation(status)
                 if explanation:
                     result += f"\n{explanation}\n"
 
