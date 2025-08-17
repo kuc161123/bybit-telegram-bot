@@ -686,19 +686,6 @@ class MarketStatusEngine:
         ai_risk_assessment = None
         ai_confidence = None
         
-        # Enhanced AI trade setup fields
-        ai_entry_zone = None
-        ai_targets = None
-        ai_stop_loss = None
-        ai_risk_reward = None
-        ai_position_size = None
-        ai_time_horizon = None
-        ai_invalidation = None
-        ai_key_signals = None
-        ai_pattern_confluence = None
-        ai_bullish_count = None
-        ai_bearish_count = None
-        
         try:
             # Import AI market analyzer
             from execution.ai_market_analysis import AIMarketAnalyzer
@@ -724,94 +711,6 @@ class MarketStatusEngine:
                     ai_confidence = insight.enhanced_confidence
                     
                     logger.info(f"🤖 AI Analysis: {ai_recommendation} - Confidence: {ai_confidence:.1f}%")
-                    
-                    # Extract detailed trade setup using live data
-                    try:
-                        from execution.ai_reasoning_engine_enhanced import get_enhanced_reasoning_engine
-                        from market_analysis.pattern_recognition import pattern_recognition_engine
-                        
-                        # Get enhanced reasoning engine
-                        enhanced_engine = get_enhanced_reasoning_engine(ai_client)
-                        
-                        # Get pattern analysis for detailed signals
-                        kline_data = {
-                            "5m": [],  # Would be populated from market data if available
-                            "15m": [],
-                            "1h": []
-                        }
-                        pattern_analysis = await pattern_recognition_engine.analyze_patterns(
-                            symbol=symbol,
-                            kline_data=kline_data,
-                            current_price=market_data.current_price,
-                            timeframes=["5m", "15m", "1h"]
-                        )
-                        
-                        # Extract detailed trade setup
-                        trade_setup = enhanced_engine.extract_detailed_trade_setup(
-                            symbol=symbol,
-                            market_data={
-                                'current_price': market_data.current_price,
-                                'volume_ratio': volume_ratio,
-                                'volatility_percentage': volatility_percentage
-                            },
-                            technical_signals={
-                                'support_resistance': {
-                                    'support': support_level,
-                                    'resistance': resistance_level
-                                },
-                                'rsi': {'value': technical_indicators.rsi_value, 'condition': technical_indicators.rsi_condition},
-                                'macd': {'crossover': getattr(technical_indicators, 'macd_crossover', None)},
-                                'moving_averages': {'trend': getattr(technical_indicators, 'ma_trend', None)},
-                                'atr': {'value': getattr(technical_indicators, 'atr_value', market_data.current_price * 0.02)}
-                            },
-                            pattern_analysis=pattern_analysis,
-                            recommendation=ai_recommendation,
-                            risk_assessment=ai_risk_assessment or "MEDIUM",
-                            current_price=market_data.current_price
-                        )
-                        
-                        # Update AI fields with detailed setup
-                        if trade_setup:
-                            ai_entry_zone = trade_setup.get('ai_entry_zone')
-                            ai_targets = trade_setup.get('ai_targets')
-                            ai_stop_loss = trade_setup.get('ai_stop_loss')
-                            ai_risk_reward = trade_setup.get('ai_risk_reward')
-                            ai_position_size = trade_setup.get('ai_position_size')
-                            ai_time_horizon = trade_setup.get('ai_time_horizon')
-                            ai_invalidation = trade_setup.get('ai_invalidation')
-                            ai_key_signals = trade_setup.get('ai_key_signals')
-                            ai_pattern_confluence = trade_setup.get('ai_pattern_confluence')
-                            ai_bullish_count = trade_setup.get('ai_bullish_count')
-                            ai_bearish_count = trade_setup.get('ai_bearish_count')
-                            
-                            logger.info(f"📊 Enhanced trade setup extracted: Entry ${ai_entry_zone}, Targets: {len(ai_targets or [])} levels, R:R {ai_risk_reward}")
-                            
-                            # Record recommendation in backtest tracker
-                            try:
-                                from market_analysis.ai_backtest_tracker import ai_backtest_tracker
-                                
-                                rec_id = await ai_backtest_tracker.record_recommendation(
-                                    symbol=symbol,
-                                    recommendation=ai_recommendation,
-                                    confidence=ai_confidence or 50.0,
-                                    risk_assessment=ai_risk_assessment or "MEDIUM",
-                                    entry_zone=ai_entry_zone,
-                                    targets=ai_targets or [],
-                                    stop_loss=ai_stop_loss,
-                                    current_price=market_data.current_price,
-                                    invalidation=ai_invalidation,
-                                    risk_reward=ai_risk_reward or 0,
-                                    position_size=ai_position_size or "",
-                                    time_horizon=ai_time_horizon or "",
-                                    key_signals=ai_key_signals or [],
-                                    pattern_confluence=ai_pattern_confluence or 0
-                                )
-                                logger.info(f"📝 AI recommendation recorded for backtesting: {rec_id}")
-                            except Exception as e:
-                                logger.debug(f"Could not record recommendation for backtesting: {e}")
-                    
-                    except Exception as e:
-                        logger.debug(f"Could not extract detailed trade setup: {e}")
         except Exception as e:
             logger.debug(f"Could not get AI analysis: {e}")
         
@@ -874,19 +773,6 @@ class MarketStatusEngine:
             ai_reasoning=ai_reasoning,
             ai_risk_assessment=ai_risk_assessment,
             ai_confidence=ai_confidence,
-            
-            # Enhanced AI Trade Setup (Live Data)
-            ai_entry_zone=ai_entry_zone,
-            ai_targets=ai_targets,
-            ai_stop_loss=ai_stop_loss,
-            ai_risk_reward=ai_risk_reward,
-            ai_position_size=ai_position_size,
-            ai_time_horizon=ai_time_horizon,
-            ai_invalidation=ai_invalidation,
-            ai_key_signals=ai_key_signals,
-            ai_pattern_confluence=ai_pattern_confluence,
-            ai_bullish_count=ai_bullish_count,
-            ai_bearish_count=ai_bearish_count,
             
             # Confidence and quality
             confidence=regime_analysis.confidence,

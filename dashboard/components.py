@@ -217,82 +217,42 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
                 oi_emoji = "📈" if status.open_interest_change_24h > 5 else "📉" if status.open_interest_change_24h < -5 else "➖"
                 result += f"{oi_emoji} OI 24h: {'+' if status.open_interest_change_24h > 0 else ''}{status.open_interest_change_24h:.1f}%\n"
 
-            # NEW: Enhanced AI Recommendation with Live Data
+            # NEW: AI Recommendation (GPT-4 Enhanced)
             if status.ai_recommendation:
                 rec_emoji = "🟢" if status.ai_recommendation == "BUY" else "🔴" if status.ai_recommendation == "SELL" else "🟡"
-                
-                # Enhanced display with confidence
-                confidence_str = f" ({status.ai_confidence:.0f}% confidence)" if status.ai_confidence else ""
-                result += f"\n{rec_emoji} <b>AI: {status.ai_recommendation}</b>{confidence_str}"
-                
-                # Risk assessment
+                result += f"\n{rec_emoji} AI: {status.ai_recommendation}"
                 if status.ai_risk_assessment:
                     risk_emoji = "⚠️" if status.ai_risk_assessment == "HIGH" else "⚡" if status.ai_risk_assessment == "MEDIUM" else "✅"
                     result += f" {risk_emoji} {status.ai_risk_assessment} Risk"
                 
-                # Separator for detailed info
-                result += "\n" + "━" * 20 + "\n"
-                
-                # Entry zone with live prices
-                if status.ai_entry_zone and status.current_price > 0:
-                    lower, upper = status.ai_entry_zone
-                    current = status.current_price
+                # OPTIMIZED: Concise AI reasoning - extract key pattern and timeframe only
+                if status.ai_reasoning:
+                    reasoning = status.ai_reasoning
                     
-                    # Show if we're in the entry zone
-                    if lower <= current <= upper:
-                        result += f"📍 <b>Entry Zone:</b> ${lower:,.0f} - ${upper:,.0f} ✅\n"
-                    else:
-                        result += f"📍 <b>Entry Zone:</b> ${lower:,.0f} - ${upper:,.0f}\n"
-                
-                # Targets with live price comparison
-                if status.ai_targets and len(status.ai_targets) > 0:
-                    targets_str = " | ".join([f"${t:,.0f}" for t in status.ai_targets[:3]])  # Show max 3 targets
-                    result += f"🎯 <b>Targets:</b> {targets_str}\n"
-                
-                # Stop loss with risk percentage
-                if status.ai_stop_loss and status.current_price > 0:
-                    risk_pct = abs((status.ai_stop_loss - status.current_price) / status.current_price * 100)
-                    result += f"🛑 <b>Stop Loss:</b> ${status.ai_stop_loss:,.0f} ({risk_pct:.1f}% risk)\n"
-                
-                # Risk/Reward ratio
-                if status.ai_risk_reward:
-                    result += f"⚖️ <b>Risk/Reward:</b> 1:{status.ai_risk_reward:.1f}\n"
-                
-                result += "\n"
-                
-                # Key signals from live data
-                if status.ai_key_signals and len(status.ai_key_signals) > 0:
-                    result += "💡 <b>Key Signals:</b>\n"
-                    for signal in status.ai_key_signals[:4]:  # Show max 4 signals
-                        result += f"  • {signal}\n"
-                    result += "\n"
-                
-                # Pattern confluence with live counts
-                if status.ai_pattern_confluence is not None:
-                    result += f"📊 <b>Pattern Confluence:</b> {status.ai_pattern_confluence:.0f}%\n"
+                    # Extract key pattern (first mentioned pattern)
+                    key_pattern = None
+                    patterns = ["Shooting Star", "Doji", "Hammer", "Hanging Man", "Engulfing", "MACD", "RSI", "Bollinger", "Support", "Resistance"]
+                    for pattern in patterns:
+                        if pattern in reasoning:
+                            key_pattern = pattern
+                            break
                     
-                    if status.ai_bullish_count is not None and status.ai_bearish_count is not None:
-                        bull_emoji = "🟢" if status.ai_bullish_count > status.ai_bearish_count else ""
-                        bear_emoji = "🔴" if status.ai_bearish_count > status.ai_bullish_count else ""
-                        result += f"  • {bull_emoji} {status.ai_bullish_count} Bullish vs {bear_emoji} {status.ai_bearish_count} Bearish\n"
-                    result += "\n"
-                
-                # Time horizon and invalidation
-                if status.ai_time_horizon:
-                    result += f"⏱️ <b>Time Horizon:</b> {status.ai_time_horizon}\n"
-                
-                if status.ai_invalidation and status.current_price > 0:
-                    if status.ai_recommendation == "BUY":
-                        inv_text = f"Break below ${status.ai_invalidation:,.0f}"
-                    elif status.ai_recommendation == "SELL":
-                        inv_text = f"Break above ${status.ai_invalidation:,.0f}"
-                    else:
-                        inv_text = f"${status.ai_invalidation:,.0f}"
-                    result += f"📌 <b>Invalidation:</b> {inv_text}\n"
-                
-                # Position sizing suggestion
-                if status.ai_position_size:
-                    result += f"💰 <b>Position Size:</b> {status.ai_position_size}\n"
+                    # Extract timeframe (look for "1-2 weeks", "few days", etc.)
+                    timeframe = None
+                    import re
+                    timeframe_match = re.search(r'(\d+[-‒–—]\d+\s+(?:days?|weeks?|months?)|\d+\s+(?:days?|weeks?|months?)|few\s+(?:days?|weeks?))', reasoning.lower())
+                    if timeframe_match:
+                        timeframe = timeframe_match.group(1).title()
+                    
+                    # Concise summary
+                    summary_parts = []
+                    if key_pattern:
+                        summary_parts.append(f"{key_pattern}")
+                    if timeframe:
+                        summary_parts.append(f"{timeframe}")
+                    
+                    if summary_parts:
+                        result += f"\n💡 {' • '.join(summary_parts)}"
 
             # Confidence indicator (enhanced if AI boosted)
             conf_label = "AI Confidence" if status.ai_confidence and status.ai_confidence > status.confidence else "Confidence"
@@ -467,16 +427,6 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
             
         except Exception as e:
             logger.error(f"Error generating trade recommendations: {e}")
-            return ""
-    
-    @staticmethod
-    def ai_backtest_stats() -> str:
-        """Generate AI backtest statistics display"""
-        try:
-            from market_analysis.ai_backtest_tracker import ai_backtest_tracker
-            return ai_backtest_tracker.format_statistics_for_display()
-        except Exception as e:
-            logger.debug(f"Could not get AI backtest stats: {e}")
             return ""
     
     @staticmethod
