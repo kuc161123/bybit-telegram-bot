@@ -3,13 +3,30 @@ from execution.mirror_position_sync import start_mirror_position_sync
 """
 Helper functions for properly initializing background tasks in the trading bot.
 Add this to your bot initialization to fix the "no running event loop" errors.
+FIXED: Added proper thread pool resource management with cleanup
 """
 import asyncio
 import logging
 import os
 import time
+import atexit
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
+
+# FIXED: Global thread pool executor with proper resource management
+_global_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="bot-worker")
+
+def cleanup_executor():
+    """Cleanup function for thread pool executor"""
+    try:
+        _global_executor.shutdown(wait=True, cancel_futures=True)
+        logger.info("✅ Thread pool executor cleaned up successfully")
+    except Exception as e:
+        logger.error(f"Error cleaning up thread pool executor: {e}")
+
+# Register cleanup function to run on exit
+atexit.register(cleanup_executor)
 
 # Import robust_persistence for monitor sync
 from utils.robust_persistence import robust_persistence
@@ -77,12 +94,12 @@ async def enhanced_tp_sl_monitoring_loop():
                         with open('bybit_bot_dashboard_v4.1_enhanced.pkl', 'rb') as f:
                             return pickle.load(f)
                     
-                    # Create a new executor for this operation
-                    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    # FIXED: Use global executor pool instead of creating new one
                     try:
-                        data = await loop.run_in_executor(executor, load_pickle_data)
-                    finally:
-                        executor.shutdown(wait=False)  # Clean shutdown
+                        data = await loop.run_in_executor(_global_executor, load_pickle_data)
+                    except Exception as e:
+                        logger.error(f"Error loading pickle data: {e}")
+                        raise
                     
                     persisted_monitors = data.get('bot_data', {}).get('enhanced_tp_sl_monitors', {})
                     logger.info(f"🔍 Found {len(persisted_monitors)} persisted monitors")
@@ -130,11 +147,12 @@ async def enhanced_tp_sl_monitoring_loop():
                             return processed_monitors
                         
                         # Process monitor data in thread pool
-                        data_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                        # FIXED: Use global executor pool
                         try:
-                            processed_monitors = await loop.run_in_executor(data_executor, process_monitor_data, persisted_monitors)
-                        finally:
-                            data_executor.shutdown(wait=False)
+                            processed_monitors = await loop.run_in_executor(_global_executor, process_monitor_data, persisted_monitors)
+                        except Exception as e:
+                            logger.error(f"Error processing monitor data: {e}")
+                            processed_monitors = persisted_monitors
                         
                         # Apply the processed monitors to the manager
                         enhanced_tp_sl_manager.position_monitors.update(processed_monitors)
@@ -189,11 +207,12 @@ async def enhanced_tp_sl_monitoring_loop():
                                 'file_size_mb': len(str(data)) / (1024 * 1024)  # Approximate size
                             }
                         
-                        stats_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                        # FIXED: Use global executor pool
                         try:
-                            stats = await loop.run_in_executor(stats_executor, get_persistence_stats)
-                        finally:
-                            stats_executor.shutdown(wait=False)
+                            stats = await loop.run_in_executor(_global_executor, get_persistence_stats)
+                        except Exception as e:
+                            logger.error(f"Error getting persistence stats: {e}")
+                            stats = {}
                         logger.info(f"📊 Persistence stats: {stats.get('total_monitors')} monitors, {stats.get('file_size_mb'):.2f}MB file")
                     except Exception as stats_error:
                         logger.debug(f"Could not calculate persistence stats: {stats_error}")

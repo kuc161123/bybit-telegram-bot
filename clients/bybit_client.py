@@ -108,14 +108,14 @@ def create_bybit_client():
         # Try adding timeout parameter (widely supported)
         try:
             optional_params["timeout"] = BYBIT_TIMEOUT_SECONDS
-        except:
-            logger.warning("Timeout parameter not supported in this pybit version")
+        except Exception as e:
+            logger.warning(f"Timeout parameter not supported in this pybit version: {e}")
 
         # FIXED: Try adding recv_window parameter with larger value
         try:
             optional_params["recv_window"] = 20000  # Increased from 5000 to 20000
-        except:
-            logger.warning("recv_window parameter not supported in this pybit version")
+        except Exception as e:
+            logger.warning(f"recv_window parameter not supported in this pybit version: {e}")
 
         # Combine parameters
         client_params = {**basic_params, **optional_params}

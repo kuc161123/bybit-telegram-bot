@@ -201,8 +201,8 @@ async def api_call_with_retry(api_func, max_retries=5, initial_delay=1.5, backof
                 original_recv_window = getattr(bybit_client, 'recv_window', 5000)
                 try:
                     bybit_client.recv_window = original_recv_window + recv_window_adjustment
-                except:
-                    logger.debug("Could not adjust recv_window on client")
+                except Exception as e:
+                    logger.debug(f"Could not adjust recv_window on client: {e}")
 
             # Execute API call with timeout
             loop = asyncio.get_event_loop()
@@ -246,8 +246,9 @@ async def api_call_with_retry(api_func, max_retries=5, initial_delay=1.5, backof
                             # Add buffer to recv_window
                             recv_window_adjustment = time_diff + 5000
                             logger.info(f"Calculated time difference: {time_diff}ms, adjusting recv_window by {recv_window_adjustment}ms")
-                except:
+                except Exception as e:
                     # Fallback: just increase recv_window progressively
+                    logger.debug(f"Time sync calculation failed: {e}")
                     recv_window_adjustment += 5000
                     logger.info(f"Increasing recv_window adjustment to {recv_window_adjustment}ms")
 
@@ -336,7 +337,8 @@ async def get_positions_and_orders_batch() -> Tuple[List[Dict], List[Dict], List
         try:
             from execution.mirror_trader import bybit_client_2, ENABLE_MIRROR_TRADING
             has_mirror = ENABLE_MIRROR_TRADING and bybit_client_2 is not None
-        except:
+        except ImportError as e:
+            logger.debug(f"Mirror trading not available: {e}")
             has_mirror = False
 
         # Prepare tasks

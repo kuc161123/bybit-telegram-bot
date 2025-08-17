@@ -2627,7 +2627,8 @@ class EnhancedTPSLManager:
                 return  # Exit early since position is fully closed
 
             # TP1-ONLY: Fallback when position reaches 85% fill (should use TP1-only closure)
-            elif fill_percentage >= 85:
+            # FIXED: Check phase to prevent false TP1 detection during BUILDING
+            elif fill_percentage >= 85 and monitor_data.get("phase", "BUILDING") != "BUILDING":
                 logger.info(f"🎯 TP1-ONLY FALLBACK: Fill percentage {fill_percentage:.2f}% >= 85%, triggering immediate closure")
                 await self._handle_tp1_final_closure(monitor_data)
             # Legacy fallback path (should not be reached in TP1-only strategy)
