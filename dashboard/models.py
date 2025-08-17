@@ -230,6 +230,19 @@ class MarketStatus:
     ai_reasoning: Optional[str] = None  # Brief explanation
     ai_risk_assessment: Optional[str] = None  # "LOW", "MEDIUM", "HIGH"
     ai_confidence: Optional[float] = None  # Enhanced confidence from AI
+    
+    # Enhanced AI Trade Setup (Live Data)
+    ai_entry_zone: Optional[Tuple[float, float]] = None  # (lower, upper) entry prices
+    ai_targets: Optional[List[float]] = None  # Multiple TP levels
+    ai_stop_loss: Optional[float] = None  # Suggested stop loss
+    ai_risk_reward: Optional[float] = None  # Risk/reward ratio
+    ai_position_size: Optional[str] = None  # Position sizing suggestion
+    ai_time_horizon: Optional[str] = None  # Expected duration
+    ai_invalidation: Optional[float] = None  # Key invalidation level
+    ai_key_signals: Optional[List[str]] = None  # Top bullish/bearish signals
+    ai_pattern_confluence: Optional[float] = None  # Pattern confluence percentage
+    ai_bullish_count: Optional[int] = None  # Number of bullish patterns
+    ai_bearish_count: Optional[int] = None  # Number of bearish patterns
 
     # Confidence and quality
     confidence: float = 0.0  # 0-100

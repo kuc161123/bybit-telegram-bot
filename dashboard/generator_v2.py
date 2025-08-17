@@ -107,6 +107,12 @@ class DashboardGenerator:
                 if recommendations:
                     sections.append(recommendations)
                     sections.append("")
+            
+            # AI Backtest Statistics
+            ai_backtest_stats = self.components.ai_backtest_stats()
+            if ai_backtest_stats:
+                sections.append(ai_backtest_stats)
+                sections.append("")
 
             # Monitor status
             sections.append(self.components.monitor_status(
