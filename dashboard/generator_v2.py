@@ -714,6 +714,8 @@ class DashboardGenerator:
                 # NEW: Volume Profile
                 volume_profile=getattr(enhanced_status, 'volume_profile', None),
                 volume_ratio=getattr(enhanced_status, 'volume_ratio', None),
+                volume_trend=getattr(enhanced_status, 'volume_trend', None),
+                volume_change_pct=getattr(enhanced_status, 'volume_change_pct', None),
 
                 # NEW: Market Structure
                 market_structure=getattr(enhanced_status, 'market_structure', None),

@@ -205,6 +205,8 @@ class MarketStatus:
     # NEW: Volume Profile
     volume_profile: Optional[str] = None  # "High", "Normal", "Low"
     volume_ratio: Optional[float] = None  # Multiplier vs average
+    volume_trend: Optional[str] = None  # "increasing", "decreasing", "stable"
+    volume_change_pct: Optional[float] = None  # % change vs recent average
 
     # NEW: Market Structure
     market_structure: Optional[str] = None  # "HH-HL", "LH-LL", etc.

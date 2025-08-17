@@ -45,6 +45,8 @@ class MarketData:
     funding_rate: Optional[float] = None
     open_interest_change_24h: Optional[float] = None  # NEW: 24h OI change percentage
     volume_ratio: Optional[float] = None  # NEW: Current volume vs average
+    volume_trend: Optional[str] = None  # NEW: "increasing", "decreasing", "stable"
+    volume_change_pct: Optional[float] = None  # NEW: % change vs recent average
     oi_data_confidence: Optional[str] = None  # NEW: OI data quality indicator
     
     # Metadata
@@ -130,23 +132,61 @@ class MarketDataCollector:
             open_interest_change_24h = additional_data.get("open_interest_change_24h")
             oi_data_confidence = additional_data.get("oi_data_confidence")
             
-            # Calculate volume ratio using 30-day average for more accurate baseline
+            # Calculate volume ratio and trend using multiple timeframes
             volume_ratio = None
+            volume_trend = None
+            volume_change_pct = None
+            
             if kline_1d and len(kline_1d) >= 15:  # At least 15 days of data
                 # Extract 24h volume from daily kline data
                 daily_volumes = [float(candle[5]) for candle in kline_1d]  # Volume is index 5
-                # Use available data up to 30 days
+                
+                # Calculate 30-day average for ratio
                 sample_size = min(len(daily_volumes), 30)
                 avg_daily_volume = sum(daily_volumes[:sample_size]) / sample_size
                 if avg_daily_volume > 0:
                     volume_ratio = volume_24h / avg_daily_volume
                     logger.debug(f"Volume ratio for {symbol}: {volume_ratio:.2f}x (current: {volume_24h:,.0f}, 30d avg: {avg_daily_volume:,.0f})")
+                
+                # Calculate volume trend (compare recent 3 days vs previous 7 days)
+                if len(daily_volumes) >= 7:
+                    recent_avg = sum(daily_volumes[:3]) / 3  # Last 3 days average
+                    previous_avg = sum(daily_volumes[3:10]) / min(7, len(daily_volumes[3:10]))  # Previous 7 days
+                    
+                    if previous_avg > 0:
+                        volume_change_pct = ((recent_avg - previous_avg) / previous_avg) * 100
+                        
+                        # Determine trend based on percentage change
+                        if volume_change_pct > 20:
+                            volume_trend = "increasing"
+                        elif volume_change_pct < -20:
+                            volume_trend = "decreasing"
+                        else:
+                            volume_trend = "stable"
+                        
+                        logger.debug(f"Volume trend for {symbol}: {volume_trend} ({volume_change_pct:+.1f}% change)")
+                
             elif kline_1h and len(kline_1h) >= 20:
                 # Fallback to hourly data if daily data insufficient
                 volumes = [float(candle[5]) for candle in kline_1h]
                 avg_volume = sum(volumes[-20:]) / 20
                 if avg_volume > 0:
                     volume_ratio = volume_24h / avg_volume
+                
+                # Calculate hourly volume trend (last 6h vs previous 18h)
+                if len(volumes) >= 24:
+                    recent_avg = sum(volumes[-6:]) / 6
+                    previous_avg = sum(volumes[-24:-6]) / 18
+                    
+                    if previous_avg > 0:
+                        volume_change_pct = ((recent_avg - previous_avg) / previous_avg) * 100
+                        
+                        if volume_change_pct > 30:
+                            volume_trend = "increasing"
+                        elif volume_change_pct < -30:
+                            volume_trend = "decreasing"
+                        else:
+                            volume_trend = "stable"
             
             # Calculate data quality score
             data_quality = self._calculate_data_quality(
@@ -178,6 +218,8 @@ class MarketDataCollector:
                 funding_rate=funding_rate,
                 open_interest_change_24h=open_interest_change_24h,
                 volume_ratio=volume_ratio,
+                volume_trend=volume_trend,
+                volume_change_pct=volume_change_pct,
                 oi_data_confidence=oi_data_confidence,
                 
                 # Metadata

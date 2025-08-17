@@ -144,12 +144,29 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
             if status.support_level and status.resistance_level:
                 result += f"📊 S/R: ${status.support_level:,.2f} / ${status.resistance_level:,.2f}\n"
 
-            # NEW: Volume Profile
+            # NEW: Volume Profile with trend
             if status.volume_profile:
                 volume_emoji = "📈" if status.volume_profile == "High" else "📉" if status.volume_profile == "Low" else "📊"
                 result += f"{volume_emoji} Volume: {status.volume_profile}"
+                
+                # Add volume ratio
                 if status.volume_ratio:
                     result += f" ({status.volume_ratio:.1f}x avg)"
+                
+                # Add volume trend indicator
+                if hasattr(status, 'volume_trend') and status.volume_trend:
+                    if status.volume_trend == "increasing":
+                        trend_indicator = " ↗️"
+                        if hasattr(status, 'volume_change_pct') and status.volume_change_pct:
+                            trend_indicator += f" +{abs(status.volume_change_pct):.0f}%"
+                    elif status.volume_trend == "decreasing":
+                        trend_indicator = " ↘️"
+                        if hasattr(status, 'volume_change_pct') and status.volume_change_pct:
+                            trend_indicator += f" -{abs(status.volume_change_pct):.0f}%"
+                    else:  # stable
+                        trend_indicator = " →"
+                    result += trend_indicator
+                
                 result += "\n"
 
             # NEW: Market Structure - Multi-timeframe display

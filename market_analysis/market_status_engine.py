@@ -70,6 +70,8 @@ class EnhancedMarketStatus:
     resistance_level: Optional[float] = None
     volume_profile: Optional[str] = None  # "High", "Normal", "Low"
     volume_ratio: Optional[float] = None  # Multiplier vs average
+    volume_trend: Optional[str] = None  # "increasing", "decreasing", "stable"
+    volume_change_pct: Optional[float] = None  # % change vs recent average
     market_structure: Optional[str] = None  # "HH-HL", "LH-LL", etc.
     structure_bias: Optional[str] = None  # "Bullish", "Bearish", "Neutral"
     funding_rate: Optional[float] = None  # Percentage
@@ -621,9 +623,12 @@ class MarketStatusEngine:
         support_level = technical_indicators.major_support if hasattr(technical_indicators, 'major_support') else None
         resistance_level = technical_indicators.major_resistance if hasattr(technical_indicators, 'major_resistance') else None
         
-        # Determine volume profile
+        # Determine volume profile and trend
         volume_profile = None
         volume_ratio = market_data.volume_ratio if hasattr(market_data, 'volume_ratio') else technical_indicators.volume_ratio
+        volume_trend = market_data.volume_trend if hasattr(market_data, 'volume_trend') else None
+        volume_change_pct = market_data.volume_change_pct if hasattr(market_data, 'volume_change_pct') else None
+        
         if volume_ratio:
             if volume_ratio > 1.5:
                 volume_profile = "High"
@@ -747,6 +752,8 @@ class MarketStatusEngine:
             resistance_level=resistance_level,
             volume_profile=volume_profile,
             volume_ratio=volume_ratio,
+            volume_trend=volume_trend,
+            volume_change_pct=volume_change_pct,
             market_structure=market_structure,
             structure_bias=structure_bias,
             funding_rate=market_data.funding_rate,
