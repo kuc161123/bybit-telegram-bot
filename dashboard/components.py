@@ -121,23 +121,32 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
     @staticmethod
     def market_status(status: MarketStatus) -> str:
         """Generate enhanced market status section"""
+        import html
         symbol_str = f" ({status.primary_symbol})" if status.primary_symbol else ""
 
         # Enhanced display with additional metrics
         result = f"<b>🌍 MARKET STATUS</b>{symbol_str}\n"
 
-        # Core metrics with scores
-        result += f"{status.sentiment_emoji} Sentiment: {status.market_sentiment} ({status.sentiment_score:.0f}/100)\n"
-        result += f"{status.volatility_emoji} Volatility: {status.volatility}"
+        # Core metrics with scores - escape HTML special characters in text fields
+        sentiment_text = html.escape(str(status.market_sentiment)) if status.market_sentiment else "Unknown"
+        result += f"{status.sentiment_emoji} Sentiment: {sentiment_text} ({status.sentiment_score:.0f}/100)\n"
+        
+        volatility_text = html.escape(str(status.volatility)) if status.volatility else "Unknown"
+        result += f"{status.volatility_emoji} Volatility: {volatility_text}"
         if status.volatility_percentage:
             result += f" ({status.volatility_percentage:.1f}%)"
         result += "\n"
-        result += f"{status.trend_emoji} Trend: {status.trend}\n"
-        result += f"{status.momentum_emoji} Momentum: {status.momentum}\n"
+        
+        trend_text = html.escape(str(status.trend)) if status.trend else "Unknown"
+        result += f"{status.trend_emoji} Trend: {trend_text}\n"
+        
+        momentum_text = html.escape(str(status.momentum)) if status.momentum else "Unknown"
+        result += f"{status.momentum_emoji} Momentum: {momentum_text}\n"
 
         # Enhanced information if available
         if status.is_enhanced:
-            result += f"\n🔍 Regime: {status.market_regime}\n"
+            regime_text = html.escape(str(status.market_regime)) if status.market_regime else "Unknown"
+            result += f"\n🔍 Regime: {regime_text}\n"
 
             # Price information if available
             if status.current_price > 0:
@@ -176,7 +185,8 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
             if status.market_structure:
                 # Display single structure for backward compatibility
                 structure_emoji = "🔺" if status.structure_bias == "Bullish" else "🔻" if status.structure_bias == "Bearish" else "⚖️"
-                result += f"{structure_emoji} Structure: {status.market_structure}\n"
+                structure_text = html.escape(str(status.market_structure))
+                result += f"{structure_emoji} Structure: {structure_text}\n"
             
             # Display multi-timeframe structures if available
             has_structure = False
@@ -184,19 +194,22 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
                 has_structure = True
                 # 1-hour structure
                 emoji_1h = "🔺" if "Bullish" in str(status.structure_bias_1h) else "🔻" if "Bearish" in str(status.structure_bias_1h) else "⚖️"
-                result += f"{emoji_1h} Structure (1h): {status.market_structure_1h}\n"
+                structure_1h_text = html.escape(str(status.market_structure_1h))
+                result += f"{emoji_1h} Structure (1h): {structure_1h_text}\n"
                 
             if hasattr(status, 'market_structure_4h') and status.market_structure_4h:
                 has_structure = True
                 # 4-hour structure
                 emoji_4h = "🔺" if "Bullish" in str(status.structure_bias_4h) else "🔻" if "Bearish" in str(status.structure_bias_4h) else "⚖️"
-                result += f"{emoji_4h} Structure (4h): {status.market_structure_4h}\n"
+                structure_4h_text = html.escape(str(status.market_structure_4h))
+                result += f"{emoji_4h} Structure (4h): {structure_4h_text}\n"
                 
             if hasattr(status, 'market_structure_1d') and status.market_structure_1d:
                 has_structure = True
                 # Daily structure
                 emoji_1d = "🔺" if "Bullish" in str(status.structure_bias_1d) else "🔻" if "Bearish" in str(status.structure_bias_1d) else "⚖️"
-                result += f"{emoji_1d} Structure (D): {status.market_structure_1d}\n"
+                structure_1d_text = html.escape(str(status.market_structure_1d))
+                result += f"{emoji_1d} Structure (D): {structure_1d_text}\n"
             
             # Add structure explanation and recommendation if we have structure data
             if has_structure:
@@ -209,7 +222,8 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
                 funding_emoji = "💚" if status.funding_rate < -0.01 else "💛" if abs(status.funding_rate) <= 0.01 else "❤️"
                 result += f"{funding_emoji} Funding: {status.funding_rate:.3f}%"
                 if status.funding_bias:
-                    result += f" ({status.funding_bias})"
+                    bias_text = html.escape(str(status.funding_bias))
+                    result += f" ({bias_text})"
                 result += "\n"
 
             # NEW: Open Interest Change
@@ -226,12 +240,14 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
                 if status.ai_confidence:
                     confidence_str = f" ({status.ai_confidence:.0f}%)"
                 
-                result += f"\n{rec_emoji} <b>AI Signal: {status.ai_recommendation}</b>{confidence_str}"
+                ai_rec_text = html.escape(str(status.ai_recommendation))
+                result += f"\n{rec_emoji} <b>AI Signal: {ai_rec_text}</b>{confidence_str}"
                 
                 # Risk assessment on same line for compactness
                 if status.ai_risk_assessment:
                     risk_emoji = "⚠️" if status.ai_risk_assessment == "HIGH" else "⚡" if status.ai_risk_assessment == "MEDIUM" else "✅"
-                    result += f" {risk_emoji} {status.ai_risk_assessment} Risk"
+                    risk_text = html.escape(str(status.ai_risk_assessment))
+                    result += f" {risk_emoji} {risk_text} Risk"
                 
                 # Extract key insights from reasoning
                 if status.ai_reasoning:
