@@ -123,6 +123,9 @@ MONITOR_CLEANUP_INTERVAL_SECONDS = int(os.getenv("MONITOR_CLEANUP_INTERVAL_SECON
 ENABLE_PERIODIC_MONITOR_CLEANUP = os.getenv("ENABLE_PERIODIC_MONITOR_CLEANUP", "true").lower() == "true"
 POSITION_MONITOR_LOG_INTERVAL = int(os.getenv("POSITION_MONITOR_LOG_INTERVAL", "30"))  # Increased to reduce log spam
 
+# Dashboard auto-refresh after alerts
+DASHBOARD_REFRESH_DELAY_AFTER_ALERT = int(os.getenv("DASHBOARD_REFRESH_DELAY_AFTER_ALERT", "3"))  # Delay in seconds before refreshing dashboard after alert
+
 # --- ENHANCED RATE LIMITING SETTINGS ---
 API_RATE_LIMIT_CALLS_PER_SECOND = float(os.getenv("API_RATE_LIMIT_CALLS_PER_SECOND", "5"))  # Reduced from 8
 API_RATE_LIMIT_BURST = int(os.getenv("API_RATE_LIMIT_BURST", "10"))  # Reduced from 15

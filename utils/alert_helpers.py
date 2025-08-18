@@ -25,6 +25,58 @@ def set_application(app):
     global _application
     _application = app
 
+async def _auto_refresh_dashboard_after_alert(chat_id: int, alert_type: str = None):
+    """
+    Automatically refresh dashboard after sending an alert
+    This gives users an up-to-date view when they open the chat
+    
+    Args:
+        chat_id: Chat ID to refresh dashboard for
+        alert_type: Type of alert that was sent (for context)
+    """
+    try:
+        # Get configurable delay from settings
+        try:
+            from config.settings import DASHBOARD_REFRESH_DELAY_AFTER_ALERT
+            delay = DASHBOARD_REFRESH_DELAY_AFTER_ALERT
+        except ImportError:
+            # Default delay of 2 seconds if not configured
+            delay = 2
+        
+        # Wait briefly for position updates to complete
+        await asyncio.sleep(delay)
+        
+        logger.info(f"🔄 Auto-refreshing dashboard after {alert_type or 'alert'} for chat {chat_id}")
+        
+        # Import dashboard handler
+        from handlers.dashboard_callbacks import send_dashboard_message
+        
+        # Get bot data and chat data for the dashboard
+        global _application
+        if _application and hasattr(_application, 'bot_data'):
+            bot_data = _application.bot_data
+            chat_data = _application.chat_data.get(chat_id, {})
+            
+            # Send refreshed dashboard
+            await send_dashboard_message(
+                _application.bot,
+                chat_id,
+                bot_data,
+                chat_data,
+                force_refresh=True  # Force refresh to get latest data
+            )
+            
+            logger.info(f"✅ Dashboard auto-refreshed successfully for chat {chat_id}")
+        else:
+            logger.debug(f"Application not available for dashboard refresh")
+            
+    except ImportError as e:
+        logger.debug(f"Dashboard refresh not available: {e}")
+    except Exception as e:
+        # Don't fail the alert if dashboard refresh fails
+        logger.debug(f"Could not auto-refresh dashboard: {e}")
+        # This is non-critical, so we just log and continue
+
 # Simple alert function for enhanced TP/SL system
 async def send_simple_alert(chat_id: int, message: str, alert_type: str = None) -> bool:
     """
@@ -93,6 +145,10 @@ async def send_simple_alert(chat_id: int, message: str, alert_type: str = None) 
                 )
 
                 logger.info(f"✅ Enhanced TP/SL alert sent: {alert_type or 'general'} to chat_id: {chat_id}")
+                
+                # Auto-refresh dashboard after alert
+                await _auto_refresh_dashboard_after_alert(chat_id, alert_type)
+                
                 return True
 
             except (TelegramError, asyncio.TimeoutError) as e:
