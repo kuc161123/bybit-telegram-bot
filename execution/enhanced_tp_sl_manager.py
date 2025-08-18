@@ -2365,8 +2365,19 @@ class EnhancedTPSLManager:
             monitor_data["last_check"] = time.time()
 
         except Exception as e:
+            # Extract symbol and side from monitor_data if available, otherwise use function parameters
+            try:
+                error_symbol = monitor_data.get("symbol", symbol) if monitor_data else symbol
+                error_side = monitor_data.get("side", side) if monitor_data else side
+                error_account = monitor_data.get("account_type", account_type) if monitor_data else account_type
+            except:
+                # If even accessing monitor_data fails, use function parameters
+                error_symbol = symbol
+                error_side = side
+                error_account = account_type
+            
             # Use error recovery system for monitoring errors
-            await self._handle_monitor_error(symbol, side, e, account_type)
+            await self._handle_monitor_error(error_symbol, error_side, e, error_account)
 
     async def _determine_closure_reason(self, monitor_data: Dict, symbol: str, side: str, account_type: str) -> str:
         """
@@ -7011,12 +7022,22 @@ All take profit targets have been achieved! 🎯"""
         Verify that tracked orders still exist and sync with exchange state
         """
         try:
-            account_type = monitor_data.get("account_type", "main")
-            monitor_key = f"{symbol}_{side}_{account_type}"
-            if monitor_key not in self.position_monitors:
+            # First determine the monitor key - assume main account if not found
+            monitor_key_main = f"{symbol}_{side}_main"
+            monitor_key_mirror = f"{symbol}_{side}_mirror"
+            
+            # Check which monitor exists
+            if monitor_key_main in self.position_monitors:
+                monitor_key = monitor_key_main
+                monitor_data = self.position_monitors[monitor_key]
+            elif monitor_key_mirror in self.position_monitors:
+                monitor_key = monitor_key_mirror
+                monitor_data = self.position_monitors[monitor_key]
+            else:
+                # No monitor found
                 return
-
-            monitor_data = self.position_monitors[monitor_key]
+            
+            account_type = monitor_data.get("account_type", "main")
 
             # Get current open orders
             open_orders = await get_open_orders(symbol)
