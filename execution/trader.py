@@ -636,7 +636,7 @@ class TradeExecutor:
                         "qty": str(market_qty),
                         "side": side
                     }
-                    summary['market_orders'].append({
+                    execution_data['market_orders'].append({
                         'id': order_id,
                         'qty': str(market_qty),
                         'status': 'placed'
@@ -645,7 +645,7 @@ class TradeExecutor:
                     error_msg = f"Failed to place market order"
                     self.logger.error(error_msg)
                     errors.append(error_msg)
-                    summary['main_errors'].append(error_msg)
+                    execution_data['main_errors'].append(error_msg)
             
             # Now place all 3 limit orders
             for i, limit_price in enumerate(limit_prices):
@@ -680,7 +680,7 @@ class TradeExecutor:
                             "qty": order_qty  # FIXED: Use the actual weighted quantity
                         }
                         self.logger.info(f"✅ Limit order {i+1} placed: {order_id}")
-                        summary['limit_orders'].append({
+                        execution_data['limit_orders'].append({
                             'id': order_id,
                             'price': str(limit_price),
                             'qty': str(order_qty),
@@ -690,7 +690,7 @@ class TradeExecutor:
                         error_msg = f"Failed to place limit order {i+1}"
                         self.logger.error(error_msg)
                         errors.append(error_msg)
-                        summary['main_errors'].append(error_msg)
+                        execution_data['main_errors'].append(error_msg)
 
 
             # MIRROR TRADING: Place orders on mirror account
@@ -714,7 +714,7 @@ class TradeExecutor:
                             mirror_order_id = mirror_result.get("orderId", "")
                             self.logger.info(f"✅ MIRROR: Market order placed: {mirror_order_id[:8]}...")
                             execution_data['mirror_orders'].append(mirror_order_id)
-                            summary['mirror_orders'].append({
+                            execution_data['mirror_orders'].append({
                                 'id': mirror_order_id,
                                 'type': 'market',
                                 'qty': str(mirror_market_qty),
@@ -724,12 +724,12 @@ class TradeExecutor:
                             error_msg = "Mirror market order failed"
                             self.logger.error(f"❌ MIRROR: {error_msg}")
                             mirror_results["errors"].append(error_msg)
-                            summary['mirror_errors'].append(error_msg)
+                            execution_data['mirror_errors'].append(error_msg)
                     except Exception as e:
                         error_msg = f"Mirror market order error: {str(e)}"
                         self.logger.error(f"❌ MIRROR: {error_msg}")
                         mirror_results["errors"].append(error_msg)
-                        summary['mirror_errors'].append(error_msg)
+                        execution_data['mirror_errors'].append(error_msg)
                 
                 # Place all 3 mirror limit orders
                 for i, limit_price in enumerate(limit_prices):
@@ -752,7 +752,7 @@ class TradeExecutor:
                                 mirror_results["limits"].append({"order": i+1, "id": mirror_order_id, "success": True, "type": "Limit"})
                                 self.logger.info(f"✅ MIRROR: Limit order {i+1} placed: {mirror_order_id[:8]}...")
                                 execution_data['mirror_orders'].append(mirror_order_id)
-                                summary['mirror_orders'].append({
+                                execution_data['mirror_orders'].append({
                                     'id': mirror_order_id,
                                     'type': 'limit',
                                     'price': str(limit_price),
@@ -764,13 +764,13 @@ class TradeExecutor:
                                 self.logger.error(f"❌ MIRROR: {error_msg}")
                                 mirror_results["limits"].append({"order": i+1, "success": False, "type": "Limit"})
                                 mirror_results["errors"].append(error_msg)
-                                summary['mirror_errors'].append(error_msg)
+                                execution_data['mirror_errors'].append(error_msg)
                         except Exception as e:
                             error_msg = f"Mirror limit order {i+1} error: {str(e)}"
                             self.logger.error(f"❌ MIRROR: {error_msg}")
                             mirror_results["limits"].append({"order": i+1, "success": False, "type": "Limit"})
                             mirror_results["errors"].append(error_msg)
-                            summary['mirror_errors'].append(error_msg)
+                            execution_data['mirror_errors'].append(error_msg)
 
             chat_data[LIMIT_ORDER_IDS] = limit_order_ids
 
