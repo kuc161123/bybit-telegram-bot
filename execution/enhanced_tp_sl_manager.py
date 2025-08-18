@@ -8185,6 +8185,28 @@ All take profit targets have been achieved! 🎯"""
                 duration_text = f"{hours}h {mins}m"
 
             # Get final position info for P&L and exit price
+            # First check if we tracked the exit price from TP/SL fills
+            tracked_exit_price = None
+            closure_reason = monitor_data.get("closure_reason", "unknown")
+            
+            # Check for tracked exit prices from our monitoring
+            if monitor_data.get("tp_hit") or monitor_data.get("all_tps_filled"):
+                # TP was hit - get the TP price that was filled
+                tp_orders = self._ensure_tp_orders_dict(monitor_data)
+                for tp_id, tp_data in tp_orders.items():
+                    if isinstance(tp_data, dict) and tp_data.get("status") == "FILLED":
+                        tracked_exit_price = Decimal(str(tp_data.get("price", 0)))
+                        if tracked_exit_price > 0:
+                            logger.info(f"📊 Using tracked TP exit price: ${tracked_exit_price}")
+                            break
+            elif monitor_data.get("sl_hit"):
+                # SL was hit - use the SL price
+                if monitor_data.get("sl_order"):
+                    tracked_exit_price = Decimal(str(monitor_data["sl_order"].get("price", 0)))
+                    if tracked_exit_price > 0:
+                        logger.info(f"📊 Using tracked SL exit price: ${tracked_exit_price}")
+            
+            # Try to get position info for open positions
             positions = await get_position_info(symbol)
             position = None
             if positions:
@@ -8194,13 +8216,20 @@ All take profit targets have been achieved! 🎯"""
                         break
 
             if position:
+                # Position still open (partially filled)
                 pnl = Decimal(str(position.get("unrealisedPnl", "0")))
                 exit_price = Decimal(str(position.get("markPrice", entry_price)))
                 realized_pnl = Decimal(str(position.get("realizedPnl", "0")))
             else:
-                # Position fully closed - use last known price
-                current_price = await get_current_price(symbol)
-                exit_price = Decimal(str(current_price)) if current_price else entry_price_decimal
+                # Position fully closed - use tracked exit price or current market price
+                if tracked_exit_price and tracked_exit_price > 0:
+                    exit_price = tracked_exit_price
+                    logger.info(f"✅ Using tracked exit price for closed position: ${exit_price}")
+                else:
+                    # Fallback to current market price
+                    current_price = await get_current_price(symbol)
+                    exit_price = Decimal(str(current_price)) if current_price else entry_price_decimal
+                    logger.info(f"📈 Using current market price for closed position: ${exit_price}")
 
                 # Calculate final P&L (all values are now Decimal)
                 if side == "Buy":
@@ -8240,15 +8269,34 @@ All take profit targets have been achieved! 🎯"""
                 pnl_emoji = "⚪"
                 result_text = "BREAKEVEN"
 
-            # Get TP fill summary
+            # Get TP fill summary and determine closure reason for display
             tp_orders = self._ensure_tp_orders_dict(monitor_data)
             filled_tps = len([tp for tp in tp_orders.values() if isinstance(tp, dict) and tp.get("status") == "FILLED"])
             total_tps = len(tp_orders)
+            
+            # Determine closure reason for display
+            if monitor_data.get("sl_hit"):
+                closure_reason = "sl_hit"
+                closure_text = "Stop Loss Triggered"
+            elif monitor_data.get("all_tps_filled") or filled_tps == total_tps:
+                closure_reason = "all_tps_filled"
+                closure_text = "All Take Profits Hit"
+            elif filled_tps > 0:
+                closure_reason = "partial_tp"
+                closure_text = f"Partial TP ({filled_tps}/{total_tps} filled)"
+            else:
+                closure_reason = "manual"
+                closure_text = "Manual Close"
 
+            # Account identification for alerts
+            account_label = "MAIN" if account_type == "main" else "MIRROR"
+            account_emoji = "🏦" if account_type == "main" else "🪞"
+            
             message = f"""{pnl_emoji} <b>POSITION CLOSED - {result_text}</b>
 ━━━━━━━━━━━━━━━━━━━━━━
 {approach_emoji} {approach_text} Approach
 📊 {symbol} {side_emoji} {side}
+{account_emoji} Account: {account_label}
 
 💰 <b>Final P&L: ${pnl:.2f} ({pnl_percent:+.2f}%)</b>
 
@@ -8257,6 +8305,7 @@ All take profit targets have been achieved! 🎯"""
 • Exit Price: ${exit_price:.6f}
 • Position Size: {position_size:.6f}
 • Duration: {duration_text}
+• Close Reason: {closure_text}
 
 📊 <b>Execution Summary:</b>
 • TPs Hit: {filled_tps}/{total_tps}
@@ -8298,8 +8347,16 @@ All take profit targets have been achieved! 🎯"""
                 exit_price=float(exit_price),
                 position_size=float(position_size_decimal),
                 pnl=float(pnl),
+                close_reason=closure_reason,
                 duration_minutes=int(trade_duration_minutes),
-                additional_info={"account_type": account_type}
+                additional_info={
+                    "account_type": account_type,
+                    "tp_hits": filled_tps,
+                    "total_tps": total_tps,
+                    "closure_text": closure_text,
+                    "realized_pnl": float(realized_pnl),
+                    "has_mirror": monitor_data.get("has_mirror", False)
+                }
             )
 
             logger.info(f"✅ Sent premium position closed alert for {symbol} {side} - {result_text}: ${pnl:.2f}")
@@ -8328,9 +8385,25 @@ All take profit targets have been achieved! 🎯"""
                     return
 
             # Get SL and entry prices
-            sl_price = monitor_data["sl_order"]["price"]
-            entry_price = monitor_data["entry_price"]
-            position_size = monitor_data.get("position_size", Decimal("0"))
+            sl_order = monitor_data.get("sl_order", {})
+            if not sl_order:
+                logger.warning(f"No SL order found in monitor data for {symbol} {side}")
+                return
+                
+            sl_price = sl_order.get("price")
+            if not sl_price:
+                logger.warning(f"No SL price found in SL order for {symbol} {side}")
+                return
+                
+            entry_price = monitor_data.get("entry_price")
+            if not entry_price:
+                logger.warning(f"No entry price found in monitor data for {symbol} {side}")
+                return
+                
+            position_size = monitor_data.get("position_size", monitor_data.get("remaining_size", Decimal("0")))
+            if position_size == 0:
+                logger.warning(f"No position size found for {symbol} {side}")
+                return
 
             # Calculate loss
             sl_price_decimal = Decimal(str(sl_price))
@@ -8349,12 +8422,17 @@ All take profit targets have been achieved! 🎯"""
             # Create enhanced SL hit alert using alert helpers
             from utils.alert_helpers import format_sl_hit_alert
             
+            # Add account label
+            account_label = "MAIN" if account_type == "main" else "MIRROR"
+            
             additional_info = {
                 "account_type": account_type,
+                "account_label": account_label,
                 "duration_minutes": duration_mins,
                 "closure_reason": "sl_hit",
-                "detection_method": "position_monitoring",
-                "fill_confidence": "High"
+                "detection_method": "Enhanced TP/SL (2s intervals)",
+                "fill_confidence": "High",
+                "has_mirror": monitor_data.get("has_mirror", False)
             }
 
             message = format_sl_hit_alert(
