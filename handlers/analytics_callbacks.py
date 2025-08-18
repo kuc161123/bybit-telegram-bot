@@ -154,8 +154,8 @@ async def show_position_heatmap(query, context: ContextTypes.DEFAULT_TYPE) -> No
             "📊 <b>POSITION HEATMAP</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"{heatmap}\n\n"
-            "🟩 >10%  🟢 5-10%  🟡 0-5%\n"
-            "🟠 -5-0%  🔴 -10--5%  🟥 <-10%\n\n"
+            "🟩 &gt;10%  🟢 5-10%  🟡 0-5%\n"
+            "🟠 -5-0%  🔴 -10--5%  🟥 &lt;-10%\n\n"
             f"Total Positions: {len(positions)}"
         )
 

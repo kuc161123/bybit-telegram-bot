@@ -394,7 +394,7 @@ class TradeRecommendationEngine:
             
             if max_confidence < 40:
                 result += "⚠️ <b>WARNING: Very Low Confidence</b>\n"
-                result += "All signals have <40% confidence.\n"
+                result += "All signals have &lt;40% confidence.\n"
                 result += "Market conditions are highly uncertain.\n"
                 result += "Consider staying out of the market.\n\n"
             elif avg_confidence < 30:
