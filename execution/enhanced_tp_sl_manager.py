@@ -1509,6 +1509,28 @@ class EnhancedTPSLManager:
 
             # Use account-aware key format
             monitor_key = f"{symbol}_{side}_{account_type}"
+            
+            # CRITICAL FIX: Clean up any existing monitor with the same key
+            # This prevents inheriting state from previous positions
+            if monitor_key in self.position_monitors:
+                existing_monitor = self.position_monitors[monitor_key]
+                logger.warning(f"⚠️ Found existing monitor for {monitor_key} - cleaning up before creating new one")
+                
+                # Cancel any existing monitoring task
+                if hasattr(self, 'active_tasks') and monitor_key in self.active_tasks:
+                    try:
+                        self.active_tasks[monitor_key].cancel()
+                        logger.info(f"🛑 Cancelled existing monitor task for {monitor_key}")
+                    except Exception as e:
+                        logger.debug(f"Could not cancel monitor task: {e}")
+                
+                # Remove the old monitor
+                del self.position_monitors[monitor_key]
+                logger.info(f"🗑️ Removed old monitor for {monitor_key}")
+                
+                # Save the removal
+                self.save_monitors_to_persistence(force=True, reason="old_monitor_removed")
+            
             # Ensure TP numbers are set
             self._ensure_tp_numbers(monitor_data)
             
