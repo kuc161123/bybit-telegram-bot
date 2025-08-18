@@ -290,6 +290,7 @@ class DashboardData:
     performance: PerformanceMetrics
     market_status: MarketStatus
     active_monitors: Dict[str, int]  # approach -> count
+    news_data: Optional[Dict] = None  # Market news and economic calendar
     last_update: datetime = field(default_factory=datetime.now)
 
     @property

@@ -406,6 +406,85 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
             return ""
     
     @staticmethod
+    def market_news_section(news_data: dict) -> str:
+        """Generate market news section with breaking news and economic calendar"""
+        if not news_data or news_data.get('status') == 'error':
+            return ""
+        
+        result = "<b>📰 MARKET NEWS & EVENTS</b>\n"
+        
+        # Breaking News Section
+        breaking_news = news_data.get('breaking_news', [])
+        if breaking_news:
+            result += "\n<b>🔥 Breaking News</b>\n"
+            for i, news in enumerate(breaking_news[:3], 1):
+                # Impact emoji
+                impact_emoji = "🔴" if news.get('impact') == 'HIGH' else "🟡" if news.get('impact') == 'MEDIUM' else "⚪"
+                
+                # Format title
+                title = news.get('title', 'Unknown')
+                if len(title) > 60:
+                    title = title[:57] + "..."
+                title = html.escape(title)
+                
+                # Time ago
+                time_ago = news.get('time_ago', 'Unknown')
+                
+                result += f"{impact_emoji} <b>{title}</b>\n"
+                result += f"   📅 {time_ago} • {news.get('source', 'Unknown')}\n"
+                
+                # Add preview if available
+                if news.get('body_preview'):
+                    preview = html.escape(news.get('body_preview', ''))
+                    if len(preview) > 80:
+                        preview = preview[:77] + "..."
+                    result += f"   <i>{preview}</i>\n"
+                
+                if i < len(breaking_news[:3]):
+                    result += "\n"
+        
+        # Economic Calendar Section
+        economic_events = news_data.get('economic_calendar', [])
+        if economic_events:
+            result += "\n<b>📅 Upcoming Economic Events</b>\n"
+            for i, event in enumerate(economic_events[:3], 1):
+                # Impact emoji
+                impact_emoji = "🔴" if event.get('impact') == 'HIGH' else "🟡" if event.get('impact') == 'MEDIUM' else "⚪"
+                
+                # Event name
+                name = html.escape(event.get('name', 'Unknown'))
+                
+                # Countdown
+                countdown = event.get('countdown_str', 'Unknown')
+                
+                # Currency
+                currency = event.get('currency', '')
+                currency_str = f" ({currency})" if currency else ""
+                
+                result += f"{impact_emoji} <b>{name}</b>{currency_str}\n"
+                result += f"   ⏰ In {countdown} • {event.get('time_str', 'Unknown')}\n"
+                
+                # Add forecast/previous if available
+                forecast = event.get('forecast')
+                previous = event.get('previous')
+                if forecast or previous:
+                    data_parts = []
+                    if forecast:
+                        data_parts.append(f"Forecast: {forecast}")
+                    if previous:
+                        data_parts.append(f"Previous: {previous}")
+                    result += f"   📊 {' | '.join(data_parts)}\n"
+                
+                if i < len(economic_events[:3]):
+                    result += "\n"
+        
+        # If no news or events
+        if not breaking_news and not economic_events:
+            result += "📊 <i>No significant news or events at this time</i>\n"
+        
+        return result.rstrip('\n')
+    
+    @staticmethod
     def divider() -> str:
         """Generate a section divider"""
         return "━" * 25 + "\n"

@@ -101,6 +101,13 @@ class DashboardGenerator:
             ))
             sections.append("")
             
+            # Market News and Economic Calendar
+            if dashboard_data.news_data:
+                news_section = self.components.market_news_section(dashboard_data.news_data)
+                if news_section:
+                    sections.append(news_section)
+                    sections.append("")
+            
             # Trade recommendations - REMOVED per user request
             # Commenting out to disable trade recommendations display
             # if dashboard_data.market_status and hasattr(dashboard_data.market_status, 'market_structure_1h'):
@@ -144,7 +151,8 @@ class DashboardGenerator:
             self._fetch_positions_and_orders(),
             self._fetch_performance_stats(bot_data),
             self._fetch_market_status(chat_data, force_refresh=force_refresh),
-            self._fetch_monitor_status(bot_data)
+            self._fetch_monitor_status(bot_data),
+            self._fetch_market_news()  # New: Fetch market news
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -155,6 +163,7 @@ class DashboardGenerator:
         performance = results[2] if not isinstance(results[2], Exception) else self._default_performance()
         market_status = results[3] if not isinstance(results[3], Exception) else MarketStatus()
         monitor_counts = results[4] if not isinstance(results[4], Exception) else {}
+        news_data = results[5] if not isinstance(results[5], Exception) else {}
 
         # Process account data
         main_account, mirror_account = account_data
@@ -206,6 +215,7 @@ class DashboardGenerator:
             performance=performance,
             market_status=market_status,
             active_monitors=monitor_counts,
+            news_data=news_data,
             last_update=datetime.now()
         )
 
@@ -871,6 +881,16 @@ class DashboardGenerator:
             return counts
         except Exception as e:
             logger.error(f"Error fetching monitor status: {e}")
+            return {}
+
+    async def _fetch_market_news(self) -> Dict:
+        """Fetch market news and economic calendar"""
+        try:
+            from market_analysis.news_fetcher import get_market_news
+            news_data = await get_market_news()
+            return news_data
+        except Exception as e:
+            logger.error(f"Error fetching market news: {e}")
             return {}
 
     def _calculate_sharpe_ratio(self, stats_data: Dict) -> float:
