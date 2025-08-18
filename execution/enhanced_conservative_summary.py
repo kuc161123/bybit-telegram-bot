@@ -54,20 +54,25 @@ def format_enhanced_conservative_summary(
 ├─ Mirror Size: <code>{mirror_size:,.4f}</code> {symbol.replace('USDT', '')}
 """
 
-    message += f"""└─ Entry Strategy: <b>3-Stage Conservative</b>
+    message += f"""└─ Entry Strategy: <b>3-Stage Weighted Conservative</b>
 
-📍 <b>ENTRY ORDERS</b> (Equal Distribution)
+📍 <b>ENTRY ORDERS</b> (Weighted Distribution)
 """
 
-    # Entry order details
-    for i, price in enumerate(limit_prices[:3]):
-        allocation = 33.3
+    # Entry order details with weighted allocation
+    # Market: 10%, Limit 1: 18%, Limit 2: 31.5%, Limit 3: 40.5%
+    allocations = [10.0, 18.0, 31.5, 40.5]
+    
+    for i, price in enumerate(limit_prices[:4] if len(limit_prices) > 3 else limit_prices):
+        if i >= len(allocations):
+            break
+        allocation = allocations[i]
         order_type = "Market" if i == 0 else f"Limit {i}"
         status = "✅ Placed" if i == 0 else "⏳ Pending"
 
         if i == 0:
             message += f"├─ Order 1: <code>${price:,.2f}</code> ({allocation:.1f}%) - {order_type} {status}\n"
-        elif i == len(limit_prices[:3]) - 1:
+        elif i == min(len(limit_prices), 3):
             message += f"└─ Order {i+1}: <code>${price:,.2f}</code> ({allocation:.1f}%) - {order_type} {status}\n"
         else:
             message += f"├─ Order {i+1}: <code>${price:,.2f}</code> ({allocation:.1f}%) - {order_type} {status}\n"
@@ -97,11 +102,13 @@ def format_enhanced_conservative_summary(
 
 📋 <b>TRADE LOGIC EXPLAINED</b>
 
-<b>1. Entry Strategy (3 Orders):</b>
-   • 1st order executes immediately at market
-   • 2nd & 3rd orders wait at limit prices
-   • Equal 33.3% allocation reduces timing risk
-   • If price moves favorably, limits may not fill
+<b>1. Entry Strategy (Weighted Allocation):</b>
+   • Market order: 10% immediate entry
+   • Limit 1: 18% at first price level
+   • Limit 2: 31.5% at deeper price level
+   • Limit 3: 40.5% at best price level
+   • Weighted allocation improves average entry
+   • Deeper limits get more allocation for better R:R
 
 <b>2. Take Profit Strategy:</b>
    • Target: 85% position fill threshold

@@ -1821,9 +1821,32 @@ class TradeExecutor:
             # Use current price for position size calculation
             total_qty = total_position_size / current_price
 
-            # Distribute quantity: 1/3 for market, 1/3 for each limit
-            qty_per_order = total_qty / 3
-            qty_per_order = value_adjusted_to_step(qty_per_order, qty_step)
+            # Use weighted allocation for GGShot (same as conservative)
+            # Import weighted allocation config
+            from config.constants import LIMIT_ORDER_ALLOCATION, MARKET_ORDER_PERCENTAGE
+            
+            # Calculate market and limit allocations
+            market_qty = total_qty * MARKET_ORDER_PERCENTAGE
+            limit_total_qty = total_qty * (Decimal("1") - MARKET_ORDER_PERCENTAGE)
+            
+            # Calculate weighted quantities for GGShot (only 2 limits)
+            ggshot_limit_quantities = []
+            if len(limit_prices) > 0:
+                market_qty = value_adjusted_to_step(market_qty, qty_step) if MARKET_ORDER_PERCENTAGE > 0 else Decimal("0")
+                
+                # For GGShot with 2 limits, use first 2 allocations normalized
+                ggshot_allocations = LIMIT_ORDER_ALLOCATION[:2]  # Use first 2 allocations
+                total_alloc = sum(ggshot_allocations)
+                
+                for alloc in ggshot_allocations:
+                    # Normalize allocations for 2 limits instead of 3
+                    normalized_alloc = alloc / total_alloc
+                    limit_qty = limit_total_qty * normalized_alloc
+                    limit_qty = value_adjusted_to_step(limit_qty, qty_step)
+                    ggshot_limit_quantities.append(limit_qty)
+            
+            # For backward compatibility
+            qty_per_order = ggshot_limit_quantities[0] if ggshot_limit_quantities else total_qty / 3
             final_sl_qty = value_adjusted_to_step(total_qty, qty_step)
 
             # Store initial trade data
@@ -1853,7 +1876,7 @@ class TradeExecutor:
                 symbol=symbol,
                 side=side,
                 order_type="Market",
-                qty=str(qty_per_order),
+                qty=str(market_qty),  # Use weighted market quantity
                 order_link_id=order_link_id
             )
 
@@ -1886,7 +1909,7 @@ class TradeExecutor:
                         mirror_result = await mirror_market_order(
                             symbol=symbol,
                             side=side,
-                            qty=str(qty_per_order),
+                            qty=str(market_qty),  # Use weighted market quantity for mirror
                             position_idx=position_idx,
                             order_link_id=unique_order_link_id
                         )
@@ -1907,7 +1930,9 @@ class TradeExecutor:
 
             # STEP 2: Place LIMIT orders for remaining entries
             for i, limit_price in enumerate(limit_prices, 1):
-                self.logger.info(f"📝 Placing GGShot limit order {i} at AI price {limit_price}")
+                # Get the appropriate weighted quantity for this limit order
+                limit_qty = ggshot_limit_quantities[i-1] if i-1 < len(ggshot_limit_quantities) else qty_per_order
+                self.logger.info(f"📝 Placing GGShot limit order {i} at AI price {limit_price} with qty {limit_qty}")
 
                 order_link_id = f"{BOT_PREFIX}CONS_{trade_group_id}_LIMIT{i}"
 
@@ -1915,7 +1940,7 @@ class TradeExecutor:
                     symbol=symbol,
                     side=side,
                     order_type="Limit",
-                    qty=str(qty_per_order),
+                    qty=str(limit_qty),  # Use weighted limit quantity
                     price=str(limit_price),
                     order_link_id=order_link_id
                 )
@@ -1927,7 +1952,7 @@ class TradeExecutor:
                     order_details[f"limit{i}"] = {
                         "id": order_id,
                         "price": limit_price,
-                        "qty": qty_per_order
+                        "qty": limit_qty  # Use actual weighted quantity
                     }
                     self.logger.info(f"✅ GGShot limit order {i} placed: {order_id}")
 
@@ -1941,7 +1966,7 @@ class TradeExecutor:
                             mirror_result = await mirror_limit_order(
                                 symbol=symbol,
                                 side=side,
-                                qty=str(qty_per_order),
+                                qty=str(limit_qty),  # Use weighted limit quantity for mirror too
                                 price=str(limit_price),
                                 position_idx=position_idx,
                                 order_link_id=unique_order_link_id
