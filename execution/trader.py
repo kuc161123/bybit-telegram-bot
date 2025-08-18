@@ -480,17 +480,24 @@ class TradeExecutor:
                 market_qty = value_adjusted_to_step(market_qty, qty_step) if MARKET_ORDER_PERCENTAGE > 0 else Decimal("0")
                 
                 # Calculate each limit order quantity based on weighted allocation
-                for i, allocation in enumerate(LIMIT_ORDER_ALLOCATION[:len(limit_prices)-1] if market_qty > 0 else LIMIT_ORDER_ALLOCATION[:len(limit_prices)]):
-                    limit_qty = limit_total_qty * allocation
-                    limit_qty = value_adjusted_to_step(limit_qty, qty_step)
-                    limit_quantities.append(limit_qty)
+                # FIXED: When market order exists, first price is market, rest are limits
+                # So we need all 3 LIMIT_ORDER_ALLOCATION values for the 3 limit orders
+                num_limit_orders = len(limit_prices) - 1 if MARKET_ORDER_PERCENTAGE > 0 else len(limit_prices)
+                for i in range(num_limit_orders):
+                    if i < len(LIMIT_ORDER_ALLOCATION):
+                        allocation = LIMIT_ORDER_ALLOCATION[i]
+                        limit_qty = limit_total_qty * allocation
+                        limit_qty = value_adjusted_to_step(limit_qty, qty_step)
+                        limit_quantities.append(limit_qty)
                 
-                # Log the weighted allocation
-                self.logger.info(f"📊 WEIGHTED ALLOCATION:")
+                # Log the weighted allocation - show percentage of TOTAL position
+                self.logger.info(f"📊 WEIGHTED ALLOCATION (% of total position):")
                 self.logger.info(f"   Market: {MARKET_ORDER_PERCENTAGE*100:.0f}% = {market_qty} qty")
                 for i, qty in enumerate(limit_quantities, 1):
                     alloc_pct = LIMIT_ORDER_ALLOCATION[i-1] if i-1 < len(LIMIT_ORDER_ALLOCATION) else LIMIT_ORDER_ALLOCATION[-1]
-                    self.logger.info(f"   Limit {i}: {alloc_pct*100:.0f}% = {qty} qty")
+                    # Calculate percentage of total position (not just limit portion)
+                    total_position_pct = alloc_pct * (Decimal("1") - MARKET_ORDER_PERCENTAGE)
+                    self.logger.info(f"   Limit {i}: {total_position_pct*100:.1f}% = {qty} qty")
             
             # For compatibility with existing code
             qty_per_limit = limit_quantities[0] if limit_quantities else total_qty
@@ -655,7 +662,7 @@ class TradeExecutor:
                         order_details[f"limit{i}"] = {
                             "id": order_id,
                             "price": limit_price,
-                            "qty": qty_per_limit
+                            "qty": order_qty  # FIXED: Use the actual weighted quantity
                         }
                         self.logger.info(f"✅ Limit order {i} placed: {order_id}")
                     else:
@@ -681,7 +688,7 @@ class TradeExecutor:
                                 # For market orders, try to get the actual fill price
                                 fill_price = result.get("avgPrice") or limit_price  # Use avgPrice if available, otherwise limit_price
                                 await enhanced_tp_sl_manager._track_actual_entry_price(
-                                    symbol, side, Decimal(str(fill_price)), Decimal(str(qty_per_limit)), "main"
+                                    symbol, side, Decimal(str(fill_price)), Decimal(str(order_qty)), "main"
                                 )
                             except Exception as e:
                                 self.logger.warning(f"Could not track market order entry price: {e}")
@@ -689,7 +696,7 @@ class TradeExecutor:
                         execution_data['limit_orders'].append({
                             'order_id': order_id,
                             'price': float(limit_price),
-                            'qty': float(qty_per_limit),
+                            'qty': float(order_qty),  # FIXED: Use the actual weighted quantity
                             'type': 'entry'
                         })
 
