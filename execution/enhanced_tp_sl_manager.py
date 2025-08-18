@@ -2365,19 +2365,42 @@ class EnhancedTPSLManager:
             monitor_data["last_check"] = time.time()
 
         except Exception as e:
-            # Extract symbol and side from monitor_data if available, otherwise use function parameters
+            # Extract symbol and side from monitor_data if available, otherwise use safe defaults
             try:
-                error_symbol = monitor_data.get("symbol", symbol) if monitor_data else symbol
-                error_side = monitor_data.get("side", side) if monitor_data else side
-                error_account = monitor_data.get("account_type", account_type) if monitor_data else account_type
+                # First try to get from monitor_data
+                if monitor_data:
+                    error_symbol = monitor_data.get("symbol", "UNKNOWN")
+                    error_side = monitor_data.get("side", "UNKNOWN")
+                    error_account = monitor_data.get("account_type", "main")
+                else:
+                    # If monitor_data is None, try to use function parameters if they exist
+                    try:
+                        error_symbol = symbol
+                        error_side = side
+                        error_account = account_type
+                    except NameError:
+                        # If parameters don't exist in scope, use monitor_key to extract info
+                        if monitor_key:
+                            parts = monitor_key.split('_')
+                            error_symbol = parts[0] if len(parts) > 0 else "UNKNOWN"
+                            error_side = parts[1] if len(parts) > 1 else "UNKNOWN"
+                            error_account = parts[2] if len(parts) > 2 else "main"
+                        else:
+                            error_symbol = "UNKNOWN"
+                            error_side = "UNKNOWN"
+                            error_account = "main"
             except:
-                # If even accessing monitor_data fails, use function parameters
-                error_symbol = symbol
-                error_side = side
-                error_account = account_type
+                # Complete fallback - avoid any undefined variable errors
+                error_symbol = "UNKNOWN"
+                error_side = "UNKNOWN"
+                error_account = "main"
+                logger.error(f"Failed to extract error context, using defaults. Original error: {e}")
             
             # Use error recovery system for monitoring errors
-            await self._handle_monitor_error(error_symbol, error_side, e, error_account)
+            if error_symbol != "UNKNOWN" and error_side != "UNKNOWN":
+                await self._handle_monitor_error(error_symbol, error_side, e, error_account)
+            else:
+                logger.error(f"Monitor error with unknown context: {e}")
 
     async def _determine_closure_reason(self, monitor_data: Dict, symbol: str, side: str, account_type: str) -> str:
         """

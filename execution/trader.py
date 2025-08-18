@@ -480,9 +480,9 @@ class TradeExecutor:
                 market_qty = value_adjusted_to_step(market_qty, qty_step) if MARKET_ORDER_PERCENTAGE > 0 else Decimal("0")
                 
                 # Calculate each limit order quantity based on weighted allocation
-                # FIXED: When market order exists, first price is market, rest are limits
-                # So we need all 3 LIMIT_ORDER_ALLOCATION values for the 3 limit orders
-                num_limit_orders = len(limit_prices) - 1 if MARKET_ORDER_PERCENTAGE > 0 else len(limit_prices)
+                # FIXED: All 3 limit orders should be placed regardless of market order
+                # Market order is separate, not part of limit_prices iteration
+                num_limit_orders = 3  # Always place 3 limit orders
                 for i in range(num_limit_orders):
                     if i < len(LIMIT_ORDER_ALLOCATION):
                         allocation = LIMIT_ORDER_ALLOCATION[i]
@@ -609,154 +609,168 @@ class TradeExecutor:
                 'risk_reward_ratio': 0
             }
 
-            # FIXED: Place orders with weighted allocation
-            for i, limit_price in enumerate(limit_prices, 1):
-                # Determine order type and quantity based on weighted allocation
-                if i == 1:
-                    if MARKET_ORDER_PERCENTAGE > 0:
-                        self.logger.info(f"📝 Placing MARKET order ({MARKET_ORDER_PERCENTAGE*100:.0f}% allocation)")
-                        order_type = "Market"
-                        order_qty = market_qty
-                    else:
-                        # No market order, first is limit
-                        self.logger.info(f"📝 Placing limit order {i} at {limit_price}")
-                        order_type = "Limit"
-                        order_qty = limit_quantities[0] if limit_quantities else qty_per_limit
-                else:
-                    # Subsequent orders are always limits
-                    limit_index = i - 2 if MARKET_ORDER_PERCENTAGE > 0 else i - 1
-                    if limit_index < len(limit_quantities):
-                        self.logger.info(f"📝 Placing limit order {i} at {limit_price}")
-                        order_type = "Limit"
-                        order_qty = limit_quantities[limit_index]
-                    else:
-                        continue  # Skip if no allocation
-
-                self.logger.info(f"🔧 Order {i} quantity: {order_qty} (weighted allocation)")
-
-                # Create orderLinkId for group tracking
-                order_link_id = f"{BOT_PREFIX}CONS_{trade_group_id}_LIMIT{i}"
-
-                # Prepare order parameters
+            # FIXED: Place market order first if enabled, then all 3 limit orders
+            order_counter = 1
+            
+            # Place market order first if enabled
+            if MARKET_ORDER_PERCENTAGE > 0:
+                self.logger.info(f"📝 Placing MARKET order ({MARKET_ORDER_PERCENTAGE*100:.0f}% allocation)")
+                order_link_id = f"{BOT_PREFIX}CONS_{trade_group_id}_MARKET"
+                
                 order_params = {
                     "symbol": symbol,
                     "side": side,
-                    "order_type": order_type,
-                    "qty": str(order_qty),  # Use weighted quantity
+                    "order_type": "Market",
+                    "qty": str(market_qty),
                     "order_link_id": order_link_id
                 }
-
-                # Only add price for limit orders, not market orders
-                if order_type == "Limit":
-                    order_params["price"] = str(limit_price)
-
+                
                 result = await place_order_with_retry(**order_params)
-
+                
                 if result:
                     order_id = result.get("orderId", "")
+                    self.logger.info(f"✅ Market order placed: {order_id}")
+                    orders_placed.append(order_id)
+                    order_details[order_id] = {
+                        "type": "market",
+                        "qty": str(market_qty),
+                        "side": side
+                    }
+                    summary['market_orders'].append({
+                        'id': order_id,
+                        'qty': str(market_qty),
+                        'status': 'placed'
+                    })
+                else:
+                    error_msg = f"Failed to place market order"
+                    self.logger.error(error_msg)
+                    errors.append(error_msg)
+                    summary['main_errors'].append(error_msg)
+            
+            # Now place all 3 limit orders
+            for i, limit_price in enumerate(limit_prices):
+                limit_index = i  # Direct index since we have 3 limit prices
+                if limit_index < len(limit_quantities):
+                    self.logger.info(f"📝 Placing limit order {i+1} at {limit_price}")
+                    order_qty = limit_quantities[limit_index]
+                    self.logger.info(f"🔧 Limit order {i+1} quantity: {order_qty} (weighted allocation)")
                     
-                    # Only append to limit_order_ids if it's actually a limit order
-                    if order_type == "Limit":
+                    # Create orderLinkId for group tracking
+                    order_link_id = f"{BOT_PREFIX}CONS_{trade_group_id}_LIMIT{i+1}"
+                    
+                    # Prepare order parameters
+                    order_params = {
+                        "symbol": symbol,
+                        "side": side,
+                        "order_type": "Limit",
+                        "qty": str(order_qty),
+                        "price": str(limit_price),
+                        "order_link_id": order_link_id
+                    }
+                    
+                    result = await place_order_with_retry(**order_params)
+
+                    if result:
+                        order_id = result.get("orderId", "")
                         limit_order_ids.append(order_id)
-                        orders_placed.append(f"Limit{i}: {order_id[:8]}...")
-                        order_details[f"limit{i}"] = {
+                        orders_placed.append(f"Limit{i+1}: {order_id[:8]}...")
+                        order_details[f"limit{i+1}"] = {
                             "id": order_id,
                             "price": limit_price,
                             "qty": order_qty  # FIXED: Use the actual weighted quantity
                         }
-                        self.logger.info(f"✅ Limit order {i} placed: {order_id}")
-                    else:
-                        # It's a market order
-                        orders_placed.append(f"Market: {order_id[:8]}...")
-                        order_details["market"] = {
-                            "id": order_id,
-                            "qty": qty_per_limit
-                        }
-                        self.logger.info(f"✅ Market order placed: {order_id}")
-
-                    # Track execution data
-                    if order_type == "Market":
-                        execution_data['market_orders'].append({
-                            'order_id': order_id,
-                            'qty': float(qty_per_limit),
-                            'type': 'entry'
+                        self.logger.info(f"✅ Limit order {i+1} placed: {order_id}")
+                        summary['limit_orders'].append({
+                            'id': order_id,
+                            'price': str(limit_price),
+                            'qty': str(order_qty),
+                            'status': 'placed'
                         })
-
-                        # Track actual entry price for market order (if available in result)
-                        if ENHANCED_TP_SL_AVAILABLE and enhanced_tp_sl_manager:
-                            try:
-                                # For market orders, try to get the actual fill price
-                                fill_price = result.get("avgPrice") or limit_price  # Use avgPrice if available, otherwise limit_price
-                                await enhanced_tp_sl_manager._track_actual_entry_price(
-                                    symbol, side, Decimal(str(fill_price)), Decimal(str(order_qty)), "main"
-                                )
-                            except Exception as e:
-                                self.logger.warning(f"Could not track market order entry price: {e}")
                     else:
-                        execution_data['limit_orders'].append({
-                            'order_id': order_id,
-                            'price': float(limit_price),
-                            'qty': float(order_qty),  # FIXED: Use the actual weighted quantity
-                            'type': 'entry'
-                        })
+                        error_msg = f"Failed to place limit order {i+1}"
+                        self.logger.error(error_msg)
+                        errors.append(error_msg)
+                        summary['main_errors'].append(error_msg)
 
-                        # For limit orders, we'll track the price when they fill (handled by enhanced monitoring)
-                    execution_data['main_orders'].append(order_id)
 
-                    # MIRROR TRADING: Place limit/market order on second account
-                    if mirror_results["enabled"]:
+            # MIRROR TRADING: Place orders on mirror account
+            if mirror_results["enabled"]:
+                self.logger.info(f"🪞 Starting mirror account order placement")
+                
+                # Place mirror market order if enabled
+                if MARKET_ORDER_PERCENTAGE > 0 and mirror_market_qty > 0:
+                    try:
+                        unique_order_link_id = self._generate_unique_order_link_id(f"{BOT_PREFIX}CONS_{trade_group_id}_MIRROR_MARKET")
+                        
+                        mirror_result = await mirror_market_order(
+                            symbol=symbol,
+                            side=side,
+                            qty=str(mirror_market_qty),
+                            position_idx=0,
+                            order_link_id=unique_order_link_id
+                        )
+                        
+                        if mirror_result:
+                            mirror_order_id = mirror_result.get("orderId", "")
+                            self.logger.info(f"✅ MIRROR: Market order placed: {mirror_order_id[:8]}...")
+                            execution_data['mirror_orders'].append(mirror_order_id)
+                            summary['mirror_orders'].append({
+                                'id': mirror_order_id,
+                                'type': 'market',
+                                'qty': str(mirror_market_qty),
+                                'status': 'placed'
+                            })
+                        else:
+                            error_msg = "Mirror market order failed"
+                            self.logger.error(f"❌ MIRROR: {error_msg}")
+                            mirror_results["errors"].append(error_msg)
+                            summary['mirror_errors'].append(error_msg)
+                    except Exception as e:
+                        error_msg = f"Mirror market order error: {str(e)}"
+                        self.logger.error(f"❌ MIRROR: {error_msg}")
+                        mirror_results["errors"].append(error_msg)
+                        summary['mirror_errors'].append(error_msg)
+                
+                # Place all 3 mirror limit orders
+                for i, limit_price in enumerate(limit_prices):
+                    if i < len(mirror_limit_quantities):
                         try:
-                            position_idx = result.get("positionIdx", 0)
-
-                            # Create unique order link ID to avoid duplicates
-                            unique_order_link_id = self._generate_unique_order_link_id(f"{order_link_id}_MIRROR")
-
-                            # Determine mirror order quantity based on weighted allocation
-                            if order_type == "Market":
-                                mirror_order_qty = mirror_market_qty if mirror_market_qty > 0 else mirror_qty_per_limit
-                            else:
-                                # Get the appropriate limit quantity for mirror
-                                limit_index = i - 2 if MARKET_ORDER_PERCENTAGE > 0 else i - 1
-                                if limit_index < len(mirror_limit_quantities):
-                                    mirror_order_qty = mirror_limit_quantities[limit_index]
-                                else:
-                                    mirror_order_qty = mirror_qty_per_limit  # Fallback
+                            unique_order_link_id = self._generate_unique_order_link_id(f"{BOT_PREFIX}CONS_{trade_group_id}_MIRROR_LIMIT{i+1}")
+                            mirror_order_qty = mirror_limit_quantities[i]
                             
-                            if order_type == "Market":
-                                mirror_result = await mirror_market_order(
-                                    symbol=symbol,
-                                    side=side,
-                                    qty=str(mirror_order_qty),  # Use weighted quantity
-                                    position_idx=position_idx,
-                                    order_link_id=unique_order_link_id
-                                )
-                            else:
-                                mirror_result = await mirror_limit_order(
-                                    symbol=symbol,
-                                    side=side,
-                                    qty=str(mirror_order_qty),  # Use weighted quantity
-                                    price=str(limit_price),
-                                    position_idx=position_idx,
-                                    order_link_id=unique_order_link_id
-                                )
+                            mirror_result = await mirror_limit_order(
+                                symbol=symbol,
+                                side=side,
+                                qty=str(mirror_order_qty),
+                                price=str(limit_price),
+                                position_idx=0,
+                                order_link_id=unique_order_link_id
+                            )
+                            
                             if mirror_result:
                                 mirror_order_id = mirror_result.get("orderId", "")
-                                mirror_results["limits"].append({"order": i, "id": mirror_order_id, "success": True, "type": order_type})
-                                self.logger.info(f"✅ MIRROR: Limit order {i} placed: {mirror_order_id[:8]}...")
+                                mirror_results["limits"].append({"order": i+1, "id": mirror_order_id, "success": True, "type": "Limit"})
+                                self.logger.info(f"✅ MIRROR: Limit order {i+1} placed: {mirror_order_id[:8]}...")
                                 execution_data['mirror_orders'].append(mirror_order_id)
+                                summary['mirror_orders'].append({
+                                    'id': mirror_order_id,
+                                    'type': 'limit',
+                                    'price': str(limit_price),
+                                    'qty': str(mirror_order_qty),
+                                    'status': 'placed'
+                                })
                             else:
-                                mirror_results["limits"].append({"order": i, "success": False, "type": order_type})
-                                mirror_results["errors"].append(f"Limit order {i} failed")
-                                execution_data['mirror_errors'].append(f"Limit order {i} failed")
+                                error_msg = f"Mirror limit order {i+1} failed"
+                                self.logger.error(f"❌ MIRROR: {error_msg}")
+                                mirror_results["limits"].append({"order": i+1, "success": False, "type": "Limit"})
+                                mirror_results["errors"].append(error_msg)
+                                summary['mirror_errors'].append(error_msg)
                         except Exception as e:
-                            self.logger.error(f"❌ MIRROR: Failed to place limit order {i}: {e}")
-                            mirror_results["limits"].append({"order": i, "success": False, "type": order_type})
-                            mirror_results["errors"].append(f"Limit order {i} error: {str(e)}")
-                            execution_data['mirror_errors'].append(f"Limit order {i} error: {str(e)}")
-                else:
-                    self.logger.warning(f"⚠️ Limit order {i} failed")
-                    errors.append(f"Limit order {i} placement failed")
-                    execution_data['main_errors'].append(f"Limit order {i} placement failed")
+                            error_msg = f"Mirror limit order {i+1} error: {str(e)}"
+                            self.logger.error(f"❌ MIRROR: {error_msg}")
+                            mirror_results["limits"].append({"order": i+1, "success": False, "type": "Limit"})
+                            mirror_results["errors"].append(error_msg)
+                            summary['mirror_errors'].append(error_msg)
 
             chat_data[LIMIT_ORDER_IDS] = limit_order_ids
 
