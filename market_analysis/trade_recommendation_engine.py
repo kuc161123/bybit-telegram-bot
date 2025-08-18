@@ -317,14 +317,20 @@ class TradeRecommendationEngine:
                 confidence -= 15
                 reasoning_parts.append("Mixed signals for swing timeframe")
         
-        # Determine final direction
-        if long_score >= short_score + 30:
+        # Adjust confidence first
+        confidence = max(0, min(100, confidence))
+        
+        # Determine final direction - require minimum confidence for STRONG signals
+        # STRONG signals need both score difference AND decent confidence
+        min_confidence_for_strong = 50  # Minimum 50% confidence for STRONG signal
+        
+        if long_score >= short_score + 30 and confidence >= min_confidence_for_strong:
             direction = TradeDirection.STRONG_LONG
             entry_suggestion = "Look for pullbacks to support or breakout above resistance"
         elif long_score > short_score + 15:
             direction = TradeDirection.LONG
             entry_suggestion = "Enter on pullbacks or momentum confirmation"
-        elif short_score >= long_score + 30:
+        elif short_score >= long_score + 30 and confidence >= min_confidence_for_strong:
             direction = TradeDirection.STRONG_SHORT
             entry_suggestion = "Look for rallies to resistance or breakdown below support"
         elif short_score > long_score + 15:
@@ -337,8 +343,14 @@ class TradeRecommendationEngine:
             direction = TradeDirection.NO_TRADE
             entry_suggestion = "Avoid trading - conflicting signals"
         
-        # Adjust confidence
-        confidence = max(0, min(100, confidence))
+        # Downgrade STRONG to regular if confidence too low
+        if confidence < min_confidence_for_strong:
+            if direction == TradeDirection.STRONG_LONG:
+                direction = TradeDirection.LONG
+                entry_suggestion = "Low confidence - wait for better setup"
+            elif direction == TradeDirection.STRONG_SHORT:
+                direction = TradeDirection.SHORT
+                entry_suggestion = "Low confidence - wait for better setup"
         
         # Risk level based on conditions
         if volatility_context['percentage'] > 5 or volume_context['strength'] == "very_weak":
@@ -374,6 +386,22 @@ class TradeRecommendationEngine:
         result = "📊 <b>TRADING RECOMMENDATIONS BY TIMEFRAME</b>\n"
         result += "━" * 25 + "\n\n"
         
+        # Check overall confidence levels and add warning if needed
+        all_confidences = [rec.confidence for rec in recommendations]
+        if all_confidences:
+            max_confidence = max(all_confidences)
+            avg_confidence = sum(all_confidences) / len(all_confidences)
+            
+            if max_confidence < 40:
+                result += "⚠️ <b>WARNING: Very Low Confidence</b>\n"
+                result += "All signals have <40% confidence.\n"
+                result += "Market conditions are highly uncertain.\n"
+                result += "Consider staying out of the market.\n\n"
+            elif avg_confidence < 30:
+                result += "⚠️ <b>WARNING: Extremely Low Confidence</b>\n"
+                result += f"Average confidence: {avg_confidence:.0f}%\n"
+                result += "DO NOT TRADE based on these signals.\n\n"
+        
         # Group by trading suitability
         strong_longs = []
         longs = []
@@ -398,28 +426,37 @@ class TradeRecommendationEngine:
         
         # Display recommendations by category
         if strong_longs:
-            result += "🟢 <b>STRONG LONG</b> (High Confidence)\n"
+            # Calculate average confidence for the group
+            avg_conf = sum(rec.confidence for rec in strong_longs) / len(strong_longs)
+            conf_label = "High" if avg_conf >= 70 else "Moderate" if avg_conf >= 50 else "Low"
+            result += f"🟢 <b>STRONG LONG</b> ({conf_label} Confidence: {avg_conf:.0f}%)\n"
             for rec in strong_longs:
                 risk_emoji = "🟢" if rec.risk_level == "Low" else "🟡" if rec.risk_level == "Medium" else "🔴"
                 result += f"  {rec.timeframe}: {risk_emoji} Risk | {rec.confidence:.0f}% conf\n"
             result += "\n"
         
         if longs:
-            result += "🔵 <b>LONG</b> (Moderate Confidence)\n"
+            avg_conf = sum(rec.confidence for rec in longs) / len(longs)
+            conf_label = "High" if avg_conf >= 70 else "Moderate" if avg_conf >= 50 else "Low"
+            result += f"🔵 <b>LONG</b> ({conf_label} Confidence: {avg_conf:.0f}%)\n"
             for rec in longs:
                 risk_emoji = "🟢" if rec.risk_level == "Low" else "🟡" if rec.risk_level == "Medium" else "🔴"
                 result += f"  {rec.timeframe}: {risk_emoji} Risk | {rec.confidence:.0f}% conf\n"
             result += "\n"
         
         if shorts:
-            result += "🟠 <b>SHORT</b> (Moderate Confidence)\n"
+            avg_conf = sum(rec.confidence for rec in shorts) / len(shorts)
+            conf_label = "High" if avg_conf >= 70 else "Moderate" if avg_conf >= 50 else "Low"
+            result += f"🟠 <b>SHORT</b> ({conf_label} Confidence: {avg_conf:.0f}%)\n"
             for rec in shorts:
                 risk_emoji = "🟢" if rec.risk_level == "Low" else "🟡" if rec.risk_level == "Medium" else "🔴"
                 result += f"  {rec.timeframe}: {risk_emoji} Risk | {rec.confidence:.0f}% conf\n"
             result += "\n"
         
         if strong_shorts:
-            result += "🔴 <b>STRONG SHORT</b> (High Confidence)\n"
+            avg_conf = sum(rec.confidence for rec in strong_shorts) / len(strong_shorts)
+            conf_label = "High" if avg_conf >= 70 else "Moderate" if avg_conf >= 50 else "Low"
+            result += f"🔴 <b>STRONG SHORT</b> ({conf_label} Confidence: {avg_conf:.0f}%)\n"
             for rec in strong_shorts:
                 risk_emoji = "🟢" if rec.risk_level == "Low" else "🟡" if rec.risk_level == "Medium" else "🔴"
                 result += f"  {rec.timeframe}: {risk_emoji} Risk | {rec.confidence:.0f}% conf\n"
