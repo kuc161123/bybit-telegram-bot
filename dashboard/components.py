@@ -231,79 +231,9 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
             #     oi_emoji = "📈" if status.open_interest_change_24h > 5 else "📉" if status.open_interest_change_24h < -5 else "➖"
             #     result += f"{oi_emoji} OI 24h: {'+' if status.open_interest_change_24h > 0 else ''}{status.open_interest_change_24h:.1f}%\n"
 
-            # NEW: AI Recommendation (GPT-4 Enhanced)
-            if status.ai_recommendation:
-                rec_emoji = "🟢" if status.ai_recommendation == "BUY" else "🔴" if status.ai_recommendation == "SELL" else "🟡"
-                
-                # Show confidence inline if available
-                confidence_str = ""
-                if status.ai_confidence:
-                    confidence_str = f" ({status.ai_confidence:.0f}%)"
-                
-                ai_rec_text = html.escape(str(status.ai_recommendation))
-                result += f"\n{rec_emoji} <b>AI Signal: {ai_rec_text}</b>{confidence_str}"
-                
-                # Risk assessment on same line for compactness
-                if status.ai_risk_assessment:
-                    risk_emoji = "⚠️" if status.ai_risk_assessment == "HIGH" else "⚡" if status.ai_risk_assessment == "MEDIUM" else "✅"
-                    risk_text = html.escape(str(status.ai_risk_assessment))
-                    result += f" {risk_emoji} {risk_text} Risk"
-                
-                # Extract key insights from reasoning
-                if status.ai_reasoning:
-                    reasoning = status.ai_reasoning
-                    
-                    # Extract multiple patterns (up to 2)
-                    import re
-                    found_patterns = []
-                    patterns = [
-                        "Shooting Star", "Doji", "Hammer", "Hanging Man", "Engulfing", 
-                        "MACD", "RSI", "Bollinger", "Support", "Resistance", 
-                        "Moving Average", "Volume", "Breakout", "Divergence", "Reversal"
-                    ]
-                    for pattern in patterns:
-                        if pattern.lower() in reasoning.lower() and pattern not in found_patterns:
-                            found_patterns.append(pattern)
-                            if len(found_patterns) >= 2:
-                                break
-                    
-                    # Extract price levels if mentioned
-                    price_match = re.search(r'\$([0-9,]+(?:\.[0-9]+)?)', reasoning)
-                    price_level = None
-                    if price_match and status.current_price > 0:
-                        price_level = price_match.group(1)
-                    
-                    # Extract timeframe
-                    timeframe = None
-                    timeframe_match = re.search(r'(\d+[-‒–—]\d+\s+(?:days?|weeks?|months?)|\d+\s+(?:days?|weeks?|months?)|few\s+(?:days?|weeks?))', reasoning.lower())
-                    if timeframe_match:
-                        timeframe = timeframe_match.group(1).title()
-                    
-                    # Build concise insight line
-                    insights = []
-                    
-                    # Add patterns
-                    if found_patterns:
-                        insights.append(" + ".join(found_patterns))
-                    
-                    # Add price level if relevant
-                    if price_level and status.ai_recommendation != "HOLD":
-                        if status.ai_recommendation == "BUY":
-                            insights.append(f"Target ${price_level}")
-                        else:
-                            insights.append(f"Support ${price_level}")
-                    
-                    # Add timeframe
-                    if timeframe:
-                        insights.append(timeframe)
-                    
-                    if insights:
-                        result += f"\n💡 {' • '.join(insights)}"
-
-            # Confidence indicator (enhanced if AI boosted)
-            conf_label = "AI Confidence" if status.ai_confidence and status.ai_confidence > status.confidence else "Confidence"
-            conf_value = status.ai_confidence if status.ai_confidence else status.confidence
-            result += f"\n{status.confidence_emoji} {conf_label}: {conf_value:.0f}%"
+            # AI Signal and Confidence - REMOVED per user request
+            # Commenting out to simplify dashboard display
+            # The AI recommendation, risk assessment, and confidence indicators have been removed
 
             # Update timestamp with data freshness indicator
             if status.last_updated:
