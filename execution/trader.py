@@ -891,36 +891,43 @@ class TradeExecutor:
                                 qty_step=qty_step
                             )
 
-                            if mirror_enhanced_result.get("tp_orders"):
-                                mirror_results["tps"] = []
-                                for i, (order_id, tp_order) in enumerate(mirror_enhanced_result["tp_orders"].items(), 1):
-                                    mirror_results["tps"].append({
-                                        "tp": i,
-                                        "id": tp_order["order_id"],
+                            # Check if mirror_enhanced_result is a valid dictionary (not False or None)
+                            if mirror_enhanced_result and isinstance(mirror_enhanced_result, dict):
+                                if mirror_enhanced_result.get("tp_orders"):
+                                    mirror_results["tps"] = []
+                                    for i, (order_id, tp_order) in enumerate(mirror_enhanced_result["tp_orders"].items(), 1):
+                                        mirror_results["tps"].append({
+                                            "tp": i,
+                                            "id": tp_order["order_id"],
+                                            "success": True
+                                        })
+                                    self.logger.info(f"✅ MIRROR: Enhanced TP orders placed (Conservative)")
+
+                                if mirror_enhanced_result.get("sl_order"):
+                                    mirror_results["sl"] = {
+                                        "id": mirror_enhanced_result["sl_order"]["order_id"],
                                         "success": True
-                                    })
-                                self.logger.info(f"✅ MIRROR: Enhanced TP orders placed (Conservative)")
+                                    }
+                                    self.logger.info(f"✅ MIRROR: Enhanced SL order placed")
 
-                            if mirror_enhanced_result.get("sl_order"):
-                                mirror_results["sl"] = {
-                                    "id": mirror_enhanced_result["sl_order"]["order_id"],
-                                    "success": True
-                                }
-                                self.logger.info(f"✅ MIRROR: Enhanced SL order placed")
+                                # Register mirror limit orders with the Mirror Enhanced TP/SL system for tracking
+                                mirror_limit_order_ids = []
+                                for limit_result in mirror_results.get("limits", []):
+                                    if limit_result.get("success") and limit_result.get("id"):
+                                        mirror_limit_order_ids.append(limit_result["id"])
 
-                            # Register mirror limit orders with the Mirror Enhanced TP/SL system for tracking
-                            mirror_limit_order_ids = []
-                            for limit_result in mirror_results.get("limits", []):
-                                if limit_result.get("success") and limit_result.get("id"):
-                                    mirror_limit_order_ids.append(limit_result["id"])
+                                if mirror_limit_order_ids:
+                                    # Register limit orders with mirror account type
+                                    await enhanced_tp_sl_manager.register_limit_orders(symbol, side, mirror_limit_order_ids, "mirror")
+                                    self.logger.info(f"📝 Registered {len(mirror_limit_order_ids)} mirror limit orders with Enhanced TP/SL system")
 
-                            if mirror_limit_order_ids:
-                                # Register limit orders with mirror account type
-                                await enhanced_tp_sl_manager.register_limit_orders(symbol, side, mirror_limit_order_ids, "mirror")
-                                self.logger.info(f"📝 Registered {len(mirror_limit_order_ids)} mirror limit orders with Enhanced TP/SL system")
-
-                            # Start mirror monitoring
-                            await start_mirror_monitoring_task(symbol, side, mirror_enhanced_result)
+                                # Start mirror monitoring
+                                await start_mirror_monitoring_task(symbol, side, mirror_enhanced_result)
+                            else:
+                                # Handle the case where setup failed
+                                error_msg = "Mirror enhanced TP/SL setup returned invalid result"
+                                self.logger.error(f"❌ MIRROR: {error_msg}")
+                                mirror_results["errors"].append(error_msg)
 
                     except Exception as e:
                         self.logger.error(f"❌ MIRROR: Failed to setup enhanced TP/SL: {e}")
@@ -2108,36 +2115,43 @@ class TradeExecutor:
                                 qty_step=qty_step
                             )
 
-                            if mirror_enhanced_result.get("tp_orders"):
-                                mirror_results["tps"] = []
-                                for i, (order_id, tp_order) in enumerate(mirror_enhanced_result["tp_orders"].items(), 1):
-                                    mirror_results["tps"].append({
-                                        "tp": i,
-                                        "id": tp_order["order_id"],
+                            # Check if mirror_enhanced_result is a valid dictionary (not False or None)
+                            if mirror_enhanced_result and isinstance(mirror_enhanced_result, dict):
+                                if mirror_enhanced_result.get("tp_orders"):
+                                    mirror_results["tps"] = []
+                                    for i, (order_id, tp_order) in enumerate(mirror_enhanced_result["tp_orders"].items(), 1):
+                                        mirror_results["tps"].append({
+                                            "tp": i,
+                                            "id": tp_order["order_id"],
+                                            "success": True
+                                        })
+                                    self.logger.info(f"✅ MIRROR: GGShot Enhanced TP orders placed (Conservative)")
+
+                                if mirror_enhanced_result.get("sl_order"):
+                                    mirror_results["sl"] = {
+                                        "id": mirror_enhanced_result["sl_order"]["order_id"],
                                         "success": True
-                                    })
-                                self.logger.info(f"✅ MIRROR: GGShot Enhanced TP orders placed (Conservative)")
+                                    }
+                                    self.logger.info(f"✅ MIRROR: GGShot Enhanced SL order placed")
 
-                            if mirror_enhanced_result.get("sl_order"):
-                                mirror_results["sl"] = {
-                                    "id": mirror_enhanced_result["sl_order"]["order_id"],
-                                    "success": True
-                                }
-                                self.logger.info(f"✅ MIRROR: GGShot Enhanced SL order placed")
+                                # Register GGShot mirror limit orders with the Mirror Enhanced TP/SL system for tracking
+                                ggshot_mirror_limit_order_ids = []
+                                for limit_result in mirror_results.get("limits", []):
+                                    if limit_result.get("success") and limit_result.get("id"):
+                                        ggshot_mirror_limit_order_ids.append(limit_result["id"])
 
-                            # Register GGShot mirror limit orders with the Mirror Enhanced TP/SL system for tracking
-                            ggshot_mirror_limit_order_ids = []
-                            for limit_result in mirror_results.get("limits", []):
-                                if limit_result.get("success") and limit_result.get("id"):
-                                    ggshot_mirror_limit_order_ids.append(limit_result["id"])
+                                if ggshot_mirror_limit_order_ids:
+                                    # Register limit orders with mirror account type  
+                                    await enhanced_tp_sl_manager.register_limit_orders(symbol, side, ggshot_mirror_limit_order_ids, "mirror")
+                                    self.logger.info(f"📝 Registered {len(ggshot_mirror_limit_order_ids)} GGShot mirror limit orders with Enhanced TP/SL system")
 
-                            if ggshot_mirror_limit_order_ids:
-                                # Register limit orders with mirror account type  
-                                await enhanced_tp_sl_manager.register_limit_orders(symbol, side, ggshot_mirror_limit_order_ids, "mirror")
-                                self.logger.info(f"📝 Registered {len(ggshot_mirror_limit_order_ids)} GGShot mirror limit orders with Enhanced TP/SL system")
-
-                            # Start mirror monitoring
-                            await start_mirror_monitoring_task(symbol, side, mirror_enhanced_result)
+                                # Start mirror monitoring
+                                await start_mirror_monitoring_task(symbol, side, mirror_enhanced_result)
+                            else:
+                                # Handle the case where setup failed
+                                error_msg = "GGShot mirror enhanced TP/SL setup returned invalid result"
+                                self.logger.error(f"❌ MIRROR: {error_msg}")
+                                mirror_results["errors"].append(error_msg)
 
                     except Exception as e:
                         self.logger.error(f"❌ MIRROR: Failed to setup GGShot enhanced TP/SL: {e}")
