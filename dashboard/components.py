@@ -217,19 +217,19 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
                 if explanation:
                     result += f"\n{explanation}\n"
 
-            # NEW: Funding Rate (for perpetuals)
-            if status.funding_rate is not None:
-                funding_emoji = "💚" if status.funding_rate < -0.01 else "💛" if abs(status.funding_rate) <= 0.01 else "❤️"
-                result += f"{funding_emoji} Funding: {status.funding_rate:.3f}%"
-                if status.funding_bias:
-                    bias_text = html.escape(str(status.funding_bias))
-                    result += f" ({bias_text})"
-                result += "\n"
+            # Funding Rate and Open Interest - REMOVED per user request
+            # Commenting out to simplify dashboard display
+            # if status.funding_rate is not None:
+            #     funding_emoji = "💚" if status.funding_rate < -0.01 else "💛" if abs(status.funding_rate) <= 0.01 else "❤️"
+            #     result += f"{funding_emoji} Funding: {status.funding_rate:.3f}%"
+            #     if status.funding_bias:
+            #         bias_text = html.escape(str(status.funding_bias))
+            #         result += f" ({bias_text})"
+            #     result += "\n"
 
-            # NEW: Open Interest Change
-            if status.open_interest_change_24h is not None:
-                oi_emoji = "📈" if status.open_interest_change_24h > 5 else "📉" if status.open_interest_change_24h < -5 else "➖"
-                result += f"{oi_emoji} OI 24h: {'+' if status.open_interest_change_24h > 0 else ''}{status.open_interest_change_24h:.1f}%\n"
+            # if status.open_interest_change_24h is not None:
+            #     oi_emoji = "📈" if status.open_interest_change_24h > 5 else "📉" if status.open_interest_change_24h < -5 else "➖"
+            #     result += f"{oi_emoji} OI 24h: {'+' if status.open_interest_change_24h > 0 else ''}{status.open_interest_change_24h:.1f}%\n"
 
             # NEW: AI Recommendation (GPT-4 Enhanced)
             if status.ai_recommendation:
