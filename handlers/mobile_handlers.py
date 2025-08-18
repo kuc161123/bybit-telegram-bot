@@ -85,7 +85,10 @@ async def fetch_mobile_optimized_trades_status() -> str:
         else:
             return "📱 <b>Portfolio Status</b>\n\n❌ Could not fetch positions"
     except Exception as e:
-        return f"📱 <b>Portfolio Status</b>\n\n❌ Error: {str(e)[:40]}..."
+        # Escape HTML in error message to prevent parsing issues
+        import html
+        error_msg = html.escape(str(e)[:40])
+        return f"📱 <b>Portfolio Status</b>\n\n❌ Error: {error_msg}..."
 
 async def mobile_dashboard_command(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Mobile-optimized dashboard command"""
