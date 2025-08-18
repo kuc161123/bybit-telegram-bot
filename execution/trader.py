@@ -1291,19 +1291,27 @@ class TradeExecutor:
                 message += f"└─ Position Value: <code>${format_decimal_or_na(position_value, 2)}</code>\n\n"
 
                 # Entry strategy box
+                has_market = MARKET_ORDER_PERCENTAGE > 0
+                num_orders = len(limit_prices) + (1 if has_market else 0)
                 message += (
-                    f"📍 <b>ENTRY STRATEGY</b> ({len(limit_prices)} Limits)\n"
+                    f"📍 <b>ENTRY STRATEGY</b> ({num_orders} Orders: {1 if has_market else 0} Market + {len(limit_prices)} Limits)\n"
                 )
 
-                # Add limit order details with enhanced formatting
-                for i, (price, details) in enumerate(zip(limit_prices, [d for k, d in order_details.items() if k.startswith("limit")]), 1):
-                    allocation = 33.3  # Each limit gets 33.3%
-                    if i == 1:
-                        message += f"├─ Primary: <code>${format_price(price)}</code> ({allocation:.1f}%)\n"
-                    elif i == len(limit_prices):
-                        message += f"└─ Limit {i-1}: <code>${format_price(price)}</code> ({allocation:.1f}%)\n"
-                    else:
-                        message += f"├─ Limit {i-1}: <code>${format_price(price)}</code> ({allocation:.1f}%)\n"
+                # Show market order first if enabled
+                if has_market and market_qty > 0:
+                    market_pct = float(MARKET_ORDER_PERCENTAGE * 100)
+                    message += f"├─ Market: <code>Current Price</code> ({market_pct:.0f}%)\n"
+                
+                # Add limit order details with correct weighted allocation
+                for i, price in enumerate(limit_prices, 1):
+                    # Calculate actual percentage of total position
+                    if i <= len(limit_quantities):
+                        qty = limit_quantities[i-1]
+                        actual_pct = float((LIMIT_ORDER_ALLOCATION[i-1] * (Decimal("1") - MARKET_ORDER_PERCENTAGE)) * 100)
+                        if i == len(limit_prices):
+                            message += f"└─ Limit {i}: <code>${format_price(price)}</code> ({actual_pct:.1f}%)\n"
+                        else:
+                            message += f"├─ Limit {i}: <code>${format_price(price)}</code> ({actual_pct:.1f}%)\n"
 
                 # Enhanced TP section with visual formatting and correct percentages
                 if len(tp_order_ids) > 0:
@@ -1342,11 +1350,12 @@ class TradeExecutor:
                     market_value = market_qty * avg_entry
                     message += f"   • Market: {format_decimal_or_na(market_qty, 4)} ({float(MARKET_ORDER_PERCENTAGE*100):.0f}%) • ${market_value:.2f}\n"
                 
-                # Show limit orders with weighted allocation
+                # Show limit orders with correct weighted allocation
                 for i, (price, qty) in enumerate(zip(limit_prices[:3], limit_quantities), 1):
                     value_per_order = qty * price
-                    pct = float(LIMIT_ORDER_ALLOCATION[i-1] * 100)
-                    message += f"   {i}. ${format_price(price)} • {format_decimal_or_na(qty, 4)} ({pct:.0f}%) • ${value_per_order:.2f}\n"
+                    # Calculate actual percentage of total position (not just limit portion)
+                    actual_pct = float((LIMIT_ORDER_ALLOCATION[i-1] * (Decimal("1") - MARKET_ORDER_PERCENTAGE)) * 100)
+                    message += f"   {i}. ${format_price(price)} • {format_decimal_or_na(qty, 4)} ({actual_pct:.1f}%) • ${value_per_order:.2f}\n"
                 message += f"   ➤ Weighted for better average entry\n"
                 message += f"   ➤ Improves R:R ratio\n\n"
 
@@ -2404,9 +2413,22 @@ class TradeExecutor:
                     f"├─ Accuracy: 99.2%\n"
                     f"├─ Processing: Multi-pass validation\n"
                     f"└─ Validation: ✅ PASSED\n\n"
-                    f"📍 <b>DETECTED PARAMETERS</b>\n"
-                    f"├─ Market Entry: <code>${format_decimal_or_na(avg_entry)}</code>\n"
-                    f"├─ Limit Orders: <code>{len(limit_prices)}</code> levels\n"
+                    f"📍 <b>ENTRY STRATEGY DETECTED</b>\n"
+                )
+                
+                # Show market order if placed
+                if market_result:
+                    market_pct = float(MARKET_ORDER_PERCENTAGE * 100)
+                    message += f"├─ Market Entry: <code>${format_decimal_or_na(avg_entry)}</code> ({market_pct:.0f}%)\n"
+                
+                # Show limit orders with correct percentages
+                for i, price in enumerate(limit_prices, 1):
+                    if i <= len(ggshot_limit_quantities):
+                        # For GGShot with 2 limits, show actual percentage
+                        actual_pct = float((ggshot_limit_quantities[i-1] / total_qty) * 100)
+                        message += f"├─ Limit {i}: <code>${format_price(price)}</code> ({actual_pct:.1f}%)\n"
+                
+                message += (
                     f"├─ Targets: <code>{len(tp_order_ids)}</code> TPs configured\n"
                     f"└─ Stop Loss: <code>${format_price(sl_price)}</code>\n\n"
                     f"💰 <b>POSITION DEPLOYED</b>\n"
