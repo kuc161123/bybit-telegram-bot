@@ -101,19 +101,22 @@ class DashboardGenerator:
             ))
             sections.append("")
             
-            # Trade recommendations
-            if dashboard_data.market_status and hasattr(dashboard_data.market_status, 'market_structure_1h'):
-                recommendations = self.components.trade_recommendations(dashboard_data.market_status)
-                if recommendations:
-                    sections.append(recommendations)
-                    sections.append("")
+            # Trade recommendations - REMOVED per user request
+            # Commenting out to disable trade recommendations display
+            # if dashboard_data.market_status and hasattr(dashboard_data.market_status, 'market_structure_1h'):
+            #     recommendations = self.components.trade_recommendations(dashboard_data.market_status)
+            #     if recommendations:
+            #         sections.append(recommendations)
+            #         sections.append("")
 
-            # Monitor status
-            sections.append(self.components.monitor_status(
-                dashboard_data.active_monitors,
-                dashboard_data.has_mirror
-            ))
-            sections.append("")
+            # Monitor status - only show if there are active monitors
+            total_monitors = dashboard_data.active_monitors.get('total', 0)
+            if total_monitors > 0:
+                sections.append(self.components.monitor_status(
+                    dashboard_data.active_monitors,
+                    dashboard_data.has_mirror
+                ))
+                sections.append("")
 
             # Quick actions grid
             sections.append(self.components.quick_actions_grid())
