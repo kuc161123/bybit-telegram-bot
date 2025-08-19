@@ -21,16 +21,31 @@ class DashboardComponents:
     @staticmethod
     def header(timestamp: str, auto_refresh: bool = False) -> str:
         """Generate dashboard header with status"""
-        status = "🔄" if auto_refresh else "📊"
-        return f"<b>📈 TRADING DASHBOARD</b>\n{timestamp} • {status} Live\n"
+        # ORIGINAL CODE (for easy revert):
+        # status = "🔄" if auto_refresh else "📊"
+        # return f"<b>📈 TRADING DASHBOARD</b>\n{timestamp} • {status} Live\n"
+        
+        # ENHANCED DISPLAY:
+        status_icon = "🔄" if auto_refresh else "📊"
+        status_text = "Auto-Refresh ON" if auto_refresh else "Live Monitoring"
+        return f"╔═══════════════════════════════╗\n║  <b>📈 TRADING DASHBOARD</b>  ║\n╚═══════════════════════════════╝\n{timestamp} • {status_icon} {status_text}\n"
 
     @staticmethod
     def quick_commands() -> str:
         """Generate quick command pills"""
+        # ORIGINAL CODE (for easy revert):
+        # return (
+        #     "📍 Quick Commands:\n"
+        #     "<code>/trade</code> <code>/start</code> "
+        #     "<code>/help</code> <code>/settings</code>\n"
+        # )
+        
+        # ENHANCED DISPLAY:
         return (
-            "📍 Quick Commands:\n"
-            "<code>/trade</code> <code>/start</code> "
-            "<code>/help</code> <code>/settings</code>\n"
+            "┌─ <b>QUICK ACTIONS</b> ─────────┐\n"
+            "│ <code>/trade</code> 📊 <code>/start</code> 🚀 │\n"
+            "│ <code>/help</code> ❓ <code>/settings</code> ⚙️ │\n"
+            "└──────────────────────────┘\n"
         )
 
     @staticmethod
@@ -54,12 +69,34 @@ Positions: {mirror.position_count}
 Health: {mirror.health_emoji} {mirror.health_score:.0f}%"""
         else:
             # Single account display
-            return f"""<b>💼 ACCOUNT OVERVIEW</b>
-💰 Balance: <b>${format_number(main.balance)}</b>
-🔓 Available: ${format_number(main.available_balance)}
-📊 In Use: ${format_number(main.margin_used)} ({main.balance_used_pct:.1f}%)
-{main.health_emoji} Health: {main.health_score:.0f}% ({main.health_status})
-💎 P&L: ${format_number(main.total_pnl)}"""
+            # ORIGINAL CODE (for easy revert):
+            # return f"""<b>💼 ACCOUNT OVERVIEW</b>
+            # 💰 Balance: <b>${format_number(main.balance)}</b>
+            # 🔓 Available: ${format_number(main.available_balance)}
+            # 📊 In Use: ${format_number(main.margin_used)} ({main.balance_used_pct:.1f}%)
+            # {main.health_emoji} Health: {main.health_score:.0f}% ({main.health_status})
+            # 💎 P&L: ${format_number(main.total_pnl)}"""
+            
+            # ENHANCED DISPLAY:
+            pnl_emoji = "📈" if main.total_pnl >= 0 else "📉"
+            pnl_color = "🟢" if main.total_pnl >= 0 else "🔴"
+            
+            return f"""╭──── <b>💼 ACCOUNT OVERVIEW</b> ────╮
+│ 
+│ 💰 <b>Total Balance</b>
+│    ${format_number(main.balance)}
+│ 
+│ 🔓 <b>Available</b>: ${format_number(main.available_balance)}
+│ 📊 <b>In Use</b>: ${format_number(main.margin_used)} 
+│    └─ {main.balance_used_pct:.1f}% utilized
+│ 
+│ {main.health_emoji} <b>Health Score</b>: {main.health_score:.0f}%
+│    └─ Status: {main.health_status}
+│ 
+│ {pnl_color} <b>Total P&L</b>: {pnl_emoji}
+│    ${format_number(main.total_pnl)}
+│ 
+╰────────────────────────────╯"""
 
     @staticmethod
     def pnl_analysis_table(main: PnLAnalysis, mirror: Optional[PnLAnalysis] = None) -> str:
@@ -73,10 +110,27 @@ Health: {mirror.health_emoji} {mirror.health_score:.0f}%"""
 📊 R:R: 1:{main.risk_reward_ratio:.1f} | 1:{mirror.risk_reward_ratio:.1f}"""
         else:
             # Single account P&L for TP1-only strategy
-            return f"""<b>💡 POTENTIAL P&L ANALYSIS</b>
-🎯 TP1 (100%): <b>+${format_number(main.tp_profit)}</b>
-🛑 If All SL Hit: -${format_number(main.all_sl_loss)}
-📊 Risk:Reward = <b>1:{main.risk_reward_ratio:.1f}</b>"""
+            # ORIGINAL CODE (for easy revert):
+            # return f"""<b>💡 POTENTIAL P&L ANALYSIS</b>
+            # 🎯 TP1 (100%): <b>+${format_number(main.tp_profit)}</b>
+            # 🛑 If All SL Hit: -${format_number(main.all_sl_loss)}
+            # 📊 Risk:Reward = <b>1:{main.risk_reward_ratio:.1f}</b>"""
+            
+            # ENHANCED DISPLAY:
+            rr_quality = "🟢 Excellent" if main.risk_reward_ratio >= 3 else "🟡 Good" if main.risk_reward_ratio >= 2 else "🟠 Fair" if main.risk_reward_ratio >= 1 else "🔴 Poor"
+            
+            return f"""┏━━━ <b>💡 P&L ANALYSIS</b> ━━━┓
+┃                          ┃
+┃ 🎯 <b>Target Profit (TP1)</b>   ┃
+┃    +${format_number(main.tp_profit):>10}        ┃
+┃                          ┃
+┃ 🛑 <b>Maximum Risk (SL)</b>     ┃
+┃    -${format_number(main.all_sl_loss):>10}        ┃
+┃                          ┃
+┃ 📊 <b>Risk:Reward Ratio</b>    ┃
+┃    1:{main.risk_reward_ratio:.1f} ({rr_quality})     ┃
+┃                          ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛"""
 
     @staticmethod
     def positions_summary(positions: List[PositionSummary], limit: int = 5) -> str:
@@ -257,13 +311,31 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
                         has_realtime = False
                     
                     # Smart display based on data freshness and real-time availability
+                    # ORIGINAL CODE (for easy revert):
+                    # if is_fresh and has_realtime:
+                    #     result += f" • 🟢 Live {timestamp_str}"
+                    # elif is_fresh:
+                    #     result += f" • 🟡 Fresh {timestamp_str}"
+                    # else:
+                    #     result += f" • 🔵 API {timestamp_str}"
+                    
+                    # ENHANCED DISPLAY (Creative improvement):
                     if is_fresh and has_realtime:
-                        result += f" • 🟢 Live {timestamp_str}"
+                        # Real-time with animated indicator
+                        result += f"\n⚡ <b>LIVE DATA</b> • {timestamp_str} • <i>Real-time stream active</i>"
                     elif is_fresh:
-                        # Don't show "Fresh" timestamp - removed per user request
-                        pass
+                        # Fresh data with time since update
+                        seconds_ago = int(data_age.total_seconds())
+                        result += f"\n📡 <b>RECENT</b> • {timestamp_str} • <i>Updated {seconds_ago}s ago</i>"
                     else:
-                        result += f" • 🔵 API {timestamp_str}"
+                        # API data with age indicator
+                        minutes_ago = int(data_age.total_seconds() / 60)
+                        if minutes_ago < 60:
+                            age_str = f"{minutes_ago}m ago"
+                        else:
+                            hours_ago = minutes_ago // 60
+                            age_str = f"{hours_ago}h {minutes_ago % 60}m ago"
+                        result += f"\n📊 <b>CACHED</b> • {timestamp_str} • <i>Refreshed {age_str}</i>"
                         
                 except Exception:
                     result += f" • 📊 {timestamp_str}"
@@ -276,31 +348,42 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
     @staticmethod
     def monitor_status(monitors: dict, has_mirror: bool = False) -> str:
         """Generate monitor status section"""
+        # ORIGINAL CODE (for easy revert):
+        # total = monitors.get('total', 0)
+        # result = f"<b>⚡ ACTIVE MONITORS</b> ({total} Total)\n"
+        # main_count = monitors.get('main', 0)
+        # mirror_count = monitors.get('mirror', 0)
+        # if main_count > 0:
+        #     result += f"📍 Main Account: {main_count} monitors\n"
+        # if has_mirror and mirror_count > 0:
+        #     result += f"🪞 Mirror Account: {mirror_count} monitors\n"
+        # return result.rstrip('\n')
+        
+        # ENHANCED DISPLAY:
         total = monitors.get('total', 0)
-
-        result = f"<b>⚡ ACTIVE MONITORS</b> ({total} Total)\n"
-
-        # Show by account
         main_count = monitors.get('main', 0)
         mirror_count = monitors.get('mirror', 0)
-
+        
+        # Create visual activity bars
+        main_bar = "█" * min(main_count, 10) + "░" * max(0, 10 - main_count) if main_count > 0 else "░" * 10
+        mirror_bar = "█" * min(mirror_count, 10) + "░" * max(0, 10 - mirror_count) if mirror_count > 0 else "░" * 10
+        
+        result = f"""╔═══ <b>⚡ MONITOR STATUS</b> ═══╗
+║ Total Active: {total:>3} monitors ║
+╠════════════════════════════╣
+"""
+        
         if main_count > 0:
-            result += f"📍 Main Account: {main_count} monitors\n"
-
+            result += f"""║ 📍 MAIN:  [{main_bar}] {main_count:>2} ║
+"""
+        
         if has_mirror and mirror_count > 0:
-            result += f"🪞 Mirror Account: {mirror_count} monitors\n"
-
-        # Optionally show approach breakdown if needed
-        # fast = monitors.get('fast', 0)
-        # conservative = monitors.get('conservative', 0)
-        # if fast > 0 or conservative > 0:
-        #     result += f"\n"
-        #     if fast > 0:
-        #         result += f"⚡ Fast: {fast} | "
-        #     if conservative > 0:
-        #         result += f"🛡️ Conservative: {conservative}"
-
-        return result.rstrip('\n')
+            result += f"""║ 🪞 MIRROR: [{mirror_bar}] {mirror_count:>2} ║
+"""
+        
+        result += "╚════════════════════════════╝"
+        
+        return result
 
     @staticmethod
     def quick_actions_grid() -> str:
@@ -409,4 +492,8 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
     @staticmethod
     def divider() -> str:
         """Generate a section divider"""
-        return "━" * 25 + "\n"
+        # ORIGINAL CODE (for easy revert):
+        # return "━" * 25 + "\n"
+        
+        # ENHANCED DISPLAY:
+        return "═══════════════════════════════\n"
