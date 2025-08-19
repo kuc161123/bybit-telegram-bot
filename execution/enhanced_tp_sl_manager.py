@@ -10733,6 +10733,287 @@ All take profit targets have been achieved! 🎯"""
             # Remove monitor
             if monitor_key in self.position_monitors:
                 del self.position_monitors[monitor_key]
+    
+    async def _cancel_tp_order_with_retry(self, is_mirror_account: bool, symbol: str, order_id: str, tp_num: int, max_retries: int = 3) -> tuple[bool, str]:
+        """
+        Cancel TP order with retry logic and proper error handling
+        Handles both main and mirror accounts with appropriate API calls
+        """
+        for attempt in range(max_retries):
+            try:
+                if is_mirror_account:
+                    # Use mirror account cancellation
+                    from execution.mirror_trader import bybit_client_2
+                    result = bybit_client_2.cancel_order(
+                        category="linear",
+                        symbol=symbol,
+                        orderId=order_id
+                    )
+                else:
+                    # Use main account cancellation
+                    from clients.bybit_helpers import cancel_order_with_retry
+                    result = await cancel_order_with_retry(symbol, order_id)
+                
+                # Check if cancellation was successful
+                if result:
+                    if isinstance(result, dict):
+                        # Check for specific success indicators
+                        if result.get("retCode") == 0:
+                            return True, f"Successfully cancelled TP{tp_num} order"
+                        # Handle "order not exists" as success (already cancelled/filled)
+                        elif result.get("retCode") == 110001:  # Order does not exist
+                            return True, f"TP{tp_num} order already cancelled or filled"
+                    elif result == True:  # Direct boolean response
+                        return True, f"Successfully cancelled TP{tp_num} order"
+                
+                # Log the attempt
+                logger.warning(f"Attempt {attempt + 1}/{max_retries} to cancel TP{tp_num} failed: {result}")
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                # Handle specific error cases
+                if "order not exists" in error_msg or "110001" in error_msg:
+                    return True, f"TP{tp_num} order already cancelled or filled"
+                
+                logger.error(f"Error cancelling TP{tp_num} order (attempt {attempt + 1}/{max_retries}): {e}")
+                
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
+                else:
+                    return False, f"Failed after {max_retries} attempts: {str(e)}"
+        
+        return False, "Max retries exceeded"
+
+    async def _place_tp_order_with_retry(self, is_mirror_account: bool, order_params: Dict, tp_num: int, max_retries: int = 3) -> tuple[bool, str, Dict]:
+        """
+        Place TP order with retry logic and proper parameter conversion
+        Handles both main and mirror accounts with appropriate API calls
+        """
+        for attempt in range(max_retries):
+            try:
+                if is_mirror_account:
+                    # Convert parameters for mirror account
+                    from execution.mirror_trader import bybit_client_2
+                    
+                    # Mirror account needs camelCase parameters
+                    mirror_params = {
+                        "category": "linear",
+                        "symbol": order_params["symbol"],
+                        "side": order_params["side"],
+                        "orderType": order_params["order_type"],
+                        "qty": order_params["qty"],
+                        "price": order_params["price"],
+                        "reduceOnly": order_params.get("reduce_only", True),
+                        "orderLinkId": order_params.get("order_link_id", ""),
+                        "timeInForce": order_params.get("time_in_force", "GTC"),
+                        "positionIdx": order_params.get("position_idx", 0)
+                    }
+                    
+                    result = bybit_client_2.place_order(**mirror_params)
+                else:
+                    # Use main account order placement
+                    from clients.bybit_helpers import place_order_with_retry
+                    result = await place_order_with_retry(**order_params)
+                
+                # Check if placement was successful
+                if result and isinstance(result, dict):
+                    if result.get("retCode") == 0:
+                        order_result = result.get("result", {})
+                        if order_result.get("orderId"):
+                            return True, f"Successfully placed TP{tp_num}", order_result
+                    elif result.get("orderId"):  # Direct order ID in result
+                        return True, f"Successfully placed TP{tp_num}", result
+                
+                logger.warning(f"Attempt {attempt + 1}/{max_retries} to place TP{tp_num} failed: {result}")
+                    
+            except Exception as e:
+                logger.error(f"Error placing TP{tp_num} order (attempt {attempt + 1}/{max_retries}): {e}")
+                
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
+                else:
+                    return False, f"Failed after {max_retries} attempts: {str(e)}", {}
+        
+        return False, "Max retries exceeded", {}
+
+    async def _validate_position_for_rebalancing(self, monitor_data: Dict) -> tuple[bool, Decimal]:
+        """
+        Validate position exists and return actual size
+        Handles both main and mirror accounts
+        """
+        try:
+            symbol = monitor_data.get("symbol")
+            side = monitor_data.get("side")
+            account_type = monitor_data.get("account_type", "main")
+            
+            # Get position data
+            if account_type == 'mirror':
+                from clients.bybit_helpers import get_position_info_for_account
+                positions = await get_position_info_for_account(symbol, 'mirror')
+            else:
+                from clients.bybit_helpers import get_position_info
+                positions = await get_position_info(symbol)
+            
+            # Handle both list and dict returns
+            if isinstance(positions, dict):
+                positions = [positions]
+            elif positions is None:
+                logger.warning(f"No positions returned for {symbol} {side} ({account_type})")
+                return False, Decimal('0')
+            
+            # Find matching position
+            for pos in positions:
+                if pos.get('symbol') == symbol and pos.get('side') == side:
+                    size = Decimal(str(pos.get('size', '0')))
+                    if size > 0:
+                        logger.info(f"✅ Position validated: {symbol} {side} size={size} ({account_type})")
+                        return True, size
+            
+            logger.warning(f"No matching position found for {symbol} {side} ({account_type})")
+            return False, Decimal('0')
+            
+        except Exception as e:
+            logger.error(f"Position validation error for {symbol} {side}: {e}")
+            return False, Decimal('0')
+
+    def _calculate_rebalanced_quantity(self, current_size: Decimal, tp_percentage: Decimal, instrument_info: Dict) -> Decimal:
+        """
+        Calculate properly adjusted quantity for TP order
+        Handles step size and minimum quantity requirements
+        """
+        try:
+            # Calculate raw quantity
+            raw_qty = (current_size * tp_percentage) / Decimal("100")
+            
+            # Get instrument parameters with defaults
+            lot_size_filter = instrument_info.get("lotSizeFilter", {})
+            qty_step = Decimal(str(lot_size_filter.get("qtyStep", "1")))
+            min_qty = Decimal(str(lot_size_filter.get("minOrderQty", "0.001")))
+            
+            logger.debug(f"Quantity calculation: raw={raw_qty}, step={qty_step}, min={min_qty}")
+            
+            # Adjust to step size
+            adjusted_qty = self._round_to_step(raw_qty, qty_step)
+            
+            # Ensure minimum quantity
+            if adjusted_qty < min_qty:
+                if raw_qty >= min_qty / 2:  # If close to minimum, use minimum
+                    adjusted_qty = min_qty
+                    logger.info(f"Quantity adjusted to minimum: {adjusted_qty}")
+                else:
+                    adjusted_qty = Decimal('0')  # Too small, skip
+                    logger.warning(f"Quantity too small ({raw_qty}), will be skipped")
+            
+            return adjusted_qty
+            
+        except Exception as e:
+            logger.error(f"Quantity calculation error: {e}")
+            # Fallback to simple rounding
+            if raw_qty >= Decimal("1"):
+                return raw_qty.quantize(Decimal("1"))
+            else:
+                return raw_qty.quantize(Decimal("0.001"))
+
+    def _round_to_step(self, value: Decimal, step: Decimal) -> Decimal:
+        """Round value to nearest step"""
+        if step == 0:
+            return value
+        return (value / step).quantize(Decimal('1')) * step
+
+    async def _recover_tp_orders_simple(self, monitor_data: Dict) -> Dict:
+        """
+        Simple and reliable TP order recovery
+        Gets all TP orders from exchange for the position
+        """
+        try:
+            symbol = monitor_data.get("symbol")
+            side = monitor_data.get("side")
+            account_type = monitor_data.get("account_type", "main")
+            
+            logger.info(f"🔧 Recovering TP orders for {symbol} {side} ({account_type})")
+            
+            # Get all open orders
+            if account_type == "mirror":
+                from execution.mirror_trader import bybit_client_2
+                from clients.bybit_helpers import get_all_open_orders
+                orders = await get_all_open_orders(client=bybit_client_2)
+            else:
+                from clients.bybit_helpers import get_all_open_orders
+                orders = await get_all_open_orders()
+            
+            # Filter for this symbol
+            orders = [o for o in (orders or []) if o.get("symbol") == symbol]
+            
+            # Filter TP orders (reduce-only limit orders on opposite side)
+            tp_orders = {}
+            tp_count = 0
+            
+            for order in orders:
+                # TP orders are reduce-only limit orders on opposite side of position
+                is_tp = (
+                    order.get("reduceOnly") == True and
+                    order.get("orderType") == "Limit" and
+                    order.get("side") != side  # Opposite side to position
+                )
+                
+                if is_tp:
+                    order_id = order.get("orderId")
+                    tp_count += 1
+                    
+                    tp_orders[order_id] = {
+                        "order_id": order_id,
+                        "price": Decimal(str(order.get("price", "0"))),
+                        "quantity": Decimal(str(order.get("qty", "0"))),
+                        "order_link_id": order.get("orderLinkId", ""),
+                        "tp_number": tp_count,  # Simple sequential numbering
+                        "status": "ACTIVE",
+                        "recovered": True,
+                        "recovery_time": time.time()
+                    }
+                    
+                    logger.info(f"✅ Recovered TP{tp_count}: {order_id[:8]}... @ {order.get('price')}")
+            
+            if tp_orders:
+                logger.info(f"✅ Successfully recovered {len(tp_orders)} TP orders")
+            else:
+                logger.warning(f"⚠️ No TP orders found to recover")
+            
+            return tp_orders
+            
+        except Exception as e:
+            logger.error(f"TP recovery error: {e}")
+            return {}
+
+    async def _cancel_order_mirror(self, symbol: str, order_id: str) -> bool:
+        """Cancel order on mirror account"""
+        try:
+            from execution.mirror_trader import bybit_client_2
+            result = bybit_client_2.cancel_order(
+                category="linear",
+                symbol=symbol,
+                orderId=order_id
+            )
+            
+            if result and result.get("retCode") == 0:
+                return True
+            elif result and result.get("retCode") == 110001:  # Order does not exist
+                logger.info(f"Order {order_id[:8]}... already cancelled or filled")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error cancelling mirror order: {e}")
+            return False
+
+    async def _cancel_order_main(self, symbol: str, order_id: str) -> bool:
+        """Cancel order on main account"""
+        try:
+            from clients.bybit_helpers import cancel_order_with_retry
+            return await cancel_order_with_retry(symbol, order_id)
+        except Exception as e:
+            logger.error(f"Error cancelling main order: {e}")
+            return False
 
 # Singleton implementation
 _enhanced_tp_sl_manager_instance = None
