@@ -260,7 +260,8 @@ Sharpe: {metrics.sharpe_ratio:.2f} • DD: {metrics.max_drawdown:.1f}%"""
                     if is_fresh and has_realtime:
                         result += f" • 🟢 Live {timestamp_str}"
                     elif is_fresh:
-                        result += f" • 🟡 Fresh {timestamp_str}"
+                        # Don't show "Fresh" timestamp - removed per user request
+                        pass
                     else:
                         result += f" • 🔵 API {timestamp_str}"
                         
