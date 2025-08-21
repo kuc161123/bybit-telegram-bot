@@ -2057,8 +2057,8 @@ class TradeExecutor:
                     side=side,
                     position_size=final_sl_qty,  # Target position size
                     entry_price=avg_entry,
-                    tp_prices=tp_prices[:4],  # Use AI-extracted TP prices
-                    tp_percentages=[85, 5, 5, 5],  # Conservative distribution
+                    tp_prices=tp_prices[:1],  # Use single TP price (TP1-only strategy)
+                    tp_percentages=[100],  # Single complete exit at TP1
                     sl_price=sl_price,
                     chat_id=chat_id,
                     approach="GGSHOT_CONSERVATIVE",
@@ -2135,8 +2135,8 @@ class TradeExecutor:
                                 side=side,
                                 position_size=final_sl_qty,
                                 entry_price=avg_entry,
-                                tp_prices=tp_prices[:4],  # First 4 TPs
-                                tp_percentages=[85, 5, 5, 5],
+                                tp_prices=tp_prices[:1],  # Single TP (TP1-only strategy)
+                                tp_percentages=[100],  # Single complete exit
                                 sl_price=sl_price,
                                 chat_id=chat_id,
                                 approach="GGSHOT_CONSERVATIVE",

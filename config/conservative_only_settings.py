@@ -11,7 +11,7 @@ DEFAULT_APPROACH = "conservative"
 
 # Conservative approach specific settings
 CONSERVATIVE_ENTRY_ORDERS = 4  # Number of limit orders for entry
-CONSERVATIVE_TP_PERCENTAGES = [85, 5, 5, 5]  # TP distribution
+CONSERVATIVE_TP_PERCENTAGES = [100]  # Single TP at 100% (TP1-only strategy)
 CONSERVATIVE_FIRST_ENTRY_AS_MARKET = True  # First "limit" order executes as market
 
 # Disable other approaches

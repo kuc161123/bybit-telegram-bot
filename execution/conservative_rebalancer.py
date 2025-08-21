@@ -179,24 +179,20 @@ class ConservativeRebalancer:
                 elif side == 'Sell' and trigger_price < avg_price:
                     tp_orders.append(order)
 
-            if len(tp_orders) != 4:
-                return False  # Only rebalance if we have exactly 4 TPs
+            # TP1-only strategy: Only expect 1 TP order
+            if len(tp_orders) != 1:
+                logger.info(f"Found {len(tp_orders)} TP orders, expected 1 for TP1-only strategy")
+                return False  # Only rebalance if we have exactly 1 TP
 
-            # Check quantity distribution
-            tp_quantities = [float(o.get('qty', 0)) for o in tp_orders]
-            total_tp_qty = sum(tp_quantities)
-
-            # Expected distribution
-            expected_tp1 = total_size * 0.85
-            expected_others = total_size * 0.05
+            # Check quantity distribution for single TP
+            tp_quantity = float(tp_orders[0].get('qty', 0))
+            
+            # Expected: TP should cover 100% of position
+            expected_tp = total_size  # 100% of position
 
             # Check if significantly off (more than 5% deviation)
-            if abs(tp_quantities[0] - expected_tp1) > total_size * 0.05:
+            if abs(tp_quantity - expected_tp) > total_size * 0.05:
                 return True
-
-            for qty in tp_quantities[1:]:
-                if abs(qty - expected_others) > total_size * 0.05:
-                    return True
 
             return False
 
@@ -251,27 +247,19 @@ class ConservativeRebalancer:
             else:
                 tp_orders.sort(key=lambda x: float(x.get('triggerPrice', 0)), reverse=True)
 
-            if len(tp_orders) != 4:
-                logger.warning(f"Expected 4 TPs, found {len(tp_orders)} for {symbol}")
+            # TP1-only strategy: Only expect 1 TP order
+            if len(tp_orders) != 1:
+                logger.warning(f"Expected 1 TP for TP1-only strategy, found {len(tp_orders)} for {symbol}")
                 return False
 
-            # Calculate new quantities
-            new_quantities = [
-                int(total_size * 0.85),
-                int(total_size * 0.05),
-                int(total_size * 0.05),
-                int(total_size * 0.05)
-            ]
-
-            # Adjust for rounding
-            total_new = sum(new_quantities)
-            if total_new < total_size:
-                new_quantities[0] += int(total_size - total_new)
+            # Calculate new quantity for single TP (100% of position)
+            new_quantities = [int(total_size)]  # Single TP covers entire position
 
             # Cancel and replace TP orders with same prices but new quantities
             success = True
 
-            for i, (order, new_qty) in enumerate(zip(tp_orders, new_quantities)):
+            # Process the single TP order
+            for i, (order, new_qty) in enumerate(zip(tp_orders[:1], new_quantities)):
                 old_qty = float(order.get('qty', 0))
 
                 # Skip if quantity hasn't changed significantly
@@ -313,13 +301,13 @@ class ConservativeRebalancer:
                     place_result = await place_order_with_retry(**order_params)
 
                     if place_result:
-                        logger.info(f"✅ Rebalanced TP{i+1}: {old_qty} → {new_qty} (price: ${trigger_price}, type: {original_stop_type})")
+                        logger.info(f"✅ Rebalanced TP1 (100%): {old_qty} → {new_qty} (price: ${trigger_price}, type: {original_stop_type})")
                     else:
-                        logger.error(f"Failed to place new TP{i+1} order")
+                        logger.error(f"Failed to place new TP1 order")
                         success = False
 
                 except Exception as e:
-                    logger.error(f"Error rebalancing TP{i+1}: {e}")
+                    logger.error(f"Error rebalancing TP1: {e}")
                     success = False
 
             # Also rebalance SL to match position size if needed
@@ -474,24 +462,14 @@ async def rebalance_conservative_on_limit_fill(chat_data=None, symbol=None, fill
         else:
             tp_orders.sort(key=lambda x: float(x.get('triggerPrice', 0)), reverse=True)  # Descending for shorts
 
-        # Calculate ideal quantities (85%, 5%, 5%, 5%)
-        ideal_quantities = [
-            int(total_size * 0.85),
-            int(total_size * 0.05),
-            int(total_size * 0.05),
-            int(total_size * 0.05)
-        ]
-
-        # Adjust for rounding
-        total_ideal = sum(ideal_quantities)
-        if total_ideal < total_size:
-            ideal_quantities[0] += int(total_size - total_ideal)
+        # TP1-only strategy: Single TP at 100%
+        ideal_quantities = [int(total_size)]  # Single TP covers entire position
 
         rebalanced_count = 0
         cancelled_count = 0
 
-        # Check each TP order and rebalance if needed
-        for i, (order, ideal_qty) in enumerate(zip(tp_orders[:4], ideal_quantities)):
+        # Check the single TP order and rebalance if needed
+        for i, (order, ideal_qty) in enumerate(zip(tp_orders[:1], ideal_quantities)):
             current_qty = float(order.get('qty', 0))
 
             # Check if quantity needs adjustment (more than 5% difference)
@@ -532,10 +510,10 @@ async def rebalance_conservative_on_limit_fill(chat_data=None, symbol=None, fill
                         else:
                             logger.error(f"❌ Failed to place new TP{i+1} order")
                     else:
-                        logger.error(f"❌ Failed to cancel TP{i+1} order")
+                        logger.error(f"❌ Failed to cancel TP1 order")
 
                 except Exception as e:
-                    logger.error(f"Error rebalancing TP{i+1}: {e}")
+                    logger.error(f"Error rebalancing TP1: {e}")
 
         # Send alert to user about rebalancing - ALWAYS send alert when rebalancing occurs
         if ctx_app and hasattr(ctx_app, 'bot'):
