@@ -469,6 +469,26 @@ class TradeExecutor:
             avg_limit_price = sum(limit_prices) / len(limit_prices) if limit_prices else tp_prices[0]
             total_qty = total_position_size / avg_limit_price
             
+            # Get current market price for proper TP calculation when using market orders
+            actual_entry_price = avg_limit_price  # Default to avg limit price
+            if MARKET_ORDER_PERCENTAGE > 0:
+                # When market order is used, get actual market price as entry
+                from clients.bybit_helpers import get_current_price
+                try:
+                    current_market_price = await get_current_price(symbol)
+                    if current_market_price:
+                        actual_entry_price = Decimal(str(current_market_price))
+                        self.logger.info(f"📍 Using market price ${actual_entry_price} as entry for TP calculation")
+                    else:
+                        self.logger.warning(f"Could not fetch market price, using avg limit price ${avg_limit_price}")
+                except Exception as e:
+                    self.logger.error(f"Error fetching market price: {e}, using avg limit price")
+            else:
+                # When no market order, use first limit price as initial entry
+                if limit_prices:
+                    actual_entry_price = limit_prices[0]
+                    self.logger.info(f"📍 Using first limit price ${actual_entry_price} as entry for TP calculation")
+            
             # Calculate market and limit allocations
             market_qty = total_qty * MARKET_ORDER_PERCENTAGE
             limit_total_qty = total_qty * (Decimal("1") - MARKET_ORDER_PERCENTAGE)
@@ -799,7 +819,7 @@ class TradeExecutor:
                     symbol=symbol,
                     side=side,
                     position_size=final_sl_qty,  # Target position size
-                    entry_price=avg_limit_price,
+                    entry_price=actual_entry_price,  # Use actual entry price (market or first limit)
                     tp_prices=tp_prices[:1],  # Use single TP price
                     tp_percentages=[100],  # Single complete exit
                     sl_price=sl_price,
@@ -881,7 +901,7 @@ class TradeExecutor:
                                 symbol=symbol,
                                 side=side,
                                 position_size=mirror_final_sl_qty,
-                                entry_price=avg_limit_price,
+                                entry_price=actual_entry_price,  # Use actual entry price for mirror too
                                 tp_prices=tp_prices[:1],  # Single TP
                                 tp_percentages=[100],  # Single complete exit
                                 sl_price=sl_price,
