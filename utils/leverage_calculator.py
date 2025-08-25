@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Smart Leverage Calculator for 1% Risk Management
-Calculates recommended leverage to limit maximum loss to 1% of total account balance
+Smart Leverage Calculator for 3% Risk Management
+Calculates recommended leverage to limit maximum loss to 3% of total account balance
 """
 import logging
 from decimal import Decimal, InvalidOperation
@@ -17,7 +17,7 @@ async def calculate_2_percent_risk_leverage(
     max_leverage: int = 100
 ) -> Tuple[Optional[int], str]:
     """
-    Calculate recommended leverage for 1% account risk (function name kept for compatibility)
+    Calculate recommended leverage for 3% account risk (function name kept for compatibility)
     
     Args:
         entry_price: Entry price for the trade
@@ -46,8 +46,8 @@ async def calculate_2_percent_risk_leverage(
             logger.error(f"Error fetching account balance: {e}")
             return None, "Account balance unavailable"
         
-        # Calculate target loss (1% of total balance)
-        target_loss = total_balance * Decimal("0.01")
+        # Calculate target loss (3% of total balance)
+        target_loss = total_balance * Decimal("0.03")
         
         # Calculate price distance (absolute difference)
         price_distance = abs(entry_price - sl_price)
@@ -75,13 +75,13 @@ async def calculate_2_percent_risk_leverage(
             
             explanation = f"Capped at {max_leverage}x (max allowed) - Risk: {actual_risk_percent:.1f}%"
         else:
-            explanation = f"Limits loss to 1% of account (${target_loss:.2f})"
+            explanation = f"Limits loss to 3% of account (${target_loss:.2f})"
         
         # Additional validation - ensure recommended leverage makes sense
         if recommended_leverage < 1:
             return None, "Calculated leverage too low"
             
-        logger.info(f"💡 Leverage calculation successful: {recommended_leverage}x for 1% risk")
+        logger.info(f"💡 Leverage calculation successful: {recommended_leverage}x for 3% risk")
         logger.debug(f"   Entry: ${entry_price}, SL: ${sl_price}, Margin: ${margin_amount}")
         logger.debug(f"   Account Balance: ${total_balance}, Target Loss: ${target_loss}")
         logger.debug(f"   Price Distance: ${price_distance}, Required Position: {required_position_size}")
@@ -138,7 +138,7 @@ async def calculate_2_percent_risk_margin(
     leverage: int
 ) -> Tuple[Optional[float], str]:
     """
-    Calculate recommended margin percentage for 1% account risk (function name kept for compatibility)
+    Calculate recommended margin percentage for 3% account risk (function name kept for compatibility)
     
     Args:
         entry_price: Entry price for the trade
@@ -166,13 +166,13 @@ async def calculate_2_percent_risk_margin(
             logger.error(f"Error fetching account balance: {e}")
             return None, "Account balance unavailable"
         
-        # Calculate target loss (1% of total balance)
-        target_loss = total_balance * Decimal("0.01")
+        # Calculate target loss (3% of total balance)
+        target_loss = total_balance * Decimal("0.03")
         
         # Calculate price distance (absolute difference)
         price_distance = abs(entry_price - sl_price)
         
-        # Calculate required margin percentage for 1% risk
+        # Calculate required margin percentage for 3% risk
         # Formula: target_loss = (margin_amount * leverage / entry_price) * price_distance
         # Solving for margin_amount: margin_amount = (target_loss * entry_price) / (leverage * price_distance)
         # As percentage: margin_percent = (margin_amount / total_balance) * 100
@@ -189,9 +189,9 @@ async def calculate_2_percent_risk_margin(
         if margin_percent > 50:
             return None, "Calculated margin too large (>50%)"
             
-        explanation = f"Limits loss to 1% of account (${target_loss:.2f})"
+        explanation = f"Limits loss to 3% of account (${target_loss:.2f})"
         
-        logger.info(f"💡 Margin calculation successful: {margin_percent}% for 1% risk")
+        logger.info(f"💡 Margin calculation successful: {margin_percent}% for 3% risk")
         logger.debug(f"   Entry: ${entry_price}, SL: ${sl_price}, Leverage: {leverage}x")
         logger.debug(f"   Account Balance: ${total_balance}, Target Loss: ${target_loss}")
         logger.debug(f"   Price Distance: ${price_distance}, Required Margin: ${required_margin_usdt}")

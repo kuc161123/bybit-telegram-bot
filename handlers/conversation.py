@@ -1723,7 +1723,7 @@ async def stop_loss_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # =============================================
 
 async def ask_for_leverage_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
-    """Ask for leverage with quick selection buttons and 1% risk recommendation"""
+    """Ask for leverage with quick selection buttons and 3% risk recommendation"""
     max_lev = int(context.chat_data.get(MAX_LEVERAGE_FOR_SYMBOL, 100))
 
     # Start with base message
@@ -1887,7 +1887,7 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
 
     # Only conservative approach supported now - both trades option removed
 
-    # ENHANCED: Calculate 1% risk margin recommendation
+    # ENHANCED: Calculate 3% risk margin recommendation
     recommended_margin = None
     try:
         from utils.leverage_calculator import calculate_2_percent_risk_margin
@@ -2008,9 +2008,9 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
     if recommended_margin and recommended_margin not in common_percentages:
         if available_balance > 0:
             rec_usdt_amount = (available_balance * Decimal(str(recommended_margin))) / 100
-            rec_button_text = f"💡 {recommended_margin}% (≈${format_decimal_or_na(rec_usdt_amount, 2)}) - 1% Risk"
+            rec_button_text = f"💡 {recommended_margin}% (≈${format_decimal_or_na(rec_usdt_amount, 2)}) - 3% Risk"
         else:
-            rec_button_text = f"💡 {recommended_margin}% - 1% Risk"
+            rec_button_text = f"💡 {recommended_margin}% - 3% Risk"
         keyboard.append([
             InlineKeyboardButton(rec_button_text, callback_data=f"conv_margin_pct:{recommended_margin}")
         ])
@@ -2027,12 +2027,12 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
                     
                     # Highlight recommended margin if it matches a common option
                     if recommended_margin and abs(percentage - recommended_margin) < 0.1:  # Close enough match
-                        button_text = f"💡 {percentage}% (≈${format_decimal_or_na(usdt_amount, 2)}) - 1% Risk"
+                        button_text = f"💡 {percentage}% (≈${format_decimal_or_na(usdt_amount, 2)}) - 3% Risk"
                     else:
                         button_text = f"{percentage}% (≈${format_decimal_or_na(usdt_amount, 2)})"
                 else:
                     if recommended_margin and abs(percentage - recommended_margin) < 0.1:
-                        button_text = f"💡 {percentage}% - 1% Risk"
+                        button_text = f"💡 {percentage}% - 3% Risk"
                     else:
                         button_text = f"{percentage}%"
                         
