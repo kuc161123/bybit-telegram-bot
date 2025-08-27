@@ -1550,6 +1550,16 @@ class TradeExecutor:
         start_time = time.time()
         
         try:
+            # Import enhanced systems if available
+            ENHANCED_TP_SL_AVAILABLE = False
+            enhanced_tp_sl_manager = None
+            
+            try:
+                from execution.enhanced_tp_sl_manager import enhanced_tp_sl_manager
+                ENHANCED_TP_SL_AVAILABLE = True
+            except ImportError:
+                self.logger.warning("Enhanced TP/SL system not available for Simple Market")
+            
             # Extract parameters
             symbol = chat_data.get(SYMBOL)
             side = chat_data.get(SIDE)
@@ -1559,10 +1569,28 @@ class TradeExecutor:
             qty_step = safe_decimal_conversion(chat_data.get(INSTRUMENT_QTY_STEP, "0.001"))
             trade_group_id = chat_data.get("SIMPLE_MARKET_TRADE_GROUP_ID", "unknown")
             
-            # Get prices
+            # Get prices - check both key formats for compatibility
             entry_price = safe_decimal_conversion(chat_data.get("primary_entry_price"))
-            tp_price = safe_decimal_conversion(chat_data.get("TP1_PRICE"))
-            sl_price = safe_decimal_conversion(chat_data.get("SL_PRICE"))
+            tp_price = safe_decimal_conversion(chat_data.get("TP1_PRICE") or chat_data.get("tp1_price"))
+            sl_price = safe_decimal_conversion(chat_data.get("SL_PRICE") or chat_data.get("sl_price"))
+            
+            # Log for debugging
+            self.logger.info(f"📊 Simple Market prices - Entry: {entry_price}, TP: {tp_price}, SL: {sl_price}")
+            
+            # Validate prices
+            if not tp_price or tp_price == 0:
+                self.logger.error(f"❌ Invalid TP price: {tp_price}")
+                return {
+                    "success": False,
+                    "error": "Invalid Take Profit price"
+                }
+            
+            if not sl_price or sl_price == 0:
+                self.logger.error(f"❌ Invalid SL price: {sl_price}")
+                return {
+                    "success": False,
+                    "error": "Invalid Stop Loss price"
+                }
             
             # Check for approach conflicts
             self.logger.info(f"🔍 Checking for existing orders on {symbol} {side}...")
@@ -1685,28 +1713,35 @@ class TradeExecutor:
                     )
             
             # Setup Enhanced TP/SL monitoring
-            if ENHANCED_TP_SL_AVAILABLE and ENABLE_ENHANCED_TP_SL:
-                self.logger.info("🎯 Setting up Enhanced TP/SL monitoring...")
-                monitor_data = {
-                    "symbol": symbol,
-                    "side": side,
-                    "entry_price": str(actual_entry),
-                    "stop_loss": str(sl_price),
-                    "take_profits": [{"price": str(tp_price), "percentage": 100}],
-                    "position_size": str(position_size),
-                    "chat_id": chat_id,
-                    "approach": "simple_market"
-                }
+            enhanced_result = {"success": False}
+            if ENHANCED_TP_SL_AVAILABLE and ENABLE_ENHANCED_TP_SL and market_order_id:
+                self.logger.info(f"🚀 Using enhanced TP/SL system for Simple Market {symbol}")
                 
-                monitor_id = enhanced_tp_sl_manager.create_monitor(
+                # Setup enhanced TP/SL orders
+                enhanced_result = await enhanced_tp_sl_manager.setup_tp_sl_orders(
                     symbol=symbol,
                     side=side,
-                    monitor_data=monitor_data,
-                    account="main"
+                    position_size=position_size,
+                    entry_price=actual_entry,
+                    tp_prices=[tp_price],
+                    tp_percentages=[100],  # Single complete exit at TP
+                    sl_price=sl_price,
+                    chat_id=chat_id,
+                    approach="SIMPLE_MARKET",
+                    qty_step=qty_step,
+                    tick_size=tick_size
                 )
                 
-                if monitor_id:
-                    self.logger.info(f"✅ Enhanced TP/SL monitor created: {monitor_id}")
+                if enhanced_result.get("success"):
+                    self.logger.info(f"✅ Enhanced TP/SL monitoring active for {symbol}")
+                    
+                    # Extract order details from enhanced result
+                    if enhanced_result.get("tp_orders"):
+                        tp_order_id = enhanced_result["tp_orders"][0]
+                    if enhanced_result.get("sl_order"):
+                        sl_order_id = enhanced_result["sl_order"]
+                else:
+                    self.logger.warning(f"⚠️ Enhanced TP/SL setup had issues: {enhanced_result.get('errors', [])}")
             
             # Calculate execution time
             execution_time = time.time() - start_time
