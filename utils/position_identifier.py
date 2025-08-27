@@ -10,7 +10,7 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config.constants import BOT_ORDER_PREFIXES, MANAGE_EXTERNAL_POSITIONS
+from config.constants import BOT_ORDER_PREFIXES, MANAGE_EXTERNAL_POSITIONS, BOT_PREFIX
 
 logger = logging.getLogger(__name__)
 
