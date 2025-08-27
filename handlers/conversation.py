@@ -1825,13 +1825,17 @@ async def stop_loss_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # =============================================
 
 async def ask_for_leverage_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
-    """Ask for leverage with quick selection buttons and 3% risk recommendation"""
+    """Ask for leverage with quick selection buttons and 1% risk recommendation"""
     max_lev = int(context.chat_data.get(MAX_LEVERAGE_FOR_SYMBOL, 100))
+    approach = context.chat_data.get(TRADING_APPROACH, "conservative")
+    
+    # Get correct step number based on approach
+    step_number = "7" if approach == "simple_market" else "7a"
 
     # Start with base message
     leverage_msg = (
         f"🛡️ <b>Stop Loss Set!</b>\n\n"
-        f"⚡ <b>Step 7a: Select Leverage</b>\n\n"
+        f"⚡ <b>Step {step_number}: Select Leverage</b>\n\n"
     )
 
     leverage_msg += f"Choose your leverage (max {max_lev}x):\n"
@@ -1852,9 +1856,14 @@ async def ask_for_leverage_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat
         if row:
             keyboard.append(row)
 
-    # Add custom and cancel buttons
+    # Add custom button
     keyboard.append([
-        InlineKeyboardButton(f"✏️ Custom", callback_data="conv_leverage:custom"),
+        InlineKeyboardButton(f"✏️ Custom", callback_data="conv_leverage:custom")
+    ])
+    
+    # Add back and cancel buttons
+    keyboard.append([
+        InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{STOP_LOSS}"),
         InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation")
     ])
 
@@ -2073,11 +2082,15 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
         logger.error(f"Error calculating margin recommendation: {e}")
         recommended_margin = None
 
+    # Get approach for step numbering
+    approach = context.chat_data.get(TRADING_APPROACH, "conservative")
+    step_number = "8" if approach == "simple_market" else "7b"
+    
     # Standard single margin selection
     margin_msg = (
         f"⚡ <b>Leverage Set: {leverage}x</b>\n"
         f"💰 <b>{balance_display}</b>\n\n"
-        f"📊 <b>Step 7b: Select Margin Percentage</b>\n\n"
+        f"📊 <b>Step {step_number}: Select Margin Percentage</b>\n\n"
     )
     
     # Add recommendation if available
@@ -4057,7 +4070,8 @@ async def handle_back_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
         approach_keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"🛡️ Conservative Limits", callback_data="conv_approach:conservative")],
+            [InlineKeyboardButton(f"⚡ Simple Market", callback_data="conv_approach:simple_market")],
+            [InlineKeyboardButton(f"🛡️ Conservative Limits", callback_data="conv_approach:conservative")],
             [InlineKeyboardButton(f"📸 GGShot Screenshot", callback_data="conv_approach:ggshot")],
             [InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{SIDE}")],
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel_conversation")]
@@ -4073,6 +4087,72 @@ async def handle_back_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await edit_last_message(context, chat_id, approach_msg, approach_keyboard)
 
         return APPROACH_SELECTION
+    
+    elif target_state == STOP_LOSS:
+        # Go back to stop loss input
+        approach = context.chat_data.get(TRADING_APPROACH, "conservative")
+        symbol = context.chat_data.get(SYMBOL, "Unknown")
+        side = context.chat_data.get(SIDE, "Buy")
+        direction_emoji = "📈" if side == "Buy" else "📉"
+        direction_text = "LONG" if side == "Buy" else "SHORT"
+        
+        # Set approach emoji and text based on actual approach
+        if approach == "simple_market":
+            approach_emoji = "⚡"
+            approach_text = "Simple Market"
+            entry_price = context.chat_data.get(PRIMARY_ENTRY_PRICE, Decimal("0"))
+            tp_price = context.chat_data.get(TP1_PRICE, Decimal("0"))
+            trade_group_id = context.chat_data.get(SIMPLE_MARKET_TRADE_GROUP_ID, "Unknown")
+            
+            sl_msg = (
+                f"✅ <b>Symbol:</b> <code>{symbol}</code> ⚡\n"
+                f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
+                f"✅ <b>Approach:</b> {approach_emoji} {approach_text}\n"
+                f"✅ <b>Trade Group:</b> {trade_group_id} ⚡\n"
+                f"✅ <b>Entry Price:</b> <code>{format_price(entry_price)}</code>\n"
+                f"✅ <b>Take Profit:</b> <code>{format_price(tp_price)}</code> (100%)\n\n"
+                f"🛡️ <b>Step 6 of 8: Stop Loss</b>\n\n"
+                f"Enter your stop loss price:\n"
+                f"💡 This protects you from large losses\n"
+                f"⚡ Quick exit if market moves against you"
+            )
+        else:
+            # Conservative approach
+            approach_emoji = "🛡️"
+            approach_text = "Conservative Limits"
+            trade_group_id = context.chat_data.get(CONSERVATIVE_TRADE_GROUP_ID, "Unknown")
+            limit1_price = context.chat_data.get(LIMIT_ENTRY_1_PRICE)
+            limit2_price = context.chat_data.get(LIMIT_ENTRY_2_PRICE)
+            limit3_price = context.chat_data.get(LIMIT_ENTRY_3_PRICE)
+            tp_price = context.chat_data.get(TP_PRICE)
+            
+            sl_msg = (
+                f"✅ <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
+                f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
+                f"✅ <b>Approach:</b> {approach_emoji} {approach_text}\n"
+                f"✅ <b>Trade Group:</b> {trade_group_id} 🛡️\n"
+                f"✅ <b>Limits:</b> {format_price(limit1_price)}, {format_price(limit2_price)}, {format_price(limit3_price)}\n"
+                f"✅ <b>TP:</b> {format_price(tp_price)} 🛡️\n\n"
+                f"🛡️ <b>Step 6 of 7: Stop Loss</b>\n\n"
+                f"Enter your stop loss price:\n"
+                f"💡 This will cancel all remaining orders if hit\n"
+                f"🛡️ All orders protected from cleanup"
+            )
+        
+        cancel_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_conversation")]
+        ])
+        
+        try:
+            await query.edit_message_text(
+                sl_msg,
+                parse_mode=ParseMode.HTML,
+                reply_markup=cancel_keyboard
+            )
+        except:
+            await edit_last_message(context, chat_id, sl_msg, cancel_keyboard)
+        
+        return STOP_LOSS
 
     # Add more states as needed...
 
