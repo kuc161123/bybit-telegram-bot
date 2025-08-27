@@ -2096,9 +2096,13 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
     # Add recommendation if available
     if recommended_margin:
         # Check if we used limit prices for better user understanding
-        limit_count = len([p for p in [context.chat_data.get("limit_entry_1_price", 0), 
-                                     context.chat_data.get("limit_entry_2_price", 0), 
-                                     context.chat_data.get("limit_entry_3_price", 0)] if p > 0])
+        # Handle None values properly
+        limit_prices = [
+            context.chat_data.get("limit_entry_1_price"),
+            context.chat_data.get("limit_entry_2_price"),
+            context.chat_data.get("limit_entry_3_price")
+        ]
+        limit_count = len([p for p in limit_prices if p is not None and safe_decimal_conversion(p) > 0])
         
         if limit_count > 0:
             margin_msg += f"💡 <b>Recommended: {recommended_margin}%</b> ({explanation})\n"

@@ -189,7 +189,7 @@ async def calculate_2_percent_risk_margin(
         if margin_percent > 50:
             return None, "Calculated margin too large (>50%)"
             
-        explanation = f"Limits loss to 3% of account (${target_loss:.2f})"
+        explanation = f"Limits loss to 1% of account (${target_loss:.2f})"
         
         logger.info(f"💡 Margin calculation successful: {margin_percent}% for 1% risk")
         logger.debug(f"   Entry: ${entry_price}, SL: ${sl_price}, Leverage: {leverage}x")
