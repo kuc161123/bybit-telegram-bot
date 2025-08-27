@@ -1740,8 +1740,7 @@ class TradeExecutor:
                     sl_price=sl_price,
                     chat_id=chat_id,
                     approach="SIMPLE_MARKET",
-                    qty_step=qty_step,
-                    tick_size=tick_size
+                    qty_step=qty_step
                 )
                 
                 if enhanced_result.get("success"):
