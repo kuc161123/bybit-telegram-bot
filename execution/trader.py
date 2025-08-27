@@ -1588,11 +1588,12 @@ class TradeExecutor:
             position_size = (margin_amount * Decimal(str(leverage))) / entry_price
             position_size = value_adjusted_to_step(position_size, qty_step)
             
-            # Generate unique order link IDs
-            base_link_id = get_bot_order_link_id(symbol, side, "simple_market")
-            market_link_id = self._generate_unique_order_link_id(f"{base_link_id}_market")
-            tp_link_id = self._generate_unique_order_link_id(f"{base_link_id}_tp1")
-            sl_link_id = self._generate_unique_order_link_id(f"{base_link_id}_sl")
+            # Generate shorter unique order link IDs (max 45 chars)
+            import time
+            timestamp = str(int(time.time() * 1000))[-6:]  # Last 6 digits
+            market_link_id = f"BOT_SM_{symbol[:6]}_{side[0]}_{timestamp}_M"
+            tp_link_id = f"BOT_SM_{symbol[:6]}_{side[0]}_{timestamp}_T"
+            sl_link_id = f"BOT_SM_{symbol[:6]}_{side[0]}_{timestamp}_S"
             
             # Place market order (no positionIdx, automatic detection)
             self.logger.info(f"⚡ Placing market order for {position_size} {symbol} at market price...")
@@ -1662,23 +1663,26 @@ class TradeExecutor:
             if MIRROR_TRADING_AVAILABLE and is_mirror_trading_enabled():
                 self.logger.info("🔄 Executing mirror trades...")
                 
-                # Mirror market order
+                # Mirror market order (with shortened IDs)
+                mirror_market_id = f"BOT_SM_{symbol[:6]}_{side[0]}_{timestamp}_M2"
                 mirror_market = await mirror_market_order(
-                    symbol, side, position_size, market_link_id + "_m2"
+                    symbol, side, position_size, mirror_market_id
                 )
                 
                 # Mirror TP order
                 if tp_order_id:
+                    mirror_tp_id = f"BOT_SM_{symbol[:6]}_{side[0]}_{timestamp}_T2"
                     mirror_tp = await mirror_tp_sl_order(
                         symbol, opposite_side, position_size, tp_price,
-                        tp_link_id + "_m2", order_type="Limit", reduce_only=True
+                        mirror_tp_id, order_type="Limit", reduce_only=True
                     )
                 
                 # Mirror SL order
                 if sl_order_id:
+                    mirror_sl_id = f"BOT_SM_{symbol[:6]}_{side[0]}_{timestamp}_S2"
                     mirror_sl = await mirror_tp_sl_order(
                         symbol, opposite_side, position_size, None,
-                        sl_link_id + "_m2", order_type="Market",
+                        mirror_sl_id, order_type="Market",
                         trigger_price=sl_price, reduce_only=True
                     )
             
