@@ -1542,6 +1542,260 @@ class TradeExecutor:
                 )
             }
 
+    async def execute_simple_market_approach(self, application, chat_id: int, chat_data: dict) -> dict:
+        """
+        Execute Simple Market approach: Market order + Single TP (100%) + SL
+        SIMPLE: Quick in/out trades with market execution
+        FIXED: Automatic position mode detection
+        """
+        start_time = time.time()
+        
+        try:
+            # Extract parameters
+            symbol = chat_data.get(SYMBOL)
+            side = chat_data.get(SIDE)
+            margin_amount = safe_decimal_conversion(chat_data.get(MARGIN_AMOUNT))
+            leverage = int(chat_data.get(LEVERAGE, 1))
+            tick_size = safe_decimal_conversion(chat_data.get(INSTRUMENT_TICK_SIZE, "0.01"))
+            qty_step = safe_decimal_conversion(chat_data.get(INSTRUMENT_QTY_STEP, "0.001"))
+            trade_group_id = chat_data.get("SIMPLE_MARKET_TRADE_GROUP_ID", "unknown")
+            
+            # Get prices
+            entry_price = safe_decimal_conversion(chat_data.get("primary_entry_price"))
+            tp_price = safe_decimal_conversion(chat_data.get("TP1_PRICE"))
+            sl_price = safe_decimal_conversion(chat_data.get("SL_PRICE"))
+            
+            # Check for approach conflicts
+            self.logger.info(f"🔍 Checking for existing orders on {symbol} {side}...")
+            conflict_info = await check_approach_conflicts(symbol, side, "simple_market")
+            
+            if conflict_info.get("conflict"):
+                existing_approach = conflict_info.get("existing_approach")
+                self.logger.info(f"⚠️ Found existing {existing_approach} approach for {symbol}")
+                
+                # Cleanup existing orders
+                if conflict_info.get("recommendation") == "cleanup_all":
+                    self.logger.info("🧹 Cleaning up ALL existing orders...")
+                    cleanup_result = await cleanup_all_orders(symbol, side)
+                    if cleanup_result["success"]:
+                        self.logger.info(f"✅ Cleaned up {cleanup_result['cancelled_count']} orders")
+            
+            # Set leverage
+            await set_symbol_leverage(symbol, leverage)
+            self.logger.info(f"⚙️ Set leverage to {leverage}x for {symbol}")
+            
+            # Calculate position size
+            position_size = (margin_amount * Decimal(str(leverage))) / entry_price
+            position_size = value_adjusted_to_step(position_size, qty_step)
+            
+            # Generate unique order link IDs
+            base_link_id = get_bot_order_link_id(symbol, side, "simple_market")
+            market_link_id = self._generate_unique_order_link_id(f"{base_link_id}_market")
+            tp_link_id = self._generate_unique_order_link_id(f"{base_link_id}_tp1")
+            sl_link_id = self._generate_unique_order_link_id(f"{base_link_id}_sl")
+            
+            # Place market order (no positionIdx, automatic detection)
+            self.logger.info(f"⚡ Placing market order for {position_size} {symbol} at market price...")
+            market_result = await place_order_with_retry(
+                symbol=symbol,
+                side=side,
+                order_type="Market",
+                qty=position_size,
+                order_link_id=market_link_id,
+                tick_size=tick_size,
+                qty_step=qty_step,
+                reduce_only=False
+            )
+            
+            if not market_result.get("success"):
+                self.logger.error(f"❌ Failed to place market order: {market_result.get('error')}")
+                return {
+                    "success": False,
+                    "error": f"Failed to place market order: {market_result.get('error')}"
+                }
+            
+            market_order_id = market_result.get("id")
+            actual_entry = safe_decimal_conversion(market_result.get("price", entry_price))
+            self.logger.info(f"✅ Market order executed: {market_order_id} at {actual_entry}")
+            
+            # Place TP order (100% position)
+            opposite_side = "Sell" if side == "Buy" else "Buy"
+            
+            self.logger.info(f"🎯 Placing Take Profit order at {tp_price} (100% position)...")
+            tp_result = await place_order_with_retry(
+                symbol=symbol,
+                side=opposite_side,
+                order_type="Limit",
+                qty=position_size,
+                price=tp_price,
+                order_link_id=tp_link_id,
+                tick_size=tick_size,
+                qty_step=qty_step,
+                reduce_only=True
+            )
+            
+            tp_order_id = None
+            if tp_result.get("success"):
+                tp_order_id = tp_result.get("id")
+                self.logger.info(f"✅ TP order placed: {tp_order_id}")
+            else:
+                self.logger.warning(f"⚠️ Failed to place TP order: {tp_result.get('error')}")
+            
+            # Place SL order
+            self.logger.info(f"🛡️ Placing Stop Loss order at {sl_price}...")
+            sl_result = await place_order_with_retry(
+                symbol=symbol,
+                side=opposite_side,
+                order_type="Market",
+                qty=position_size,
+                trigger_price=sl_price,
+                order_link_id=sl_link_id,
+                tick_size=tick_size,
+                qty_step=qty_step,
+                reduce_only=True,
+                trigger_by="LastPrice"
+            )
+            
+            sl_order_id = None
+            if sl_result.get("success"):
+                sl_order_id = sl_result.get("id")
+                self.logger.info(f"✅ SL order placed: {sl_order_id}")
+            else:
+                self.logger.warning(f"⚠️ Failed to place SL order: {sl_result.get('error')}")
+            
+            # Mirror trading support
+            mirror_results = None
+            if MIRROR_TRADING_AVAILABLE and is_mirror_trading_enabled():
+                self.logger.info("🔄 Executing mirror trades...")
+                
+                # Mirror market order
+                mirror_market = await mirror_market_order(
+                    symbol, side, position_size, market_link_id + "_m2"
+                )
+                
+                # Mirror TP order
+                if tp_order_id:
+                    mirror_tp = await mirror_tp_sl_order(
+                        symbol, opposite_side, position_size, tp_price,
+                        tp_link_id + "_m2", order_type="Limit", reduce_only=True
+                    )
+                
+                # Mirror SL order
+                if sl_order_id:
+                    mirror_sl = await mirror_tp_sl_order(
+                        symbol, opposite_side, position_size, None,
+                        sl_link_id + "_m2", order_type="Market",
+                        trigger_price=sl_price, reduce_only=True
+                    )
+            
+            # Setup Enhanced TP/SL monitoring
+            if ENHANCED_TP_SL_AVAILABLE and ENABLE_ENHANCED_TP_SL:
+                self.logger.info("🎯 Setting up Enhanced TP/SL monitoring...")
+                monitor_data = {
+                    "symbol": symbol,
+                    "side": side,
+                    "entry_price": str(actual_entry),
+                    "stop_loss": str(sl_price),
+                    "take_profits": [{"price": str(tp_price), "percentage": 100}],
+                    "position_size": str(position_size),
+                    "chat_id": chat_id,
+                    "approach": "simple_market"
+                }
+                
+                monitor_id = enhanced_tp_sl_manager.create_monitor(
+                    symbol=symbol,
+                    side=side,
+                    monitor_data=monitor_data,
+                    account="main"
+                )
+                
+                if monitor_id:
+                    self.logger.info(f"✅ Enhanced TP/SL monitor created: {monitor_id}")
+            
+            # Calculate execution time
+            execution_time = time.time() - start_time
+            
+            # Calculate risk/reward
+            risk_amount = position_size * abs(actual_entry - sl_price)
+            reward_amount = position_size * abs(tp_price - actual_entry)
+            risk_reward_ratio = reward_amount / risk_amount if risk_amount > 0 else 0
+            
+            self.logger.info(f"⚡ SIMPLE MARKET EXECUTION SUMMARY:")
+            self.logger.info(f"   Market Order: {market_order_id}")
+            self.logger.info(f"   TP Order: {tp_order_id}")
+            self.logger.info(f"   SL Order: {sl_order_id}")
+            self.logger.info(f"   Position Size: {position_size}")
+            self.logger.info(f"   Entry Price: {actual_entry}")
+            self.logger.info(f"   Risk: {format_decimal_or_na(risk_amount, 2)} USDT")
+            self.logger.info(f"   Reward: {format_decimal_or_na(reward_amount, 2)} USDT")
+            self.logger.info(f"   R:R Ratio: 1:{risk_reward_ratio:.2f}")
+            
+            # Store execution details
+            chat_data["execution_details"] = {
+                "approach": "simple_market",
+                "trade_group_id": trade_group_id,
+                "market_order_id": market_order_id,
+                "tp_order_id": tp_order_id,
+                "sl_order_id": sl_order_id,
+                "entry_price": str(actual_entry),
+                "position_size": str(position_size),
+                "risk_amount": str(risk_amount),
+                "reward_amount": str(reward_amount),
+                "executed_at": time.time()
+            }
+            
+            # Generate summary
+            if EXECUTION_SUMMARY_AVAILABLE:
+                summary = await execution_summary.generate_simple_market_summary(
+                    symbol, side, position_size, actual_entry, tp_price, sl_price,
+                    margin_amount, leverage, risk_reward_ratio, execution_time
+                )
+            else:
+                summary = self._generate_simple_market_summary(
+                    symbol, side, position_size, actual_entry, tp_price, sl_price,
+                    margin_amount, leverage, risk_reward_ratio, execution_time
+                )
+            
+            return {
+                "success": True,
+                "message": summary,
+                "execution_time": execution_time,
+                "orders_placed": {
+                    "market": 1,
+                    "tp": 1 if tp_order_id else 0,
+                    "sl": 1 if sl_order_id else 0
+                }
+            }
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error executing simple market trade: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": str(e),
+                "execution_time": time.time() - start_time
+            }
+    
+    def _generate_simple_market_summary(self, symbol, side, position_size, entry_price,
+                                       tp_price, sl_price, margin, leverage, rr_ratio, exec_time):
+        """Generate a simple market execution summary"""
+        direction_emoji = "📈" if side == "Buy" else "📉"
+        
+        return (
+            f"⚡ <b>SIMPLE MARKET TRADE EXECUTED</b> ⚡\n"
+            f"{'═' * 30}\n\n"
+            f"📊 <b>Symbol:</b> {symbol}\n"
+            f"{direction_emoji} <b>Direction:</b> {side.upper()}\n"
+            f"💰 <b>Position Size:</b> {format_decimal_or_na(position_size)}\n"
+            f"📍 <b>Entry:</b> {format_price(entry_price)}\n"
+            f"🎯 <b>Take Profit:</b> {format_price(tp_price)} (100%)\n"
+            f"🛡️ <b>Stop Loss:</b> {format_price(sl_price)}\n"
+            f"⚡ <b>Leverage:</b> {leverage}x\n"
+            f"💵 <b>Margin:</b> {format_decimal_or_na(margin, 2)} USDT\n"
+            f"⚖️ <b>Risk/Reward:</b> 1:{rr_ratio:.2f}\n\n"
+            f"⏱️ <b>Execution Time:</b> {exec_time:.2f}s\n"
+            f"✅ <b>Status:</b> Position Opened Successfully"
+        )
+
     async def execute_ggshot_approach(self, application, chat_id: int, chat_data: dict) -> dict:
         """
         Execute GGShot approach: Always uses Conservative pattern with 1 market + 2 limit orders
@@ -3312,6 +3566,8 @@ class TradeExecutor:
 
             if approach == "conservative":
                 result = await self.execute_conservative_approach(application, chat_id, chat_data)
+            elif approach == "simple_market":
+                result = await self.execute_simple_market_approach(application, chat_id, chat_data)
             elif approach == "ggshot":
                 result = await self.execute_ggshot_approach(application, chat_id, chat_data)
             else:

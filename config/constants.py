@@ -148,6 +148,7 @@ LIMIT_ORDER_IDS = "limit_order_ids"
 CONSERVATIVE_TP_ORDER_IDS = "conservative_tp_order_ids"
 CONSERVATIVE_SL_ORDER_ID = "conservative_sl_order_id"
 CONSERVATIVE_TRADE_GROUP_ID = "conservative_trade_group_id"
+SIMPLE_MARKET_TRADE_GROUP_ID = "simple_market_trade_group_id"
 
 # ENHANCED: GGShot approach order tracking
 GGSHOT_ENTRY_ORDER_IDS = "ggshot_entry_order_ids"
@@ -389,6 +390,7 @@ __all__ = [
     'PLACED_LIMIT_ENTRY_IDS', 'MARKET_ORDER_ID', 'TP_ORDER_IDS', 'SL_ORDER_ID',
     'LIMIT_ORDER_IDS', 'CONSERVATIVE_TP_ORDER_IDS', 'CONSERVATIVE_SL_ORDER_ID',
     'CONSERVATIVE_TRADE_GROUP_ID',
+    'SIMPLE_MARKET_TRADE_GROUP_ID',
 
     # GGShot Order Keys
     'GGSHOT_ENTRY_ORDER_IDS', 'GGSHOT_TP_ORDER_IDS', 'GGSHOT_SL_ORDER_ID',

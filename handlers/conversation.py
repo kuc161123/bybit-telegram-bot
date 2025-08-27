@@ -394,6 +394,10 @@ async def handle_side_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n\n"
         f"🎯 <b>Step 3 of 8: Trading Approach</b>\n\n"
         f"Choose your trading strategy:\n\n"
+        f"⚡ <b>Simple Market</b>\n"
+        f"• Market order entry\n"
+        f"• Single take profit (100%)\n"
+        f"• Quick in/out trades\n\n"
         f"🛡️ <b>Conservative Limits</b>\n"
         f"• 3 limit orders (equal allocation)\n"
         f"• 4 take profits (70%, 10%, 10%, 10%)\n"
@@ -407,6 +411,7 @@ async def handle_side_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
     approach_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"⚡ Simple Market", callback_data="conv_approach:simple_market")],
         [InlineKeyboardButton(f"🛡️ Conservative Limits", callback_data="conv_approach:conservative")],
         [InlineKeyboardButton(f"📸 GGShot Screenshot", callback_data="conv_approach:ggshot")],
         [InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{SIDE}")],
@@ -481,6 +486,18 @@ async def handle_approach_callback(update: Update, context: ContextTypes.DEFAULT
         except Exception as e:
             logger.error(f"Error protecting trade group: {e}")
             # Continue anyway, this is not critical for trade setup
+    elif approach == "simple_market":
+        # Simple Market approach - market order with TPs and SL
+        trade_group_id = str(uuid.uuid4())[:8]
+        context.chat_data[SIMPLE_MARKET_TRADE_GROUP_ID] = trade_group_id
+        context.chat_data[ORDER_STRATEGY] = "SIMPLE_MARKET"
+        
+        # PROTECTION: Protect the trade group from cleanup
+        try:
+            protect_trade_group_from_cleanup(trade_group_id)
+            logger.info(f"⚡ Trade group {trade_group_id} protected from cleanup during conversation")
+        except Exception as e:
+            logger.error(f"Error protecting trade group: {e}")
     elif approach == "ggshot":
         # GGShot approach - will determine strategy after AI analysis
         context.chat_data[ORDER_STRATEGY] = None  # Will be set after screenshot analysis
@@ -495,6 +512,9 @@ async def handle_approach_callback(update: Update, context: ContextTypes.DEFAULT
     if approach == "conservative":
         approach_emoji = "🛡️"
         approach_text = "Conservative Limits"
+    elif approach == "simple_market":
+        approach_emoji = "⚡"
+        approach_text = "Simple Market"
     elif approach == "ggshot":
         approach_emoji = "📸"
         approach_text = "GGShot Screenshot"
@@ -561,6 +581,39 @@ async def handle_approach_callback(update: Update, context: ContextTypes.DEFAULT
         logger.info(f"📊 Approach stored: {context.chat_data.get(TRADING_APPROACH)}")
 
         return LIMIT_ENTRIES
+
+    elif approach == "simple_market":
+        # Simple Market approach - ask for entry price
+        trade_group_id = context.chat_data.get(SIMPLE_MARKET_TRADE_GROUP_ID, "Unknown")
+        
+        simple_entry_msg = (
+            f"✅ <b>Symbol:</b> <code>{symbol}</code> ⚡\n"
+            f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
+            f"✅ <b>Approach:</b> {approach_emoji} {approach_text}\n"
+            f"✅ <b>Trade Group:</b> {trade_group_id} ⚡\n\n"
+            f"📊 <b>Step 4 of 8: Entry Price</b>\n\n"
+            f"Enter your market entry price:\n"
+            f"💡 This will be executed as a market order\n"
+            f"⚡ Quick execution at best available price\n\n"
+            f"Enter <b>Entry Price</b>:"
+        )
+        
+        cancel_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{APPROACH_SELECTION}")],
+            [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_conversation")]
+        ])
+        
+        try:
+            await query.edit_message_text(
+                simple_entry_msg,
+                parse_mode=ParseMode.HTML,
+                reply_markup=cancel_keyboard
+            )
+        except Exception as e:
+            logger.error(f"Error editing message for simple market approach: {e}")
+        
+        logger.info(f"⚡ Simple Market approach selected, moving to PRIMARY_ENTRY")
+        return PRIMARY_ENTRY
 
     elif approach == "ggshot":
         # GGShot approach - ask for screenshot upload
@@ -1391,7 +1444,7 @@ async def handle_advanced_enhancement_request(context: ContextTypes.DEFAULT_TYPE
 # =============================================
 
 async def primary_entry_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle primary entry price input for conservative approach"""
+    """Handle primary entry price input for simple_market approach"""
     if not update.message or not update.message.text:
         return PRIMARY_ENTRY
 
@@ -1417,9 +1470,16 @@ async def primary_entry_handler(update: Update, context: ContextTypes.DEFAULT_TY
         context.chat_data["primary_entry_price"] = price
         context.chat_data[PRIMARY_ENTRY_PRICE] = price
         context.chat_data["PRIMARY_ENTRY_PRICE"] = price  # Backup
-
-        # Only conservative approach supported - proceed to conservative take profits
-        return await ask_for_conservative_take_profits(context, chat_id)
+        
+        # Check which approach we're using
+        approach = context.chat_data.get(TRADING_APPROACH, "conservative")
+        
+        if approach == "simple_market":
+            # Simple market approach - proceed to ask for single TP
+            return await ask_for_simple_take_profit(context, chat_id)
+        else:
+            # Conservative approach - proceed to conservative take profits
+            return await ask_for_conservative_take_profits(context, chat_id)
 
     except (ValueError, InvalidOperation):
         await send_error_and_retry(
@@ -1546,6 +1606,40 @@ async def limit_entries_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
 # Fast approach function removed - only conservative approach supported
 
+async def ask_for_simple_take_profit(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
+    """Ask for single take profit price for Simple Market approach"""
+    symbol = context.chat_data.get(SYMBOL, "Unknown")
+    side = context.chat_data.get(SIDE, "Buy")
+    trade_group_id = context.chat_data.get(SIMPLE_MARKET_TRADE_GROUP_ID, "Unknown")
+    direction_emoji = "📈" if side == "Buy" else "📉"
+    direction_text = "LONG" if side == "Buy" else "SHORT"
+    
+    entry_price = context.chat_data.get(PRIMARY_ENTRY_PRICE)
+    
+    tp_msg = (
+        f"✅ <b>Symbol:</b> <code>{symbol}</code> ⚡\n"
+        f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
+        f"✅ <b>Approach:</b> ⚡ Simple Market\n"
+        f"✅ <b>Trade Group:</b> {trade_group_id} ⚡\n"
+        f"✅ <b>Entry:</b> <code>{format_price(entry_price)}</code>\n\n"
+        f"🎯 <b>Step 5 of 8: Take Profit Price</b>\n\n"
+        f"Enter your Take Profit price:\n"
+        f"💡 Complete exit (100%) when target is reached\n"
+        f"⚡ Single target for quick profits\n\n"
+        f"Enter <b>Take Profit</b> price:"
+    )
+    
+    cancel_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Back", callback_data=f"conv_back:{PRIMARY_ENTRY}")],
+        [InlineKeyboardButton("❌ Cancel Setup", callback_data="cancel_conversation")]
+    ])
+    
+    # Store that we're expecting simple TP
+    context.chat_data["expecting_simple_tp"] = True
+    
+    await edit_last_message(context, chat_id, tp_msg, cancel_keyboard)
+    return TAKE_PROFITS
+
 async def ask_for_conservative_take_profits(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> int:
     """Ask for single take profit price in Take Profit approach"""
     symbol = context.chat_data.get(SYMBOL, "Unknown")
@@ -1631,25 +1725,33 @@ async def ask_for_stop_loss(context: ContextTypes.DEFAULT_TYPE, chat_id: int) ->
 
     direction_emoji = "📈" if side == "Buy" else "📉"
     direction_text = "LONG" if side == "Buy" else "SHORT"
-    approach_emoji = "🛡️"
-    approach_text = "Conservative Limits"
+    
+    # Set approach emoji and text based on actual approach
+    if approach == "simple_market":
+        approach_emoji = "⚡"
+        approach_text = "Simple Market"
+    else:
+        approach_emoji = "🛡️"
+        approach_text = "Conservative Limits"
 
     # Build summary based on approach
-    # Only conservative approach supported now
-    if False:  # Fast approach removed
+    if approach == "simple_market":
         entry_price = context.chat_data.get(PRIMARY_ENTRY_PRICE, Decimal("0"))
         tp_price = context.chat_data.get(TP1_PRICE, Decimal("0"))
 
+        trade_group_id = context.chat_data.get(SIMPLE_MARKET_TRADE_GROUP_ID, "Unknown")
+        
         sl_msg = (
-            f"✅ <b>Symbol:</b> <code>{symbol}</code> 🛡️\n"
+            f"✅ <b>Symbol:</b> <code>{symbol}</code> ⚡\n"
             f"✅ <b>Direction:</b> {direction_emoji} {direction_text}\n"
             f"✅ <b>Approach:</b> {approach_emoji} {approach_text}\n"
+            f"✅ <b>Trade Group:</b> {trade_group_id} ⚡\n"
             f"✅ <b>Entry Price:</b> <code>{format_price(entry_price)}</code>\n"
-            f"✅ <b>Take Profit:</b> <code>{format_price(tp_price)}</code> 🛡️\n\n"
-            f"🛡️ <b>Step 6 of 7: Stop Loss</b>\n\n"
+            f"✅ <b>Take Profit:</b> <code>{format_price(tp_price)}</code> (100%)\n\n"
+            f"🛡️ <b>Step 6 of 8: Stop Loss</b>\n\n"
             f"Enter your stop loss price:\n"
             f"💡 This protects you from large losses\n"
-            f"🛡️ Order will be protected from cleanup"
+            f"⚡ Quick exit if market moves against you"
         )
     else:
         # Conservative approach summary
@@ -1887,7 +1989,7 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
 
     # Only conservative approach supported now - both trades option removed
 
-    # ENHANCED: Calculate 3% risk margin recommendation
+    # ENHANCED: Calculate 1% risk margin recommendation
     recommended_margin = None
     try:
         from utils.leverage_calculator import calculate_2_percent_risk_margin
@@ -2008,9 +2110,9 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
     if recommended_margin and recommended_margin not in common_percentages:
         if available_balance > 0:
             rec_usdt_amount = (available_balance * Decimal(str(recommended_margin))) / 100
-            rec_button_text = f"💡 {recommended_margin}% (≈${format_decimal_or_na(rec_usdt_amount, 2)}) - 3% Risk"
+            rec_button_text = f"💡 {recommended_margin}% (≈${format_decimal_or_na(rec_usdt_amount, 2)}) - 1% Risk"
         else:
-            rec_button_text = f"💡 {recommended_margin}% - 3% Risk"
+            rec_button_text = f"💡 {recommended_margin}% - 1% Risk"
         keyboard.append([
             InlineKeyboardButton(rec_button_text, callback_data=f"conv_margin_pct:{recommended_margin}")
         ])
@@ -2027,12 +2129,12 @@ async def ask_for_margin_with_buttons(context: ContextTypes.DEFAULT_TYPE, chat_i
                     
                     # Highlight recommended margin if it matches a common option
                     if recommended_margin and abs(percentage - recommended_margin) < 0.1:  # Close enough match
-                        button_text = f"💡 {percentage}% (≈${format_decimal_or_na(usdt_amount, 2)}) - 3% Risk"
+                        button_text = f"💡 {percentage}% (≈${format_decimal_or_na(usdt_amount, 2)}) - 1% Risk"
                     else:
                         button_text = f"{percentage}% (≈${format_decimal_or_na(usdt_amount, 2)})"
                 else:
                     if recommended_margin and abs(percentage - recommended_margin) < 0.1:
-                        button_text = f"💡 {percentage}% - 3% Risk"
+                        button_text = f"💡 {percentage}% - 1% Risk"
                     else:
                         button_text = f"{percentage}%"
                         
@@ -2673,10 +2775,10 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
     direction_emoji = "📈" if side == "Buy" else "📉"
     direction_text = "LONG" if side == "Buy" else "SHORT"
 
-    # Only conservative approach supported now
-    if False:  # Fast approach removed
-        approach_emoji = "🛡️"
-        approach_text = "Conservative Limits"
+    # Set approach emoji and text
+    if approach == "simple_market":
+        approach_emoji = "⚡"
+        approach_text = "Simple Market"
     elif approach == "conservative":
         approach_emoji = "🛡️"
         approach_text = "Conservative Limits"
@@ -2704,7 +2806,7 @@ async def show_final_confirmation(context: ContextTypes.DEFAULT_TYPE, chat_id: i
     else:
         display_strategy = approach
 
-    if display_strategy == "fast" or order_strategy == STRATEGY_MARKET_ONLY:
+    if display_strategy == "simple_market" or order_strategy == "SIMPLE_MARKET":
         entry_price = context.chat_data.get(PRIMARY_ENTRY_PRICE, Decimal("0"))
         tp_price = context.chat_data.get(TP1_PRICE, Decimal("0"))
         sl_price = context.chat_data.get(SL_PRICE, Decimal("0"))
