@@ -1569,10 +1569,22 @@ class TradeExecutor:
             qty_step = safe_decimal_conversion(chat_data.get(INSTRUMENT_QTY_STEP, "0.001"))
             trade_group_id = chat_data.get("SIMPLE_MARKET_TRADE_GROUP_ID", "unknown")
             
+            # Debug: Log all chat_data keys to understand what's available
+            self.logger.info(f"🔍 Chat data keys available: {list(chat_data.keys())}")
+            
             # Get prices - check both key formats for compatibility
             entry_price = safe_decimal_conversion(chat_data.get("primary_entry_price"))
-            tp_price = safe_decimal_conversion(chat_data.get("TP1_PRICE") or chat_data.get("tp1_price"))
-            sl_price = safe_decimal_conversion(chat_data.get("SL_PRICE") or chat_data.get("sl_price"))
+            
+            # Try multiple key formats for TP and SL (using constant values)
+            # Note: TP1_PRICE constant = "tp_price", SL_PRICE constant = "sl_price"
+            tp_price_raw = chat_data.get(TP1_PRICE) or chat_data.get("TP1_PRICE") or chat_data.get("tp1_price") or chat_data.get("tp_price")
+            sl_price_raw = chat_data.get(SL_PRICE) or chat_data.get("SL_PRICE") or chat_data.get("sl_price")
+            
+            self.logger.info(f"🔍 Raw TP value from chat_data: {tp_price_raw} (type: {type(tp_price_raw).__name__})")
+            self.logger.info(f"🔍 Raw SL value from chat_data: {sl_price_raw} (type: {type(sl_price_raw).__name__})")
+            
+            tp_price = safe_decimal_conversion(tp_price_raw)
+            sl_price = safe_decimal_conversion(sl_price_raw)
             
             # Log for debugging
             self.logger.info(f"📊 Simple Market prices - Entry: {entry_price}, TP: {tp_price}, SL: {sl_price}")
