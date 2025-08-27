@@ -1399,7 +1399,16 @@ class EnhancedTPSLManager:
                 if instrument_info:
                     lot_size_filter = instrument_info.get("lotSizeFilter", {})
                     actual_qty_step = Decimal(lot_size_filter.get("qtyStep", str(qty_step)))
-                    logger.info(f"📊 Retrieved instrument info for {symbol}: qtyStep={actual_qty_step}")
+                    min_order_qty = Decimal(lot_size_filter.get("minOrderQty", "1"))
+                    max_order_qty = Decimal(lot_size_filter.get("maxOrderQty", "10000000"))
+                    
+                    # Log all relevant instrument info
+                    logger.info(f"📊 Instrument info for {symbol}:")
+                    logger.info(f"   qtyStep={actual_qty_step}, minOrderQty={min_order_qty}, maxOrderQty={max_order_qty}")
+                    logger.info(f"   Full lotSizeFilter: {lot_size_filter}")
+                    logger.info(f"   baseCoin={instrument_info.get('baseCoin')}, quoteCoin={instrument_info.get('quoteCoin')}")
+                    logger.info(f"   contractType={instrument_info.get('contractType')}")
+                    
                     qty_step = actual_qty_step  # Use the actual qty_step from the instrument
             except Exception as e:
                 logger.warning(f"⚠️ Could not fetch instrument info for {symbol}: {e}, using default qty_step={qty_step}")
@@ -1414,8 +1423,10 @@ class EnhancedTPSLManager:
 
             for i, percentage in enumerate(tp_percentages):
                 qty = tp_sl_position_size * Decimal(str(percentage)) / Decimal("100")
+                logger.info(f"📊 TP{i+1} raw qty: {qty}, qty_step: {qty_step}")
                 # Adjust quantity to step size
                 adjusted_qty = value_adjusted_to_step(qty, qty_step)
+                logger.info(f"📊 TP{i+1} adjusted qty: {adjusted_qty}")
 
                 # Check minimum order value
                 order_value = adjusted_qty * Decimal(str(current_price))
@@ -1689,13 +1700,19 @@ class EnhancedTPSLManager:
                 if setup_main:
                     order_link_id = generate_order_link_id(approach, symbol, ORDER_TYPE_TP, index=i+1)
 
-                    logger.info(f"📍 MAIN: Placing TP{i+1} order: {tp_qty} @ {tp_price}")
+                    # Format quantity based on qty_step (remove decimals if qty_step >= 1)
+                    if qty_step >= 1:
+                        qty_str = str(int(tp_qty))
+                    else:
+                        qty_str = str(tp_qty)
+                    
+                    logger.info(f"📍 MAIN: Placing TP{i+1} order: {tp_qty} @ {tp_price} (formatted as: {qty_str})")
 
                     order_result = await place_order_with_retry(
                         symbol=symbol,
                         side=order_side,
                         order_type="Limit",
-                        qty=str(tp_qty),
+                        qty=qty_str,
                         price=str(tp_price),
                         reduce_only=True,
                         order_link_id=order_link_id,
@@ -1812,16 +1829,22 @@ class EnhancedTPSLManager:
                 # Adjust SL quantity to qty_step
                 main_sl_quantity = value_adjusted_to_step(main_sl_quantity, qty_step)
 
+                # Format quantity based on qty_step (remove decimals if qty_step >= 1)
+                if qty_step >= 1:
+                    sl_qty_str = str(int(main_sl_quantity))
+                else:
+                    sl_qty_str = str(main_sl_quantity)
+
                 sl_order_link_id = generate_order_link_id(approach, symbol, ORDER_TYPE_SL)
 
-                logger.info(f"🛡️ MAIN ENHANCED SL: Placing SL order: {main_sl_quantity} @ {sl_price}")
+                logger.info(f"🛡️ MAIN ENHANCED SL: Placing SL order: {main_sl_quantity} @ {sl_price} (formatted as: {sl_qty_str})")
                 logger.info(f"   Current filled: {main_current_size}, Target: {main_target_size}")
 
                 sl_result = await place_order_with_retry(
                     symbol=symbol,
                     side=sl_side,
                     order_type="Market",
-                    qty=str(main_sl_quantity),
+                    qty=sl_qty_str,
                     trigger_price=str(sl_price),
                     reduce_only=True,
                     order_link_id=sl_order_link_id,
