@@ -1600,22 +1600,20 @@ class TradeExecutor:
                 symbol=symbol,
                 side=side,
                 order_type="Market",
-                qty=position_size,
+                qty=str(position_size),
                 order_link_id=market_link_id,
-                tick_size=tick_size,
-                qty_step=qty_step,
                 reduce_only=False
             )
             
-            if not market_result.get("success"):
-                self.logger.error(f"❌ Failed to place market order: {market_result.get('error')}")
+            if not market_result:
+                self.logger.error(f"❌ Failed to place market order")
                 return {
                     "success": False,
-                    "error": f"Failed to place market order: {market_result.get('error')}"
+                    "error": f"Failed to place market order"
                 }
             
-            market_order_id = market_result.get("id")
-            actual_entry = safe_decimal_conversion(market_result.get("price", entry_price))
+            market_order_id = market_result.get("orderId", "")
+            actual_entry = safe_decimal_conversion(market_result.get("avgPrice", entry_price))
             self.logger.info(f"✅ Market order executed: {market_order_id} at {actual_entry}")
             
             # Place TP order (100% position)
@@ -1626,20 +1624,18 @@ class TradeExecutor:
                 symbol=symbol,
                 side=opposite_side,
                 order_type="Limit",
-                qty=position_size,
-                price=tp_price,
+                qty=str(position_size),
+                price=str(tp_price),
                 order_link_id=tp_link_id,
-                tick_size=tick_size,
-                qty_step=qty_step,
                 reduce_only=True
             )
             
             tp_order_id = None
-            if tp_result.get("success"):
-                tp_order_id = tp_result.get("id")
+            if tp_result:
+                tp_order_id = tp_result.get("orderId", "")
                 self.logger.info(f"✅ TP order placed: {tp_order_id}")
             else:
-                self.logger.warning(f"⚠️ Failed to place TP order: {tp_result.get('error')}")
+                self.logger.warning(f"⚠️ Failed to place TP order")
             
             # Place SL order
             self.logger.info(f"🛡️ Placing Stop Loss order at {sl_price}...")
@@ -1647,21 +1643,19 @@ class TradeExecutor:
                 symbol=symbol,
                 side=opposite_side,
                 order_type="Market",
-                qty=position_size,
-                trigger_price=sl_price,
+                qty=str(position_size),
+                trigger_price=str(sl_price),
                 order_link_id=sl_link_id,
-                tick_size=tick_size,
-                qty_step=qty_step,
                 reduce_only=True,
-                trigger_by="LastPrice"
+                stop_order_type="StopLoss"
             )
             
             sl_order_id = None
-            if sl_result.get("success"):
-                sl_order_id = sl_result.get("id")
+            if sl_result:
+                sl_order_id = sl_result.get("orderId", "")
                 self.logger.info(f"✅ SL order placed: {sl_order_id}")
             else:
-                self.logger.warning(f"⚠️ Failed to place SL order: {sl_result.get('error')}")
+                self.logger.warning(f"⚠️ Failed to place SL order")
             
             # Mirror trading support
             mirror_results = None
@@ -1744,17 +1738,11 @@ class TradeExecutor:
                 "executed_at": time.time()
             }
             
-            # Generate summary
-            if EXECUTION_SUMMARY_AVAILABLE:
-                summary = await execution_summary.generate_simple_market_summary(
-                    symbol, side, position_size, actual_entry, tp_price, sl_price,
-                    margin_amount, leverage, risk_reward_ratio, execution_time
-                )
-            else:
-                summary = self._generate_simple_market_summary(
-                    symbol, side, position_size, actual_entry, tp_price, sl_price,
-                    margin_amount, leverage, risk_reward_ratio, execution_time
-                )
+            # Generate summary - always use internal method for simple_market
+            summary = self._generate_simple_market_summary(
+                symbol, side, position_size, actual_entry, tp_price, sl_price,
+                margin_amount, leverage, risk_reward_ratio, execution_time
+            )
             
             return {
                 "success": True,
