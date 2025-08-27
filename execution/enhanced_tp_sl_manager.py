@@ -1393,6 +1393,17 @@ class EnhancedTPSLManager:
             if not current_price:
                 current_price = entry_price
 
+            # Get actual instrument info for accurate qty_step
+            try:
+                instrument_info = await get_instrument_info(symbol)
+                if instrument_info:
+                    lot_size_filter = instrument_info.get("lotSizeFilter", {})
+                    actual_qty_step = Decimal(lot_size_filter.get("qtyStep", str(qty_step)))
+                    logger.info(f"📊 Retrieved instrument info for {symbol}: qtyStep={actual_qty_step}")
+                    qty_step = actual_qty_step  # Use the actual qty_step from the instrument
+            except Exception as e:
+                logger.warning(f"⚠️ Could not fetch instrument info for {symbol}: {e}, using default qty_step={qty_step}")
+
             # Minimum order value in USDT (Bybit requires $5 minimum)
             MIN_ORDER_VALUE = Decimal("5.0")
 
@@ -1458,6 +1469,7 @@ class EnhancedTPSLManager:
                 main_target_size=position_size,
                 mirror_current_size=mirror_tp_sl_size if setup_mirror else None,
                 mirror_target_size=mirror_target if setup_mirror else None,
+                qty_step=qty_step,
                 results=results
             )
 
@@ -1780,6 +1792,7 @@ class EnhancedTPSLManager:
         main_target_size: Decimal,
         mirror_current_size: Optional[Decimal],
         mirror_target_size: Optional[Decimal],
+        qty_step: Decimal,
         results: Dict
     ):
         """ENHANCED: Place SL orders on both main and mirror accounts with full position coverage"""
@@ -1795,6 +1808,9 @@ class EnhancedTPSLManager:
                     target_size=main_target_size,
                     tp_hit=False
                 )
+                
+                # Adjust SL quantity to qty_step
+                main_sl_quantity = value_adjusted_to_step(main_sl_quantity, qty_step)
 
                 sl_order_link_id = generate_order_link_id(approach, symbol, ORDER_TYPE_SL)
 
@@ -1854,6 +1870,9 @@ class EnhancedTPSLManager:
                     target_size=mirror_target_size,
                     tp_hit=False
                 )
+                
+                # Adjust mirror SL quantity to qty_step
+                mirror_sl_quantity = value_adjusted_to_step(mirror_sl_quantity, qty_step)
 
                 mirror_sl_order_link_id = generate_order_link_id("MIR", symbol, ORDER_TYPE_SL)
 
