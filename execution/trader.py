@@ -1565,9 +1565,22 @@ class TradeExecutor:
             side = chat_data.get(SIDE)
             margin_amount = safe_decimal_conversion(chat_data.get(MARGIN_AMOUNT))
             leverage = int(chat_data.get(LEVERAGE, 1))
-            tick_size = safe_decimal_conversion(chat_data.get(INSTRUMENT_TICK_SIZE, "0.01"))
-            qty_step = safe_decimal_conversion(chat_data.get(INSTRUMENT_QTY_STEP, "0.001"))
             trade_group_id = chat_data.get("SIMPLE_MARKET_TRADE_GROUP_ID", "unknown")
+            
+            # Get actual instrument info for accurate qty_step and tick_size
+            from clients.bybit_helpers import get_instrument_info
+            inst_info = await get_instrument_info(symbol)
+            if inst_info:
+                lot_size_filter = inst_info.get("lotSizeFilter", {})
+                price_filter = inst_info.get("priceFilter", {})
+                qty_step = safe_decimal_conversion(lot_size_filter.get("qtyStep", "0.001"))
+                tick_size = safe_decimal_conversion(price_filter.get("tickSize", "0.01"))
+                self.logger.info(f"📊 Retrieved instrument info - qty_step: {qty_step}, tick_size: {tick_size}")
+            else:
+                # Fallback to chat_data values if instrument info not available
+                tick_size = safe_decimal_conversion(chat_data.get(INSTRUMENT_TICK_SIZE, "0.01"))
+                qty_step = safe_decimal_conversion(chat_data.get(INSTRUMENT_QTY_STEP, "0.001"))
+                self.logger.warning(f"⚠️ Using fallback values - qty_step: {qty_step}, tick_size: {tick_size}")
             
             # Debug: Log all chat_data keys to understand what's available
             self.logger.info(f"🔍 Chat data keys available: {list(chat_data.keys())}")
@@ -1585,6 +1598,12 @@ class TradeExecutor:
             
             tp_price = safe_decimal_conversion(tp_price_raw)
             sl_price = safe_decimal_conversion(sl_price_raw)
+            
+            # Adjust prices to tick_size
+            if tp_price and tick_size:
+                tp_price = value_adjusted_to_step(tp_price, tick_size)
+            if sl_price and tick_size:
+                sl_price = value_adjusted_to_step(sl_price, tick_size)
             
             # Log for debugging
             self.logger.info(f"📊 Simple Market prices - Entry: {entry_price}, TP: {tp_price}, SL: {sl_price}")
@@ -1625,7 +1644,9 @@ class TradeExecutor:
             
             # Calculate position size
             position_size = (margin_amount * Decimal(str(leverage))) / entry_price
+            self.logger.info(f"📊 Raw position size: {position_size}, qty_step: {qty_step}")
             position_size = value_adjusted_to_step(position_size, qty_step)
+            self.logger.info(f"📊 Adjusted position size: {position_size}")
             
             # Generate shorter unique order link IDs (max 45 chars)
             timestamp = str(int(time.time() * 1000))[-6:]  # Last 6 digits
