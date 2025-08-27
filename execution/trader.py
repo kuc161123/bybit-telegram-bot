@@ -73,7 +73,6 @@ class TradeExecutor:
 
     def _generate_unique_order_link_id(self, base_id: str) -> str:
         """Generate a unique order link ID by appending timestamp"""
-        import time
         unique_suffix = str(int(time.time() * 1000))[-6:]  # Last 6 digits of timestamp
         return f"{base_id}_{unique_suffix}"
 
@@ -1589,7 +1588,6 @@ class TradeExecutor:
             position_size = value_adjusted_to_step(position_size, qty_step)
             
             # Generate shorter unique order link IDs (max 45 chars)
-            import time
             timestamp = str(int(time.time() * 1000))[-6:]  # Last 6 digits
             market_link_id = f"BOT_SM_{symbol[:6]}_{side[0]}_{timestamp}_M"
             tp_link_id = f"BOT_SM_{symbol[:6]}_{side[0]}_{timestamp}_T"
