@@ -46,6 +46,20 @@ from clients.bybit_helpers import (
     get_all_positions
 )
 from utils.helpers import value_adjusted_to_step
+
+def format_price_for_api(price: Decimal) -> str:
+    """Format price to avoid scientific notation in API calls"""
+    # Convert to string with fixed-point notation
+    return format(price, 'f').rstrip('0').rstrip('.')
+
+def format_qty_for_api(qty: Decimal, qty_step: Decimal) -> str:
+    """Format quantity based on qty_step to avoid issues"""
+    if qty_step >= 1:
+        # For whole numbers, return as integer string
+        return str(int(qty))
+    else:
+        # For decimals, use fixed-point notation
+        return format(qty, 'f').rstrip('0').rstrip('.')
 from utils.order_identifier import generate_order_link_id, generate_adjusted_order_link_id, ORDER_TYPE_TP, ORDER_TYPE_SL
 from utils.alert_helpers import send_simple_alert as send_trade_alert, send_position_closed_summary
 from utils.enhanced_limit_order_tracker import limit_order_tracker
@@ -1700,20 +1714,19 @@ class EnhancedTPSLManager:
                 if setup_main:
                     order_link_id = generate_order_link_id(approach, symbol, ORDER_TYPE_TP, index=i+1)
 
-                    # Format quantity based on qty_step (remove decimals if qty_step >= 1)
-                    if qty_step >= 1:
-                        qty_str = str(int(tp_qty))
-                    else:
-                        qty_str = str(tp_qty)
+                    # Format quantity and price to avoid issues
+                    qty_str = format_qty_for_api(tp_qty, qty_step)
+                    price_str = format_price_for_api(tp_price)
                     
-                    logger.info(f"📍 MAIN: Placing TP{i+1} order: {tp_qty} @ {tp_price} (formatted as: {qty_str})")
+                    logger.info(f"📍 MAIN: Placing TP{i+1} order: {tp_qty} @ {tp_price}")
+                    logger.info(f"   Formatted for API: qty={qty_str}, price={price_str}")
 
                     order_result = await place_order_with_retry(
                         symbol=symbol,
                         side=order_side,
                         order_type="Limit",
                         qty=qty_str,
-                        price=str(tp_price),
+                        price=price_str,
                         reduce_only=True,
                         order_link_id=order_link_id,
                         time_in_force="GTC",
@@ -1758,11 +1771,14 @@ class EnhancedTPSLManager:
 
                     logger.info(f"📍 MIRROR: Placing TP{i+1} order: {mirror_tp_qty} @ {tp_price}")
 
+                    # Format mirror quantities and prices
+                    mirror_qty_str = format_qty_for_api(mirror_tp_qty, qty_step)
+                    
                     mirror_result = await mirror_limit_order(
                         symbol=symbol,
                         side=order_side,
-                        qty=str(mirror_tp_qty),
-                        price=str(tp_price),
+                        qty=mirror_qty_str,
+                        price=price_str,  # Use same formatted price as main
                         position_idx=0,  # Mirror account uses One-Way mode
                         order_link_id=mirror_order_link_id,
                         reduce_only=True,
@@ -1829,15 +1845,14 @@ class EnhancedTPSLManager:
                 # Adjust SL quantity to qty_step
                 main_sl_quantity = value_adjusted_to_step(main_sl_quantity, qty_step)
 
-                # Format quantity based on qty_step (remove decimals if qty_step >= 1)
-                if qty_step >= 1:
-                    sl_qty_str = str(int(main_sl_quantity))
-                else:
-                    sl_qty_str = str(main_sl_quantity)
+                # Format quantity and price to avoid issues
+                sl_qty_str = format_qty_for_api(main_sl_quantity, qty_step)
+                sl_price_str = format_price_for_api(sl_price)
 
                 sl_order_link_id = generate_order_link_id(approach, symbol, ORDER_TYPE_SL)
 
-                logger.info(f"🛡️ MAIN ENHANCED SL: Placing SL order: {main_sl_quantity} @ {sl_price} (formatted as: {sl_qty_str})")
+                logger.info(f"🛡️ MAIN ENHANCED SL: Placing SL order: {main_sl_quantity} @ {sl_price}")
+                logger.info(f"   Formatted for API: qty={sl_qty_str}, trigger_price={sl_price_str}")
                 logger.info(f"   Current filled: {main_current_size}, Target: {main_target_size}")
 
                 sl_result = await place_order_with_retry(
@@ -1845,7 +1860,7 @@ class EnhancedTPSLManager:
                     side=sl_side,
                     order_type="Market",
                     qty=sl_qty_str,
-                    trigger_price=str(sl_price),
+                    trigger_price=sl_price_str,
                     reduce_only=True,
                     order_link_id=sl_order_link_id,
                     position_idx=position_idx,
