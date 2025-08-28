@@ -1366,6 +1366,30 @@ class EnhancedTPSLManager:
             setup_mirror = account_type in ["mirror", "both"] and self._is_mirror_trading_enabled()
 
             logger.info(f"   Setup main: {setup_main}, Setup mirror: {setup_mirror}")
+            
+            # CRITICAL: Verify position exists before placing reduce-only orders
+            if setup_main:
+                await asyncio.sleep(0.5)  # Brief delay to ensure position is established
+                actual_position = await self._check_position_exists(symbol, side, "main")
+                if not actual_position:
+                    logger.warning(f"⚠️ No position found for {symbol} {side} on main account - waiting...")
+                    await asyncio.sleep(2)  # Give more time for position to establish
+                    actual_position = await self._check_position_exists(symbol, side, "main")
+                    if not actual_position:
+                        logger.error(f"❌ Position still not found for {symbol} {side} - cannot place reduce-only orders")
+                        return {
+                            "success": False,
+                            "errors": ["Position not found - cannot place reduce-only orders"],
+                            "main_account": {"tp_orders": {}, "sl_order": None, "errors": ["Position not found"]},
+                            "mirror_account": {"tp_orders": {}, "sl_order": None, "errors": []}
+                        }
+                else:
+                    actual_size = Decimal(str(actual_position.get('size', '0')))
+                    logger.info(f"✅ Position confirmed: {symbol} {side} size={actual_size}")
+                    # Use actual position size if it differs from expected
+                    if actual_size > 0 and abs(actual_size - position_size) > qty_step:
+                        logger.warning(f"⚠️ Actual position size {actual_size} differs from expected {position_size}")
+                        position_size = actual_size
 
             # If initial_position_size is provided, use it for TP/SL calculations
             # This handles cases where orders are placed before full position is built
